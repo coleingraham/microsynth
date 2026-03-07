@@ -1,4 +1,4 @@
-//! Built-in UGens used by the DSL compiler and available for direct use.
+//! Arithmetic UGens: Const, BinOp, Neg.
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};

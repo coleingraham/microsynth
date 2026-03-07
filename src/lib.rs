@@ -18,3 +18,4 @@ pub use engine::{Engine, EngineConfig};
 pub use graph::AudioGraph;
 pub use node::{InputSpec, NodeId, OutputSpec, UGen, UGenSpec};
 pub use synthdef::{Synth, SynthDef, SynthDefBuilder};
+pub use ugens::register_builtins;
