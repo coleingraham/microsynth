@@ -165,6 +165,15 @@ impl Scheduler {
     pub fn clear(&mut self) {
         self.events.clear();
     }
+
+    /// Schedule a gate-on at `on_time` and gate-off at `off_time`.
+    ///
+    /// Convenience for notes with a known duration — avoids manually
+    /// scheduling two separate gate events.
+    pub fn schedule_note(&mut self, voice: VoiceId, on_time: u64, off_time: u64) {
+        self.schedule_gate(on_time, voice, 1.0);
+        self.schedule_gate(off_time, voice, 0.0);
+    }
 }
 
 impl Default for Scheduler {

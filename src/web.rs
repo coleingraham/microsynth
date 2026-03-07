@@ -321,6 +321,114 @@ pub extern "C" fn ms_free_done() -> u32 {
 }
 
 // ============================================================================
+// Musical time & tuning utility exports (stateless, no engine state needed)
+// ============================================================================
+
+/// Convert a MIDI note number to Hz using standard 12-TET.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_midi_to_hz(midi_note: f32, a4_freq: f32) -> f32 {
+    crate::tuning::midi_to_hz_12tet(midi_note, a4_freq)
+}
+
+/// Convert Hz to MIDI note number using standard 12-TET.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_hz_to_midi(hz: f32, a4_freq: f32) -> f32 {
+    crate::tuning::hz_to_midi_12tet(hz, a4_freq)
+}
+
+/// Apply a cent offset to a base frequency.
+/// Returns `base_hz * 2^(cents / 1200)`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_apply_cents(base_hz: f32, cents: f32) -> f32 {
+    crate::tuning::apply_cents(base_hz, cents)
+}
+
+/// Convert a musical position (bar:step +tick_offset) to an absolute sample offset.
+///
+/// All time config parameters are passed as scalars (no structs over FFI).
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_position_to_samples(
+    bpm: f32,
+    numerator: u8,
+    denominator: u8,
+    grid_steps: u16,
+    ppqn: u16,
+    sample_rate: f32,
+    bar: u32,
+    step: u16,
+    tick_offset: i16,
+) -> u64 {
+    let config = crate::musical_time::TimeConfig {
+        bpm,
+        numerator,
+        denominator,
+        grid_steps,
+        ppqn,
+        sample_rate,
+    };
+    let pos = crate::musical_time::MusicalPosition::new(bar, step, tick_offset);
+    config.position_to_samples(pos)
+}
+
+/// Convert a duration in grid steps to a duration in samples.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_steps_to_samples(
+    bpm: f32,
+    numerator: u8,
+    denominator: u8,
+    grid_steps: u16,
+    sample_rate: f32,
+    steps: f32,
+) -> u64 {
+    let config = crate::musical_time::TimeConfig {
+        bpm,
+        numerator,
+        denominator,
+        grid_steps,
+        ppqn: 0,
+        sample_rate,
+    };
+    config.steps_to_samples(steps)
+}
+
+/// Schedule a gate-on and auto gate-off for a voice.
+/// `on_time` and `off_time` are absolute sample offsets.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_schedule_note(voice_id: u64, on_time: u64, off_time: u64) {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine
+        .scheduler_mut()
+        .schedule_note(crate::scheduler::VoiceId(voice_id), on_time, off_time);
+}
+
+/// Schedule a note with attack-aligned pre-trigger.
+///
+/// `grid_time`: where the attack peak should align (absolute sample offset).
+/// `attack_secs`: envelope attack time in seconds.
+/// `duration_samples`: how long after `grid_time` before gate-off.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_schedule_note_aligned(
+    voice_id: u64,
+    grid_time: u64,
+    attack_secs: f32,
+    duration_samples: u64,
+) {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine.schedule_note_aligned(
+        crate::scheduler::VoiceId(voice_id),
+        grid_time,
+        attack_secs,
+        duration_samples,
+    );
+}
+
+// ============================================================================
 // wasm-bindgen exports for main thread (ScriptProcessorNode fallback + UI)
 // ============================================================================
 
