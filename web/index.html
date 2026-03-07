@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>microsynth</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --surface2: #1c2a4a;
+            --border: #0f3460;
+            --accent: #e94560;
+            --accent-hover: #c73e54;
+            --success: #4ecca3;
+            --warn: #f0a500;
+            --text: #eee;
+            --text-dim: #8892a4;
+            --mono: 'Courier New', Courier, monospace;
+            --step-on: #e94560;
+            --step-off: #1c2a4a;
+            --step-current: #f0a500;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1.5rem;
+        }
+        h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
+        .subtitle {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            margin-bottom: 1rem;
+        }
+        .container { width: 100%; max-width: 860px; }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 2px solid var(--border);
+            margin-bottom: 1rem;
+        }
+        .tab {
+            padding: 0.5rem 1.25rem;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.15s;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* Toolbar row */
+        .toolbar {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .toolbar-spacer { flex: 1; }
+
+        /* Presets */
+        select {
+            padding: 0.3rem 0.5rem;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        label.small {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-right: 0.25rem;
+        }
+
+        /* Editor */
+        textarea {
+            width: 100%;
+            height: 250px;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem;
+            font-family: var(--mono);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            resize: vertical;
+            outline: none;
+            tab-size: 4;
+            margin-bottom: 0.75rem;
+        }
+        textarea:focus { border-color: var(--accent); }
+
+        /* Buttons */
+        button {
+            padding: 0.4rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--surface);
+            color: var(--text);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        button:hover { background: var(--border); }
+        button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+        button.primary:hover { background: var(--accent-hover); }
+        button.success { background: var(--success); border-color: var(--success); color: #111; }
+        button.success:hover { background: #3daa88; }
+        button.warn { background: var(--warn); border-color: var(--warn); color: #111; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.small { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
+
+        /* Status */
+        .status {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            min-height: 1.2em;
+            margin-bottom: 0.5rem;
+        }
+        .status.error { color: var(--accent); }
+        .status.ok { color: var(--success); }
+
+        /* Scope */
+        .scope-container {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem;
+            margin-bottom: 1rem;
+        }
+        canvas {
+            width: 100%;
+            height: 120px;
+            display: block;
+            border-radius: 4px;
+        }
+
+        /* Backend badge */
+        .backend-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            background: var(--border);
+            color: var(--text-dim);
+            margin-left: 0.5rem;
+            vertical-align: middle;
+        }
+
+        /* Play controls row */
+        .play-controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        /* ===================== Step Sequencer ===================== */
+        .seq-controls {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .seq-controls label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+        .seq-controls input[type="number"] {
+            width: 60px;
+            padding: 0.25rem 0.4rem;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .seq-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            margin-bottom: 0.75rem;
+        }
+        .seq-row {
+            display: flex;
+            gap: 0.25rem;
+            align-items: center;
+        }
+        .seq-row-label {
+            width: 48px;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-align: right;
+            padding-right: 0.4rem;
+            font-family: var(--mono);
+            flex-shrink: 0;
+        }
+        .seq-cell {
+            width: 36px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--step-off);
+            cursor: pointer;
+            transition: background 0.1s;
+            flex-shrink: 0;
+        }
+        .seq-cell.on {
+            background: var(--step-on);
+            border-color: var(--accent);
+        }
+        .seq-cell.current {
+            box-shadow: 0 0 0 2px var(--step-current);
+        }
+
+        .seq-param-row {
+            display: flex;
+            gap: 0.25rem;
+            align-items: center;
+        }
+        .seq-param-cell {
+            width: 36px;
+            height: 22px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text);
+            font-size: 0.6rem;
+            font-family: var(--mono);
+            text-align: center;
+            outline: none;
+            flex-shrink: 0;
+        }
+        .seq-param-cell:focus {
+            border-color: var(--accent);
+        }
+
+        /* File section */
+        .file-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .file-controls input[type="text"] {
+            padding: 0.3rem 0.5rem;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.8rem;
+            width: 180px;
+        }
+        input[type="file"] { display: none; }
+
+        /* UGen reference */
+        .ugen-list {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-top: 0.75rem;
+            line-height: 1.7;
+        }
+        .ugen-list code {
+            background: var(--surface);
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            font-family: var(--mono);
+            color: var(--text);
+        }
+        .section-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-bottom: 0.35rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <h1>microsynth
+        <span id="backend-badge" class="backend-badge">loading...</span>
+    </h1>
+    <p class="subtitle">Rust audio synthesis engine in the browser</p>
+
+    <div class="container">
+        <!-- Tab bar -->
+        <div class="tabs">
+            <button class="tab active" data-tab="editor">Editor</button>
+            <button class="tab" data-tab="sequencer">Sequencer</button>
+        </div>
+
+        <!-- ==================== EDITOR TAB ==================== -->
+        <div id="tab-editor" class="tab-panel active">
+            <div class="toolbar">
+                <label class="small">Preset:</label>
+                <select id="preset-select">
+                    <option value="">-- select --</option>
+                    <option value="sine">Sine tone</option>
+                    <option value="saw_lpf">Saw + LPF</option>
+                    <option value="fm">FM synthesis</option>
+                    <option value="noise_filter">Filtered noise</option>
+                    <option value="detune">Detuned saws</option>
+                    <option value="pad">Gentle pad (sustain)</option>
+                    <option value="perc_hit">Perc hit (one-shot)</option>
+                    <option value="kick">Kick drum</option>
+                    <option value="hihat">Hi-hat</option>
+                </select>
+                <div class="toolbar-spacer"></div>
+                <div class="file-controls">
+                    <input type="text" id="filename" value="patch.msynth" placeholder="filename">
+                    <button id="save-btn" class="small">Save</button>
+                    <button id="load-btn" class="small">Load</button>
+                    <input type="file" id="file-input" accept=".msynth,.txt">
+                </div>
+            </div>
+
+            <textarea id="editor" spellcheck="false">synthdef tone freq=440.0 amp=0.3 gate=1.0 =
+    let env = asr gate 0.01 0.3
+    let sig = sinOsc freq 0.0
+    sig * amp * env</textarea>
+
+            <div class="play-controls">
+                <button id="play-btn" class="primary" disabled>Loading...</button>
+                <button id="oneshot-btn" disabled>One-Shot</button>
+                <button id="stop-btn" disabled>Stop</button>
+                <span id="status" class="status"></span>
+            </div>
+        </div>
+
+        <!-- ==================== SEQUENCER TAB ==================== -->
+        <div id="tab-sequencer" class="tab-panel">
+            <div class="seq-controls">
+                <label>BPM:</label>
+                <input type="number" id="seq-bpm" value="120" min="20" max="300" step="1">
+                <label>Steps:</label>
+                <select id="seq-steps">
+                    <option value="8">8</option>
+                    <option value="16" selected>16</option>
+                    <option value="32">32</option>
+                </select>
+                <label>Division:</label>
+                <select id="seq-div">
+                    <option value="4">1/4</option>
+                    <option value="8" selected>1/8</option>
+                    <option value="16">1/16</option>
+                </select>
+                <div class="toolbar-spacer"></div>
+                <button id="seq-play" class="primary" disabled>Play</button>
+                <button id="seq-stop" disabled>Stop</button>
+            </div>
+
+            <p class="section-label">Pattern (click to toggle)</p>
+            <div class="seq-grid" id="seq-grid">
+                <!-- Row: Note on/off -->
+                <div class="seq-row" id="seq-trigger-row">
+                    <span class="seq-row-label">trig</span>
+                </div>
+                <!-- Row: freq param -->
+                <div class="seq-param-row" id="seq-freq-row">
+                    <span class="seq-row-label">freq</span>
+                </div>
+                <!-- Row: amp param -->
+                <div class="seq-param-row" id="seq-amp-row">
+                    <span class="seq-row-label">amp</span>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <label class="small">Using synthdef from Editor tab</label>
+                <div class="toolbar-spacer"></div>
+                <button id="seq-clear" class="small">Clear Pattern</button>
+            </div>
+        </div>
+
+        <!-- Shared scope -->
+        <div class="scope-container">
+            <canvas id="scope"></canvas>
+        </div>
+
+        <div class="ugen-list">
+            <strong>Available UGens:</strong>
+            <code>sinOsc</code> <code>saw</code> <code>pulse</code> <code>tri</code> <code>phasor</code>
+            <code>whiteNoise</code> <code>pinkNoise</code>
+            <code>lpf</code> <code>hpf</code> <code>bpf</code> <code>onePole</code>
+            <code>line</code> <code>perc</code> <code>asr</code> <code>adsr</code>
+            <code>delay</code>
+            <code>pan2</code> <code>mix</code> <code>sampleAndHold</code>
+            <code>impulse</code> <code>lag</code> <code>clip</code>
+            <code>waveTable</code>
+        </div>
+    </div>
+
+    <script type="module">
+        // ====================================================================
+        // Presets
+        // ====================================================================
+        const PRESETS = {
+            sine: `synthdef tone freq=440.0 amp=0.3 gate=1.0 =
+    let env = asr gate 0.01 0.3
+    let sig = sinOsc freq 0.0
+    sig * amp * env`,
+
+            saw_lpf: `synthdef bass freq=110.0 cutoff=800.0 amp=0.3 gate=1.0 =
+    let env = asr gate 0.01 0.3
+    let sig = saw freq
+    let filt = lpf sig cutoff 2.0
+    filt * amp * env`,
+
+            fm: `synthdef fm carrier=220.0 modfreq=330.0 modamt=200.0 amp=0.25 gate=1.0 =
+    let env = asr gate 0.01 0.3
+    let mod = sinOsc modfreq 0.0 * modamt
+    let sig = sinOsc (carrier + mod) 0.0
+    sig * amp * env`,
+
+            noise_filter: `synthdef wind cutoff=600.0 q=5.0 amp=0.2 gate=1.0 =
+    let env = asr gate 0.01 0.5
+    let n = whiteNoise
+    let filt = bpf n cutoff q
+    filt * amp * env`,
+
+            detune: `synthdef detune freq=110.0 spread=1.5 amp=0.2 gate=1.0 =
+    let env = asr gate 0.01 0.3
+    let a = saw freq
+    let b = saw (freq + spread)
+    let c = saw (freq - spread)
+    (a + b + c) * amp * env`,
+
+            pad: `synthdef pad freq=165.0 amp=0.15 gate=1.0 =
+    let env = asr gate 0.5 1.0
+    let sub = sinOsc freq 0.0
+    let mid = tri (freq * 2.0)
+    let bright = saw (freq * 3.0) * 0.3
+    let mix = sub + mid * 0.5 + bright
+    lpf mix 1200.0 0.707 * amp * env`,
+
+            perc_hit: `synthdef hit freq=440.0 amp=0.5 =
+    let env = perc 0.005 0.2
+    let sig = sinOsc freq 0.0
+    sig * amp * env`,
+
+            kick: `synthdef kick amp=0.8 =
+    let penv = perc 0.001 0.15
+    let freq = 50.0 + penv * 150.0
+    let env = perc 0.001 0.3
+    let sig = sinOsc freq 0.0
+    sig * amp * env`,
+
+            hihat: `synthdef hihat amp=0.3 =
+    let env = perc 0.001 0.08
+    let sig = whiteNoise
+    let filt = hpf sig 8000.0 1.0
+    filt * amp * env`,
+        };
+
+        // ====================================================================
+        // DOM refs
+        // ====================================================================
+        const editor = document.getElementById('editor');
+        const playBtn = document.getElementById('play-btn');
+        const oneshotBtn = document.getElementById('oneshot-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const statusEl = document.getElementById('status');
+        const presetSelect = document.getElementById('preset-select');
+        const backendBadge = document.getElementById('backend-badge');
+        const canvas = document.getElementById('scope');
+        const ctx2d = canvas.getContext('2d');
+
+        // File controls
+        const filenameInput = document.getElementById('filename');
+        const saveBtn = document.getElementById('save-btn');
+        const loadBtn = document.getElementById('load-btn');
+        const fileInput = document.getElementById('file-input');
+
+        // Sequencer controls
+        const seqBpmInput = document.getElementById('seq-bpm');
+        const seqStepsSelect = document.getElementById('seq-steps');
+        const seqDivSelect = document.getElementById('seq-div');
+        const seqPlayBtn = document.getElementById('seq-play');
+        const seqStopBtn = document.getElementById('seq-stop');
+        const seqClearBtn = document.getElementById('seq-clear');
+        const seqTriggerRow = document.getElementById('seq-trigger-row');
+        const seqFreqRow = document.getElementById('seq-freq-row');
+        const seqAmpRow = document.getElementById('seq-amp-row');
+
+        // ====================================================================
+        // State
+        // ====================================================================
+        let audioCtx = null;
+        let analyser = null;
+        let scopeData = null;
+        let animFrame = null;
+        let isPlaying = false;
+
+        // AudioWorklet state
+        let workletNode = null;
+        let wasmBytes = null;
+        let backend = null;
+
+        // Voice management for editor play modes
+        let currentVoiceId = null;
+        let voiceResolvers = {};
+        let voiceRequestId = 0;
+
+        // Sequencer state
+        let seqRunning = false;
+        let seqTimerId = null;
+        let seqStep = -1;
+        let seqPattern = []; // array of { on: bool, freq: number, amp: number }
+
+        // Default note values (C3 to C5 chromatic-ish)
+        const DEFAULT_FREQS = [
+            261.6, 293.7, 329.6, 349.2, 392.0, 440.0, 493.9, 523.3,
+            261.6, 293.7, 329.6, 349.2, 392.0, 440.0, 493.9, 523.3,
+            261.6, 293.7, 329.6, 349.2, 392.0, 440.0, 493.9, 523.3,
+            261.6, 293.7, 329.6, 349.2, 392.0, 440.0, 493.9, 523.3,
+        ];
+
+        // ====================================================================
+        // Tabs
+        // ====================================================================
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // ====================================================================
+        // UI helpers
+        // ====================================================================
+        function setStatus(msg, type = '') {
+            statusEl.textContent = msg;
+            statusEl.className = 'status' + (type ? ' ' + type : '');
+        }
+
+        editor.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = editor.selectionStart;
+                const end = editor.selectionEnd;
+                editor.value = editor.value.substring(0, start) + '    ' + editor.value.substring(end);
+                editor.selectionStart = editor.selectionEnd = start + 4;
+            }
+        });
+
+        presetSelect.addEventListener('change', () => {
+            const key = presetSelect.value;
+            if (key && PRESETS[key]) {
+                editor.value = PRESETS[key];
+                if (isPlaying) stopAudio();
+            }
+        });
+
+        // ====================================================================
+        // File save/load
+        // ====================================================================
+        saveBtn.addEventListener('click', () => {
+            const blob = new Blob([editor.value], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filenameInput.value || 'patch.msynth';
+            a.click();
+            URL.revokeObjectURL(url);
+            setStatus('Saved ' + (filenameInput.value || 'patch.msynth'), 'ok');
+        });
+
+        loadBtn.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            filenameInput.value = file.name;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                editor.value = ev.target.result;
+                setStatus('Loaded ' + file.name, 'ok');
+                if (isPlaying) stopAudio();
+            };
+            reader.readAsText(file);
+            fileInput.value = '';
+        });
+
+        // ====================================================================
+        // AudioWorklet backend
+        // ====================================================================
+        async function initWorklet() {
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            await audioCtx.audioWorklet.addModule('processor.js');
+
+            workletNode = new AudioWorkletNode(audioCtx, 'microsynth-processor', {
+                numberOfInputs: 0,
+                numberOfOutputs: 1,
+                outputChannelCount: [2],
+            });
+
+            workletNode.port.onmessage = handleWorkletMessage;
+
+            // Send WASM bytes to the worklet
+            workletNode.port.postMessage({ type: 'init', wasmBytes: wasmBytes });
+
+            return new Promise((resolve, reject) => {
+                const saved = workletNode.port.onmessage;
+                workletNode.port.onmessage = (e) => {
+                    workletNode.port.onmessage = saved;
+                    if (e.data.type === 'ready') resolve();
+                    else if (e.data.type === 'error') reject(new Error(e.data.message));
+                };
+                setTimeout(() => reject(new Error('worklet init timeout')), 5000);
+            });
+        }
+
+        function handleWorkletMessage(e) {
+            const msg = e.data;
+            if (msg.type === 'voiceSpawned' && voiceResolvers[msg.id]) {
+                voiceResolvers[msg.id](msg.voiceId);
+                delete voiceResolvers[msg.id];
+            }
+        }
+
+        function workletSend(msg) {
+            if (workletNode) workletNode.port.postMessage(msg);
+        }
+
+        function workletCompile(source) {
+            return new Promise((resolve, reject) => {
+                const handler = (e) => {
+                    workletNode.port.removeEventListener('message', handler);
+                    if (e.data.type === 'compiled') resolve();
+                    else if (e.data.type === 'error') reject(new Error(e.data.message));
+                };
+                workletNode.port.addEventListener('message', handler);
+                workletSend({ type: 'compile', source });
+            });
+        }
+
+        function workletCompileDef(source) {
+            return new Promise((resolve, reject) => {
+                const handler = (e) => {
+                    workletNode.port.removeEventListener('message', handler);
+                    if (e.data.type === 'defCompiled') resolve();
+                    else if (e.data.type === 'error') reject(new Error(e.data.message));
+                };
+                workletNode.port.addEventListener('message', handler);
+                workletSend({ type: 'compileDef', source });
+            });
+        }
+
+        function workletSpawnVoice() {
+            return new Promise((resolve) => {
+                const id = ++voiceRequestId;
+                voiceResolvers[id] = resolve;
+                workletSend({ type: 'spawnVoice', id });
+            });
+        }
+
+        function ensureAudioConnected() {
+            if (!analyser) {
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.8;
+                scopeData = new Uint8Array(analyser.frequencyBinCount);
+            }
+            try {
+                workletNode.connect(analyser);
+                analyser.connect(audioCtx.destination);
+            } catch (e) { /* already connected */ }
+        }
+
+        // ====================================================================
+        // Editor play modes
+        // ====================================================================
+        playBtn.addEventListener('click', async () => {
+            if (isPlaying) {
+                stopAudio();
+                return;
+            }
+            try {
+                if (!workletNode) await initWorklet();
+                await workletCompileDef(editor.value);
+                ensureAudioConnected();
+
+                // Spawn a voice and gate it on
+                const vid = await workletSpawnVoice();
+                if (vid === 0) throw new Error('Failed to spawn voice');
+                currentVoiceId = vid;
+                workletSend({ type: 'voiceGate', voiceId: vid, value: 1.0 });
+
+                isPlaying = true;
+                playBtn.textContent = 'Stop';
+                playBtn.classList.remove('primary');
+                playBtn.classList.add('success');
+                oneshotBtn.disabled = true;
+                stopBtn.disabled = false;
+                setStatus(`Playing at ${audioCtx.sampleRate} Hz`, 'ok');
+                if (!animFrame) drawScope();
+            } catch (e) {
+                setStatus(e.message || String(e), 'error');
+            }
+        });
+
+        oneshotBtn.addEventListener('click', async () => {
+            try {
+                if (!workletNode) await initWorklet();
+                await workletCompileDef(editor.value);
+                ensureAudioConnected();
+
+                // Spawn a voice — percussive envelopes auto-fire and auto-free
+                const vid = await workletSpawnVoice();
+                if (vid === 0) throw new Error('Failed to spawn voice');
+                // For one-shot, we gate on then immediately off (perc envelopes ignore gate)
+                workletSend({ type: 'voiceGate', voiceId: vid, value: 1.0 });
+                setTimeout(() => {
+                    workletSend({ type: 'voiceGate', voiceId: vid, value: 0.0 });
+                }, 50);
+
+                setStatus('One-shot triggered', 'ok');
+                if (!animFrame) drawScope();
+            } catch (e) {
+                setStatus(e.message || String(e), 'error');
+            }
+        });
+
+        stopBtn.addEventListener('click', stopAudio);
+
+        function stopAudio() {
+            if (currentVoiceId !== null) {
+                // Gate off for release, then free after a bit
+                workletSend({ type: 'voiceGate', voiceId: currentVoiceId, value: 0.0 });
+                const vid = currentVoiceId;
+                setTimeout(() => workletSend({ type: 'freeVoice', voiceId: vid }), 2000);
+                currentVoiceId = null;
+            }
+            isPlaying = false;
+            playBtn.textContent = 'Play / Hold';
+            playBtn.classList.remove('success');
+            playBtn.classList.add('primary');
+            oneshotBtn.disabled = false;
+            stopBtn.disabled = true;
+            setStatus('Stopped');
+        }
+
+        // ====================================================================
+        // Step Sequencer
+        // ====================================================================
+        function getSeqStepCount() {
+            return parseInt(seqStepsSelect.value, 10);
+        }
+
+        function buildSequencerGrid() {
+            const steps = getSeqStepCount();
+
+            // Ensure pattern array matches step count
+            while (seqPattern.length < steps) {
+                const i = seqPattern.length;
+                seqPattern.push({
+                    on: false,
+                    freq: DEFAULT_FREQS[i % DEFAULT_FREQS.length],
+                    amp: 0.5,
+                });
+            }
+            seqPattern.length = steps;
+
+            // Build trigger row
+            seqTriggerRow.innerHTML = '<span class="seq-row-label">trig</span>';
+            for (let i = 0; i < steps; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'seq-cell' + (seqPattern[i].on ? ' on' : '');
+                cell.dataset.step = i;
+                cell.addEventListener('click', () => {
+                    seqPattern[i].on = !seqPattern[i].on;
+                    cell.classList.toggle('on');
+                });
+                seqTriggerRow.appendChild(cell);
+            }
+
+            // Build freq row
+            seqFreqRow.innerHTML = '<span class="seq-row-label">freq</span>';
+            for (let i = 0; i < steps; i++) {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.className = 'seq-param-cell';
+                inp.value = Math.round(seqPattern[i].freq);
+                inp.dataset.step = i;
+                inp.addEventListener('change', () => {
+                    const v = parseFloat(inp.value);
+                    if (!isNaN(v)) seqPattern[i].freq = v;
+                });
+                seqFreqRow.appendChild(inp);
+            }
+
+            // Build amp row
+            seqAmpRow.innerHTML = '<span class="seq-row-label">amp</span>';
+            for (let i = 0; i < steps; i++) {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.className = 'seq-param-cell';
+                inp.value = seqPattern[i].amp;
+                inp.dataset.step = i;
+                inp.addEventListener('change', () => {
+                    const v = parseFloat(inp.value);
+                    if (!isNaN(v)) seqPattern[i].amp = v;
+                });
+                seqAmpRow.appendChild(inp);
+            }
+        }
+
+        seqStepsSelect.addEventListener('change', buildSequencerGrid);
+        seqClearBtn.addEventListener('click', () => {
+            seqPattern.forEach(s => s.on = false);
+            buildSequencerGrid();
+        });
+
+        function getStepDurationMs() {
+            const bpm = parseFloat(seqBpmInput.value) || 120;
+            const div = parseInt(seqDivSelect.value, 10) || 8;
+            // quarter note = 60000/bpm ms
+            // division: 4=quarter, 8=eighth, 16=sixteenth
+            return (60000 / bpm) * (4 / div);
+        }
+
+        function highlightStep(step) {
+            const cells = seqTriggerRow.querySelectorAll('.seq-cell');
+            cells.forEach((c, i) => {
+                c.classList.toggle('current', i === step);
+            });
+        }
+
+        seqPlayBtn.addEventListener('click', async () => {
+            if (seqRunning) return;
+            try {
+                if (!workletNode) await initWorklet();
+                await workletCompileDef(editor.value);
+                ensureAudioConnected();
+
+                seqRunning = true;
+                seqStep = -1;
+                seqPlayBtn.disabled = true;
+                seqStopBtn.disabled = false;
+                setStatus('Sequencer running', 'ok');
+                if (!animFrame) drawScope();
+                advanceSequencer();
+            } catch (e) {
+                setStatus(e.message || String(e), 'error');
+            }
+        });
+
+        seqStopBtn.addEventListener('click', stopSequencer);
+
+        function stopSequencer() {
+            seqRunning = false;
+            if (seqTimerId !== null) {
+                clearTimeout(seqTimerId);
+                seqTimerId = null;
+            }
+            seqStep = -1;
+            highlightStep(-1);
+            seqPlayBtn.disabled = false;
+            seqStopBtn.disabled = true;
+            setStatus('Sequencer stopped');
+        }
+
+        async function advanceSequencer() {
+            if (!seqRunning) return;
+            const steps = getSeqStepCount();
+            seqStep = (seqStep + 1) % steps;
+            highlightStep(seqStep);
+
+            const step = seqPattern[seqStep];
+            if (step && step.on) {
+                // Spawn a new voice for this step
+                const vid = await workletSpawnVoice();
+                if (vid > 0) {
+                    // Set per-step params
+                    workletSend({ type: 'voiceParam', voiceId: vid, param: 'freq', value: step.freq });
+                    workletSend({ type: 'voiceParam', voiceId: vid, param: 'amp', value: step.amp });
+                    // Gate on
+                    workletSend({ type: 'voiceGate', voiceId: vid, value: 1.0 });
+
+                    // Gate off shortly after (let the envelope handle the shape)
+                    const dur = getStepDurationMs() * 0.8;
+                    setTimeout(() => {
+                        workletSend({ type: 'voiceGate', voiceId: vid, value: 0.0 });
+                    }, Math.min(dur, 500));
+                }
+            }
+
+            seqTimerId = setTimeout(advanceSequencer, getStepDurationMs());
+        }
+
+        // ====================================================================
+        // Oscilloscope
+        // ====================================================================
+        function drawScope() {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx2d.scale(dpr, dpr);
+            const w = rect.width;
+            const h = rect.height;
+
+            ctx2d.fillStyle = '#0d1117';
+            ctx2d.fillRect(0, 0, w, h);
+
+            // Center line
+            ctx2d.strokeStyle = '#1e2a3a';
+            ctx2d.lineWidth = 1;
+            ctx2d.beginPath();
+            ctx2d.moveTo(0, h / 2);
+            ctx2d.lineTo(w, h / 2);
+            ctx2d.stroke();
+
+            if (analyser && scopeData) {
+                analyser.getByteTimeDomainData(scopeData);
+
+                ctx2d.strokeStyle = '#e94560';
+                ctx2d.lineWidth = 2;
+                ctx2d.beginPath();
+
+                const sliceWidth = w / scopeData.length;
+                let x = 0;
+                for (let i = 0; i < scopeData.length; i++) {
+                    const v = scopeData[i] / 128.0;
+                    const y = (v * h) / 2;
+                    if (i === 0) ctx2d.moveTo(x, y);
+                    else ctx2d.lineTo(x, y);
+                    x += sliceWidth;
+                }
+                ctx2d.stroke();
+            }
+
+            animFrame = requestAnimationFrame(drawScope);
+        }
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+        async function start() {
+            try {
+                // Only fetch WASM bytes at load time — don't create AudioContext
+                // until user gesture (browsers require it).
+                const resp = await fetch('pkg/microsynth_raw.wasm');
+                wasmBytes = await resp.arrayBuffer();
+
+                // Check for AudioWorklet support safely — some browsers throw
+                // on AudioContext.prototype property access.
+                let hasWorklet = false;
+                try {
+                    hasWorklet = !!(window.AudioContext && 'audioWorklet' in AudioContext.prototype);
+                } catch (e) { /* ignore */ }
+
+                if (hasWorklet) {
+                    backendBadge.textContent = 'AudioWorklet';
+                    backendBadge.style.background = '#1a5c3a';
+                    backend = 'worklet';
+                } else {
+                    backendBadge.textContent = 'No AudioWorklet';
+                    backendBadge.style.background = '#5c3a1a';
+                }
+
+                playBtn.textContent = 'Play / Hold';
+                playBtn.disabled = false;
+                oneshotBtn.disabled = false;
+                seqPlayBtn.disabled = false;
+                setStatus('Ready');
+
+                // Build sequencer grid
+                buildSequencerGrid();
+            } catch (e) {
+                setStatus('Failed to load: ' + (e.message || e), 'error');
+                backendBadge.textContent = 'error';
+            }
+        }
+
+        start();
+    </script>
+</body>
+</html>
