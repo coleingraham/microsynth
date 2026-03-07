@@ -10,7 +10,7 @@ pub mod graph;
 pub mod node;
 pub mod synthdef;
 pub mod ugens;
-#[cfg(feature = "web")]
+#[cfg(target_arch = "wasm32")]
 pub mod web;
 
 // Re-export core types for convenience.

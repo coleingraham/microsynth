@@ -10,6 +10,8 @@
             --surface: #16213e;
             --border: #0f3460;
             --accent: #e94560;
+            --accent-hover: #c73e54;
+            --success: #4ecca3;
             --text: #eee;
             --text-dim: #8892a4;
             --mono: 'Courier New', Courier, monospace;
@@ -35,13 +37,20 @@
             font-size: 0.85rem;
             margin-bottom: 1.5rem;
         }
-        .container {
-            width: 100%;
-            max-width: 740px;
+        .container { width: 100%; max-width: 740px; }
+        .presets { margin-bottom: 1rem; }
+        .presets label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-right: 0.5rem;
         }
-        .editor-area {
-            position: relative;
-            margin-bottom: 1rem;
+        select {
+            padding: 0.35rem 0.5rem;
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.85rem;
         }
         textarea {
             width: 100%;
@@ -56,11 +65,10 @@
             line-height: 1.5;
             resize: vertical;
             outline: none;
-            tab-size: 2;
+            tab-size: 4;
+            margin-bottom: 1rem;
         }
-        textarea:focus {
-            border-color: var(--accent);
-        }
+        textarea:focus { border-color: var(--accent); }
         .controls {
             display: flex;
             gap: 0.75rem;
@@ -78,46 +86,20 @@
             cursor: pointer;
             transition: all 0.15s;
         }
-        button:hover {
-            background: var(--border);
-        }
-        button.primary {
-            background: var(--accent);
-            border-color: var(--accent);
-            font-weight: 600;
-        }
-        button.primary:hover {
-            background: #c73e54;
-        }
-        button:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
+        button:hover { background: var(--border); }
+        button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+        button.primary:hover { background: var(--accent-hover); }
+        button.playing { background: var(--success); border-color: var(--success); }
+        button.playing:hover { background: #3daa88; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
         .status {
             font-size: 0.8rem;
             color: var(--text-dim);
             flex: 1;
             text-align: right;
         }
-        .status.error {
-            color: var(--accent);
-        }
-        .presets {
-            margin-bottom: 1rem;
-        }
-        .presets label {
-            font-size: 0.8rem;
-            color: var(--text-dim);
-            margin-right: 0.5rem;
-        }
-        select {
-            padding: 0.35rem 0.5rem;
-            background: var(--surface);
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            font-size: 0.85rem;
-        }
+        .status.error { color: var(--accent); }
+        .status.ok { color: var(--success); }
         .scope-container {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -131,10 +113,15 @@
             display: block;
             border-radius: 4px;
         }
-        .info {
-            font-size: 0.75rem;
+        .backend-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            background: var(--border);
             color: var(--text-dim);
-            text-align: center;
+            margin-left: 0.5rem;
+            vertical-align: middle;
         }
         .ugen-list {
             font-size: 0.75rem;
@@ -153,13 +140,15 @@
 </head>
 <body>
     <h1>microsynth</h1>
-    <p class="subtitle">Rust audio synthesis engine in the browser</p>
+    <p class="subtitle">Rust audio synthesis engine in the browser
+        <span id="backend-badge" class="backend-badge">loading...</span>
+    </p>
 
     <div class="container">
         <div class="presets">
             <label>Presets:</label>
             <select id="preset-select">
-                <option value="">— select —</option>
+                <option value="">-- select --</option>
                 <option value="sine">Sine tone</option>
                 <option value="saw_lpf">Saw + LPF</option>
                 <option value="fm">FM synthesis</option>
@@ -169,11 +158,9 @@
             </select>
         </div>
 
-        <div class="editor-area">
-            <textarea id="editor" spellcheck="false" placeholder="Write your synthdef here...">synthdef tone freq=220.0 amp=0.3 =
+        <textarea id="editor" spellcheck="false">synthdef tone freq=220.0 amp=0.3 =
     let sig = sinOsc freq 0.0
     sig * amp</textarea>
-        </div>
 
         <div class="controls">
             <button id="play-btn" class="primary" disabled>Loading WASM...</button>
@@ -197,8 +184,9 @@
     </div>
 
     <script type="module">
-        import init, { WebSynth } from './pkg/microsynth.js';
-
+        // ====================================================================
+        // Presets
+        // ====================================================================
         const PRESETS = {
             sine: `synthdef tone freq=220.0 amp=0.3 =
     let sig = sinOsc freq 0.0
@@ -233,23 +221,46 @@
     lpf mix 1200.0 0.707 * amp`,
         };
 
-        let synth = null;
-        let audioCtx = null;
-        let scriptNode = null;
-        let analyser = null;
-        let isPlaying = false;
-        let scopeData = null;
-        let animFrame = null;
-
+        // ====================================================================
+        // DOM refs
+        // ====================================================================
         const editor = document.getElementById('editor');
         const playBtn = document.getElementById('play-btn');
         const stopBtn = document.getElementById('stop-btn');
         const statusEl = document.getElementById('status');
         const presetSelect = document.getElementById('preset-select');
+        const backendBadge = document.getElementById('backend-badge');
         const canvas = document.getElementById('scope');
         const ctx2d = canvas.getContext('2d');
 
-        // Handle tab key in textarea
+        // ====================================================================
+        // State
+        // ====================================================================
+        let audioCtx = null;
+        let analyser = null;
+        let scopeData = null;
+        let animFrame = null;
+        let isPlaying = false;
+
+        // AudioWorklet state
+        let workletNode = null;
+        let wasmBytes = null;
+
+        // ScriptProcessor fallback state
+        let scriptNode = null;
+        let webSynth = null;  // wasm-bindgen WebSynth instance
+
+        // Which backend are we using?
+        let backend = null; // 'worklet' or 'scriptprocessor'
+
+        // ====================================================================
+        // UI helpers
+        // ====================================================================
+        function setStatus(msg, type = '') {
+            statusEl.textContent = msg;
+            statusEl.className = 'status' + (type ? ' ' + type : '');
+        }
+
         editor.addEventListener('keydown', (e) => {
             if (e.key === 'Tab') {
                 e.preventDefault();
@@ -264,56 +275,101 @@
             const key = presetSelect.value;
             if (key && PRESETS[key]) {
                 editor.value = PRESETS[key];
-                if (isPlaying) {
-                    compileAndPlay();
-                }
+                if (isPlaying) compileAndPlay();
             }
         });
 
         playBtn.addEventListener('click', compileAndPlay);
         stopBtn.addEventListener('click', stopAudio);
 
-        function setStatus(msg, isError = false) {
-            statusEl.textContent = msg;
-            statusEl.className = isError ? 'status error' : 'status';
+        // ====================================================================
+        // AudioWorklet backend
+        // ====================================================================
+        async function initWorklet() {
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            await audioCtx.audioWorklet.addModule('processor.js');
+
+            workletNode = new AudioWorkletNode(audioCtx, 'microsynth-processor', {
+                numberOfInputs: 0,
+                numberOfOutputs: 1,
+                outputChannelCount: [2],
+            });
+
+            // Send WASM bytes to the worklet
+            workletNode.port.postMessage({ type: 'init', wasmBytes: wasmBytes });
+
+            return new Promise((resolve, reject) => {
+                workletNode.port.onmessage = (e) => {
+                    if (e.data.type === 'ready') resolve();
+                    else if (e.data.type === 'error') reject(new Error(e.data.message));
+                };
+                setTimeout(() => reject(new Error('worklet init timeout')), 5000);
+            });
         }
 
-        function compileAndPlay() {
-            if (!audioCtx) {
-                audioCtx = new AudioContext();
+        function workletCompile(source) {
+            return new Promise((resolve, reject) => {
+                const handler = (e) => {
+                    workletNode.port.removeEventListener('message', handler);
+                    if (e.data.type === 'compiled') resolve();
+                    else if (e.data.type === 'error') reject(new Error(e.data.message));
+                };
+                workletNode.port.addEventListener('message', handler);
+                workletNode.port.postMessage({ type: 'compile', source: source });
+            });
+        }
+
+        function workletPlay() {
+            if (!analyser) {
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.8;
+                scopeData = new Uint8Array(analyser.frequencyBinCount);
             }
+            workletNode.connect(analyser);
+            analyser.connect(audioCtx.destination);
+        }
 
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
+        function workletStop() {
+            if (workletNode) {
+                workletNode.port.postMessage({ type: 'stop' });
+                workletNode.disconnect();
             }
+        }
 
-            const sampleRate = audioCtx.sampleRate;
-            const bufferSize = 1024;
+        // ====================================================================
+        // ScriptProcessorNode fallback
+        // ====================================================================
+        async function initScriptProcessor() {
+            // Load wasm-bindgen module for main thread
+            const { default: init, WebSynth } = await import('./pkg/microsynth.js');
+            await init();
 
-            // Create a new synth tuned to this AudioContext
-            try {
-                synth = new WebSynth(sampleRate, 64);
-                synth.compileAndLoad(editor.value);
-            } catch (e) {
-                setStatus(e.message || String(e), true);
-                return;
-            }
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            // Stop previous if playing
+            webSynth = new WebSynth(audioCtx.sampleRate, 64);
+        }
+
+        function scriptProcessorCompile(source) {
+            webSynth.compileAndLoad(source);
+        }
+
+        function scriptProcessorPlay() {
             if (scriptNode) {
                 scriptNode.disconnect();
                 scriptNode = null;
             }
 
-            // Create ScriptProcessorNode
-            scriptNode = audioCtx.createScriptProcessor(bufferSize, 0, 2);
+            scriptNode = audioCtx.createScriptProcessor(1024, 0, 2);
             scriptNode.onaudioprocess = (e) => {
                 const left = e.outputBuffer.getChannelData(0);
                 const right = e.outputBuffer.getChannelData(1);
-                synth.render(left, right);
+                webSynth.render(left, right);
             };
 
-            // Analyser for scope
             if (!analyser) {
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 2048;
@@ -323,28 +379,62 @@
 
             scriptNode.connect(analyser);
             analyser.connect(audioCtx.destination);
-
-            isPlaying = true;
-            playBtn.textContent = 'Recompile';
-            stopBtn.disabled = false;
-            setStatus(`Playing at ${sampleRate} Hz`);
-
-            if (!animFrame) {
-                drawScope();
-            }
         }
 
-        function stopAudio() {
+        function scriptProcessorStop() {
             if (scriptNode) {
                 scriptNode.disconnect();
                 scriptNode = null;
             }
+        }
+
+        // ====================================================================
+        // Unified play/stop
+        // ====================================================================
+        async function compileAndPlay() {
+            const source = editor.value;
+
+            try {
+                if (backend === 'worklet') {
+                    if (!workletNode) await initWorklet();
+                    await workletCompile(source);
+                    workletPlay();
+                } else {
+                    scriptProcessorCompile(source);
+                    scriptProcessorPlay();
+                }
+
+                isPlaying = true;
+                playBtn.textContent = 'Recompile';
+                playBtn.classList.remove('primary');
+                playBtn.classList.add('playing');
+                stopBtn.disabled = false;
+                setStatus(`Playing at ${audioCtx.sampleRate} Hz`, 'ok');
+
+                if (!animFrame) drawScope();
+            } catch (e) {
+                setStatus(e.message || String(e), 'error');
+            }
+        }
+
+        function stopAudio() {
+            if (backend === 'worklet') {
+                workletStop();
+            } else {
+                scriptProcessorStop();
+            }
+
             isPlaying = false;
             playBtn.textContent = 'Play';
+            playBtn.classList.remove('playing');
+            playBtn.classList.add('primary');
             stopBtn.disabled = true;
             setStatus('Stopped');
         }
 
+        // ====================================================================
+        // Oscilloscope
+        // ====================================================================
         function drawScope() {
             const dpr = window.devicePixelRatio || 1;
             const rect = canvas.getBoundingClientRect();
@@ -357,7 +447,7 @@
             ctx2d.fillStyle = '#0d1117';
             ctx2d.fillRect(0, 0, w, h);
 
-            // Grid lines
+            // Center line
             ctx2d.strokeStyle = '#1e2a3a';
             ctx2d.lineWidth = 1;
             ctx2d.beginPath();
@@ -387,15 +477,42 @@
             animFrame = requestAnimationFrame(drawScope);
         }
 
-        // Init WASM
+        // ====================================================================
+        // Initialization
+        // ====================================================================
         async function start() {
             try {
-                await init();
+                // Fetch raw WASM bytes (needed for both backends)
+                const resp = await fetch('pkg/microsynth_raw.wasm');
+                wasmBytes = await resp.arrayBuffer();
+
+                // Try AudioWorklet first
+                if (window.AudioContext && AudioContext.prototype.audioWorklet) {
+                    try {
+                        await initWorklet();
+                        backend = 'worklet';
+                        backendBadge.textContent = 'AudioWorklet';
+                        backendBadge.style.background = '#1a5c3a';
+                    } catch (e) {
+                        console.warn('AudioWorklet init failed, falling back:', e);
+                        backend = null;
+                    }
+                }
+
+                // Fallback to ScriptProcessorNode
+                if (!backend) {
+                    await initScriptProcessor();
+                    backend = 'scriptprocessor';
+                    backendBadge.textContent = 'ScriptProcessor';
+                    backendBadge.style.background = '#5c3a1a';
+                }
+
                 playBtn.textContent = 'Play';
                 playBtn.disabled = false;
                 setStatus('Ready');
             } catch (e) {
-                setStatus('Failed to load WASM: ' + e.message, true);
+                setStatus('Failed to load: ' + (e.message || e), 'error');
+                backendBadge.textContent = 'error';
             }
         }
 
