@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-WASM_RAW="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/microsynth.wasm"
+WASM_OUTPUT="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/microsynth.wasm"
 
 # Use rustup-managed cargo if available (handles cross-compilation targets).
 # Homebrew's cargo doesn't support rustup-installed targets.
@@ -35,8 +35,28 @@ if [ -z "${CARGO:-}" ]; then
     fi
 fi
 
-echo "Building microsynth for wasm32-unknown-unknown..."
-echo "  Using: $CARGO"
+echo "Using: $CARGO"
+mkdir -p "$SCRIPT_DIR/pkg"
+
+# --- Build 1: Raw WASM for AudioWorklet ---
+# Uses 'std' feature (for allocator + math) but NOT 'web' (no wasm-bindgen).
+# This produces a clean WASM module with only #[no_mangle] C exports.
+echo ""
+echo "==> Building raw WASM for AudioWorklet (std, no wasm-bindgen)..."
+"$CARGO" build \
+    --manifest-path "$PROJECT_ROOT/Cargo.toml" \
+    --target wasm32-unknown-unknown \
+    --release \
+    --features std \
+    --no-default-features
+
+cp "$WASM_OUTPUT" "$SCRIPT_DIR/pkg/microsynth_raw.wasm"
+echo "    -> pkg/microsynth_raw.wasm"
+
+# --- Build 2: wasm-bindgen WASM for main thread ---
+# Uses 'web' feature which pulls in wasm-bindgen + js-sys.
+echo ""
+echo "==> Building wasm-bindgen module for main thread (web feature)..."
 "$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
     --target wasm32-unknown-unknown \
@@ -44,15 +64,13 @@ echo "  Using: $CARGO"
     --features web \
     --no-default-features
 
-echo "Running wasm-bindgen (main thread module)..."
+echo "    Running wasm-bindgen..."
 wasm-bindgen \
-    "$WASM_RAW" \
+    "$WASM_OUTPUT" \
     --out-dir "$SCRIPT_DIR/pkg" \
     --target web \
     --no-typescript
-
-echo "Copying raw WASM (AudioWorklet module)..."
-cp "$WASM_RAW" "$SCRIPT_DIR/pkg/microsynth_raw.wasm"
+echo "    -> pkg/microsynth.js + pkg/microsynth_bg.wasm"
 
 echo ""
 echo "Build complete! Files in web/pkg/"
