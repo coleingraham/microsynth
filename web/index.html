@@ -965,21 +965,16 @@
         // ====================================================================
         async function start() {
             try {
+                // Only fetch WASM bytes at load time — don't create AudioContext
+                // until user gesture (browsers require it).
                 const resp = await fetch('pkg/microsynth_raw.wasm');
                 wasmBytes = await resp.arrayBuffer();
 
                 if (window.AudioContext && AudioContext.prototype.audioWorklet) {
-                    try {
-                        await initWorklet();
-                        backend = 'worklet';
-                        backendBadge.textContent = 'AudioWorklet';
-                        backendBadge.style.background = '#1a5c3a';
-                    } catch (e) {
-                        console.warn('AudioWorklet init failed:', e);
-                    }
-                }
-
-                if (!backend) {
+                    backendBadge.textContent = 'AudioWorklet';
+                    backendBadge.style.background = '#1a5c3a';
+                    backend = 'worklet';
+                } else {
                     backendBadge.textContent = 'No AudioWorklet';
                     backendBadge.style.background = '#5c3a1a';
                 }
