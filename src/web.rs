@@ -28,6 +28,7 @@
 //! ```
 
 use alloc::boxed::Box;
+#[cfg(feature = "web")]
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
