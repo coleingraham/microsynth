@@ -970,7 +970,14 @@
                 const resp = await fetch('pkg/microsynth_raw.wasm');
                 wasmBytes = await resp.arrayBuffer();
 
-                if (window.AudioContext && AudioContext.prototype.audioWorklet) {
+                // Check for AudioWorklet support safely — some browsers throw
+                // on AudioContext.prototype property access.
+                let hasWorklet = false;
+                try {
+                    hasWorklet = !!(window.AudioContext && 'audioWorklet' in AudioContext.prototype);
+                } catch (e) { /* ignore */ }
+
+                if (hasWorklet) {
                     backendBadge.textContent = 'AudioWorklet';
                     backendBadge.style.background = '#1a5c3a';
                     backend = 'worklet';
