@@ -12,6 +12,10 @@
 # Usage:
 #   cd web && ./build.sh
 #   # Then serve: python3 -m http.server 8080
+#
+# Note: Requires rustup-managed cargo (not Homebrew). If you have both,
+#   run: brew uninstall rust
+#   or set CARGO to the rustup-managed binary before running this script.
 
 set -euo pipefail
 
@@ -19,8 +23,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 WASM_RAW="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/microsynth.wasm"
 
+# Use rustup-managed cargo if available (handles cross-compilation targets).
+# Homebrew's cargo doesn't support rustup-installed targets.
+if [ -z "${CARGO:-}" ]; then
+    if [ -x "$HOME/.cargo/bin/cargo" ]; then
+        CARGO="$HOME/.cargo/bin/cargo"
+    elif [ -x "$HOME/.rustup/toolchains/stable-$(uname -m)-apple-darwin/bin/cargo" ] 2>/dev/null; then
+        CARGO="$HOME/.rustup/toolchains/stable-$(uname -m)-apple-darwin/bin/cargo"
+    else
+        CARGO="cargo"
+    fi
+fi
+
 echo "Building microsynth for wasm32-unknown-unknown..."
-cargo build \
+echo "  Using: $CARGO"
+"$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
     --target wasm32-unknown-unknown \
     --release \
