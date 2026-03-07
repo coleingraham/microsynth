@@ -326,6 +326,7 @@ pub fn available_ugens() -> Vec<JsValue> {
         "delay",
         "pan2", "mix", "sampleAndHold",
         "impulse", "lag", "clip",
+        "waveTable",
     ];
     names.iter().map(|&n| JsValue::from_str(n)).collect()
 }

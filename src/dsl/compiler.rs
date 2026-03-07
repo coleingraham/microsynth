@@ -88,13 +88,12 @@ impl<'a> Compiler<'a> {
 
     /// Compile a SynthDefDecl into a SynthDef.
     fn compile(mut self, decl: &SynthDefDecl) -> Result<SynthDef, CompileError> {
-        // Create Const nodes for each parameter (these serve as the
-        // parameter's default value and can be identified by param_names).
+        // Create Param nodes for each parameter. Param supports both instant
+        // set_value and smooth set_target (glide/portamento) for continuous
+        // control of parameters like freq, amp, filter cutoff, etc.
         for param in &decl.params {
             let value = param.default;
-            let idx = self.builder.add_node(move || Box::new(ugens::Const::new(value)));
-            // Register as a named parameter (pointing at the Const node, input 0
-            // is meaningless for Const but we store it for the param system).
+            let idx = self.builder.add_node(move || Box::new(ugens::Param::new(value)));
             self.builder.param(param.name.clone(), idx, 0);
             self.scope.insert(param.name.clone(), idx);
         }

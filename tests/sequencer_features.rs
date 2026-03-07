@@ -582,3 +582,220 @@ fn test_dsl_clip_compiles() {
     );
     assert!(result.is_ok());
 }
+
+// ============================================================================
+// WaveTable Synthesis
+// ============================================================================
+
+#[test]
+fn test_wavetable_produces_output() {
+    use microsynth::ugens::{WaveTable, Param};
+
+    let mut engine = make_engine(64);
+
+    // Create a simple sine waveform as a wavetable (one cycle, 256 samples)
+    let table_len = 256;
+    let waveform: Vec<f32> = (0..table_len)
+        .map(|i| (2.0 * std::f32::consts::PI * i as f32 / table_len as f32).sin())
+        .collect();
+    let sample = Arc::new(Sample::from_mono(&waveform, 44100.0));
+
+    // Build a synthdef manually: Param(freq) → WaveTable → output
+    let mut builder = SynthDefBuilder::new("wt_test");
+    let freq_idx = builder.add_node(|| Box::new(Param::new(440.0)));
+    let wt_idx = builder.add_node({
+        let sample = sample.clone();
+        move || Box::new(WaveTable::new().with_waveform(sample.clone()))
+    });
+    builder.connect(freq_idx, wt_idx, 0); // freq → wavetable
+    builder.param("freq", freq_idx, 0);
+    builder.set_output(wt_idx);
+    let def = builder.build();
+
+    let synth = engine.instantiate_synthdef(&def);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+
+    let output = engine.render();
+    assert!(output.is_some());
+    let buf = output.unwrap();
+    // Should produce non-silent output
+    let max_val = buf.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+    assert!(max_val > 0.01, "WaveTable should produce non-silent output, got max {}", max_val);
+}
+
+#[test]
+fn test_wavetable_frequency_affects_pitch() {
+    use microsynth::ugens::{WaveTable, Param};
+
+    // Create wavetable
+    let table_len = 256;
+    let waveform: Vec<f32> = (0..table_len)
+        .map(|i| (2.0 * std::f32::consts::PI * i as f32 / table_len as f32).sin())
+        .collect();
+    let sample = Arc::new(Sample::from_mono(&waveform, 44100.0));
+
+    // Render at 440 Hz
+    let mut engine1 = make_engine(64);
+    let mut builder1 = SynthDefBuilder::new("wt1");
+    let freq1 = builder1.add_node(|| Box::new(Param::new(440.0)));
+    let wt1 = builder1.add_node({
+        let s = sample.clone();
+        move || Box::new(WaveTable::new().with_waveform(s.clone()))
+    });
+    builder1.connect(freq1, wt1, 0);
+    builder1.set_output(wt1);
+    let def1 = builder1.build();
+    let synth1 = engine1.instantiate_synthdef(&def1);
+    engine1.graph_mut().set_sink(synth1.output_node());
+    engine1.prepare();
+
+    // Render at 880 Hz
+    let mut engine2 = make_engine(64);
+    let mut builder2 = SynthDefBuilder::new("wt2");
+    let freq2 = builder2.add_node(|| Box::new(Param::new(880.0)));
+    let wt2 = builder2.add_node({
+        let s = sample.clone();
+        move || Box::new(WaveTable::new().with_waveform(s.clone()))
+    });
+    builder2.connect(freq2, wt2, 0);
+    builder2.set_output(wt2);
+    let def2 = builder2.build();
+    let synth2 = engine2.instantiate_synthdef(&def2);
+    engine2.graph_mut().set_sink(synth2.output_node());
+    engine2.prepare();
+
+    let out1 = engine1.render().unwrap();
+    let out2 = engine2.render().unwrap();
+
+    // The two outputs should be different (different frequencies)
+    let samples1 = out1.channel(0).samples();
+    let samples2 = out2.channel(0).samples();
+    let differs = samples1.iter().zip(samples2.iter()).any(|(a, b)| (a - b).abs() > 0.001);
+    assert!(differs, "Different frequencies should produce different waveforms");
+}
+
+#[test]
+fn test_dsl_wavetable_compiles() {
+    let registry = make_registry();
+    let result = dsl::compile(
+        "synthdef wt freq=440.0 = waveTable freq",
+        &registry,
+    );
+    assert!(result.is_ok(), "WaveTable should be available in DSL: {:?}", result.err());
+}
+
+// ============================================================================
+// Param Glide (Continuous Parameter Modulation)
+// ============================================================================
+
+#[test]
+fn test_param_glide_ramps_value() {
+    let registry = make_registry();
+    let defs = dsl::compile(
+        "synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp",
+        &registry,
+    ).unwrap();
+
+    let mut engine = make_engine(64);
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+
+    // Start with amp=0, should be silent
+    let out1 = engine.render().unwrap();
+    let max1 = out1.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+    assert!(max1 < 0.001, "Should be silent at amp=0, got {}", max1);
+
+    // Set glide to amp=1.0 over ~0.01s (441 samples ≈ 7 blocks at 64)
+    assert!(engine.set_param_glide(&synth, "amp", 1.0, 0.01));
+
+    // Render several blocks — amplitude should gradually increase
+    let mut max_values: Vec<f32> = Vec::new();
+    for _ in 0..10 {
+        let out = engine.render().unwrap();
+        let max = out.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        max_values.push(max);
+    }
+
+    // Later blocks should be louder than earlier blocks
+    let early_max = max_values[0];
+    let late_max = *max_values.last().unwrap();
+    assert!(late_max > early_max, "Glide should increase amplitude: early={}, late={}", early_max, late_max);
+}
+
+#[test]
+fn test_voice_param_glide() {
+    let registry = make_registry();
+    let defs = dsl::compile(
+        "synthdef test amp=0.5 = sinOsc 440.0 0.0 * amp",
+        &registry,
+    ).unwrap();
+
+    let mut engine = make_engine(64);
+    let voice_id = engine.spawn_voice(&defs[0]);
+    let output_node = engine.voice_synth(voice_id).unwrap().output_node();
+    engine.graph_mut().set_sink(output_node);
+    engine.prepare();
+
+    // Set glide via voice ID
+    assert!(engine.set_voice_param_glide(voice_id, "amp", 0.0, 0.01));
+
+    // Should fail for nonexistent param
+    assert!(!engine.set_voice_param_glide(voice_id, "nonexistent", 0.0, 0.01));
+}
+
+#[test]
+fn test_scheduled_param_glide() {
+    let registry = make_registry();
+    let defs = dsl::compile(
+        "synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp",
+        &registry,
+    ).unwrap();
+
+    let mut engine = make_engine(64);
+    let voice_id = engine.spawn_voice(&defs[0]);
+    let output_node = engine.voice_synth(voice_id).unwrap().output_node();
+    engine.graph_mut().set_sink(output_node);
+    engine.prepare();
+
+    // Schedule a glide starting at sample 0
+    engine.scheduler_mut().schedule_param_glide(0, voice_id, "amp", 1.0, 0.01);
+
+    // Render — the event should fire and start the glide
+    let out1 = engine.render();
+    assert!(out1.is_some());
+
+    // Render more blocks — amplitude should ramp up
+    let mut found_nonzero = false;
+    for _ in 0..10 {
+        if let Some(out) = engine.render() {
+            let max = out.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+            if max > 0.01 {
+                found_nonzero = true;
+                break;
+            }
+        }
+    }
+    assert!(found_nonzero, "Scheduled glide should produce non-zero output after ramping");
+}
+
+#[test]
+fn test_scheduler_param_glide_convenience() {
+    let mut scheduler = Scheduler::new();
+    let voice = scheduler.alloc_voice_id();
+    scheduler.schedule_param_glide(100, voice, "freq", 880.0, 0.5);
+    assert_eq!(scheduler.len(), 1);
+
+    let events = scheduler.drain_before(200);
+    assert_eq!(events.len(), 1);
+    match &events[0].action {
+        EventAction::SetParamGlide { voice: v, param, target, glide_secs } => {
+            assert_eq!(*v, voice);
+            assert_eq!(param, "freq");
+            assert!((target - 880.0).abs() < f32::EPSILON);
+            assert!((glide_secs - 0.5).abs() < f32::EPSILON);
+        }
+        _ => panic!("Expected SetParamGlide event"),
+    }
+}

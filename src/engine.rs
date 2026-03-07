@@ -250,6 +250,9 @@ impl Engine {
                 EventAction::SetGate { voice, value } => {
                     self.set_voice_param(voice, "gate", value);
                 }
+                EventAction::SetParamGlide { voice, param, target, glide_secs } => {
+                    self.set_voice_param_glide(voice, &param, target, glide_secs);
+                }
                 EventAction::FreeSynth { voice } => {
                     self.free_voice(voice);
                     needs_prepare = true;
@@ -296,12 +299,50 @@ impl Engine {
         output
     }
 
-    /// Set a named parameter on a live synth to a new value.
+    /// Set a named parameter on a live synth to a new value (instant).
     /// Does NOT require `prepare()` — takes effect on the next render.
     /// Returns true if the parameter was found and set.
     pub fn set_param(&mut self, synth: &Synth, name: &str, value: f32) -> bool {
         if let Some(node_id) = synth.param_node(name) {
             self.graph.set_node_value(node_id, value)
+        } else {
+            false
+        }
+    }
+
+    /// Set a named parameter with a smooth glide to the target value.
+    /// The parameter will linearly ramp from its current value to `target`
+    /// over `glide_secs` seconds. Use for crescendo, diminuendo, pitch bends,
+    /// filter sweeps, etc.
+    /// Returns true if the parameter was found and accepted the glide.
+    pub fn set_param_glide(
+        &mut self,
+        synth: &Synth,
+        name: &str,
+        target: f32,
+        glide_secs: f32,
+    ) -> bool {
+        if let Some(node_id) = synth.param_node(name) {
+            self.graph.set_node_target(node_id, target, glide_secs)
+        } else {
+            false
+        }
+    }
+
+    /// Set a named parameter on a voice with a smooth glide.
+    pub fn set_voice_param_glide(
+        &mut self,
+        voice_id: VoiceId,
+        name: &str,
+        target: f32,
+        glide_secs: f32,
+    ) -> bool {
+        if let Some(voice) = self.voices.iter().find(|v| v.id == voice_id) {
+            if let Some(node_id) = voice.synth.param_node(name) {
+                self.graph.set_node_target(node_id, target, glide_secs)
+            } else {
+                false
+            }
         } else {
             false
         }

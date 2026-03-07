@@ -80,9 +80,16 @@ pub trait UGen: Send {
     ///   pre-set by the graph according to `output_channels`.
     fn process(&mut self, context: &ProcessContext, inputs: &[&AudioBuffer], output: &mut AudioBuffer);
 
-    /// Set an internal scalar value (e.g. the value of a Const node).
+    /// Set an internal scalar value (e.g. the value of a Const or Param node).
     /// Returns true if the node accepted the value.
     fn set_value(&mut self, _value: f32) -> bool {
+        false
+    }
+
+    /// Set a target value with a glide time in seconds.
+    /// The node smoothly transitions from its current value to `target`
+    /// over `glide_secs` seconds. Returns true if accepted.
+    fn set_target(&mut self, _target: f32, _glide_secs: f32) -> bool {
         false
     }
 

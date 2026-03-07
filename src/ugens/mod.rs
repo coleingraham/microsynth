@@ -9,6 +9,7 @@
 //! - `delay`: Delay
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
 //! - `playbuf`: PlayBuf (sample playback)
+//! - `wavetable`: WaveTable (wavetable oscillator)
 
 pub mod bus;
 pub mod delay;
@@ -19,6 +20,7 @@ pub mod noise;
 pub mod oscillators;
 pub mod playbuf;
 pub mod utility;
+pub mod wavetable;
 
 // Re-export everything for convenience.
 pub use bus::*;
@@ -30,6 +32,7 @@ pub use noise::*;
 pub use oscillators::*;
 pub use playbuf::*;
 pub use utility::*;
+pub use wavetable::*;
 
 use crate::context::Rate;
 use crate::dsl::compiler::{UGenRegistry};
@@ -240,6 +243,14 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
             InputSpec { name: "lo", rate: Rate::Audio },
             InputSpec { name: "hi", rate: Rate::Audio },
         ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Wavetable --
+    reg.register(
+        "waveTable",
+        || Box::new(WaveTable::new()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
 }

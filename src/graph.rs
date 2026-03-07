@@ -332,6 +332,16 @@ impl AudioGraph {
         }
     }
 
+    /// Set a target value with glide on a node (e.g. smooth parameter transition).
+    /// Returns true if the node accepted the target.
+    /// This does NOT require `prepare()` — it's safe to call between renders.
+    pub fn set_node_target(&mut self, id: NodeId, target: f32, glide_secs: f32) -> bool {
+        match self.nodes.get_mut(id.index()) {
+            Some(Some(slot)) => slot.ugen.set_target(target, glide_secs),
+            _ => false,
+        }
+    }
+
     /// Check if a node reports that it is done (e.g. envelope finished).
     pub fn node_is_done(&self, id: NodeId) -> bool {
         match self.nodes.get(id.index()) {

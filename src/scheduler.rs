@@ -20,11 +20,19 @@ pub struct VoiceId(pub u64);
 /// An action to perform at a scheduled time.
 #[derive(Clone)]
 pub enum EventAction {
-    /// Set a named parameter on an existing voice.
+    /// Set a named parameter on an existing voice (instant).
     SetParam {
         voice: VoiceId,
         param: String,
         value: f32,
+    },
+    /// Set a named parameter with a smooth glide to the target.
+    /// Used for crescendo, diminuendo, pitch bends, filter sweeps, etc.
+    SetParamGlide {
+        voice: VoiceId,
+        param: String,
+        target: f32,
+        glide_secs: f32,
     },
     /// Set the gate parameter (convenience for note-on/note-off).
     /// gate > 0 = note on, gate = 0 = note off.
@@ -100,6 +108,26 @@ impl Scheduler {
         self.schedule(Event {
             time,
             action: EventAction::SetGate { voice, value },
+        });
+    }
+
+    /// Schedule a parameter glide at a specific sample time.
+    pub fn schedule_param_glide(
+        &mut self,
+        time: u64,
+        voice: VoiceId,
+        param: impl Into<String>,
+        target: f32,
+        glide_secs: f32,
+    ) {
+        self.schedule(Event {
+            time,
+            action: EventAction::SetParamGlide {
+                voice,
+                param: param.into(),
+                target,
+                glide_secs,
+            },
         });
     }
 
