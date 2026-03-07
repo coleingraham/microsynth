@@ -1,4 +1,4 @@
-//! Envelope UGens: Line, ASR.
+//! Envelope UGens: Line, Perc, ASR, ADSR.
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
@@ -10,12 +10,15 @@ use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 ///
 /// Inputs: start (initial value), end (target value), dur (duration in seconds).
 /// Reads input values at init time (first sample of first block).
+///
+/// Reports `is_done()` = true after the ramp completes.
 pub struct Line {
     value: f32,
     increment: f32,
     target: f32,
     samples_remaining: u64,
     initialized: bool,
+    done: bool,
     sample_rate: f32,
 }
 
@@ -27,6 +30,7 @@ impl Line {
             target: 1.0,
             samples_remaining: 0,
             initialized: false,
+            done: false,
             sample_rate: 44100.0,
         }
     }
@@ -47,6 +51,7 @@ impl UGen for Line {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         self.initialized = false;
+        self.done = false;
     }
 
     fn reset(&mut self) {
@@ -55,6 +60,7 @@ impl UGen for Line {
         self.target = 1.0;
         self.samples_remaining = 0;
         self.initialized = false;
+        self.done = false;
     }
 
     fn process(
@@ -109,8 +115,136 @@ impl UGen for Line {
             if ch == 0 {
                 self.value = value;
                 self.samples_remaining = remaining;
+                if remaining == 0 && self.initialized {
+                    self.done = true;
+                }
             }
         }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done
+    }
+}
+
+// --- Perc ---
+
+/// Percussive envelope: attack ramp up, then release ramp down to 0.
+///
+/// Inputs: attack (seconds), release (seconds).
+/// No gate needed — fires immediately on instantiation.
+///
+/// Reports `is_done()` = true after the release completes.
+pub struct Perc {
+    level: f32,
+    stage: PercStage,
+    done: bool,
+    sample_rate: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PercStage {
+    Attack,
+    Release,
+    Done,
+}
+
+impl Perc {
+    pub fn new() -> Self {
+        Perc {
+            level: 0.0,
+            stage: PercStage::Attack,
+            done: false,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static PERC_INPUTS: [InputSpec; 2] = [
+    InputSpec { name: "attack", rate: Rate::Audio },
+    InputSpec { name: "release", rate: Rate::Audio },
+];
+static PERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for Perc {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "Perc", inputs: &PERC_INPUTS, outputs: &PERC_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.level = 0.0;
+        self.stage = PercStage::Attack;
+        self.done = false;
+    }
+
+    fn reset(&mut self) {
+        self.level = 0.0;
+        self.stage = PercStage::Attack;
+        self.done = false;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let attack_buf = inputs.first().copied();
+        let release_buf = inputs.get(1).copied();
+
+        for ch in 0..output.num_channels() {
+            let mut level = self.level;
+            let mut stage = self.stage;
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let attack_time = attack_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.001)
+                    .max(0.0001);
+                let release_time = release_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0001);
+
+                match stage {
+                    PercStage::Attack => {
+                        let rate = 1.0 / (attack_time * self.sample_rate);
+                        level += rate;
+                        if level >= 1.0 {
+                            level = 1.0;
+                            stage = PercStage::Release;
+                        }
+                    }
+                    PercStage::Release => {
+                        let rate = 1.0 / (release_time * self.sample_rate);
+                        level -= rate;
+                        if level <= 0.0 {
+                            level = 0.0;
+                            stage = PercStage::Done;
+                        }
+                    }
+                    PercStage::Done => {
+                        level = 0.0;
+                    }
+                }
+
+                out[i] = level;
+            }
+
+            if ch == 0 {
+                self.level = level;
+                self.stage = stage;
+                if stage == PercStage::Done {
+                    self.done = true;
+                }
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done
     }
 }
 
@@ -123,9 +257,12 @@ impl UGen for Line {
 /// - When gate goes high: ramp from current level to 1.0 over `attack` seconds.
 /// - While gate is high: hold at 1.0.
 /// - When gate goes low: ramp from current level to 0.0 over `release` seconds.
+///
+/// Reports `is_done()` = true when the envelope returns to Idle after Release.
 pub struct ASR {
     level: f32,
     stage: AsrStage,
+    triggered: bool,
     sample_rate: f32,
 }
 
@@ -142,6 +279,7 @@ impl ASR {
         ASR {
             level: 0.0,
             stage: AsrStage::Idle,
+            triggered: false,
             sample_rate: 44100.0,
         }
     }
@@ -166,6 +304,7 @@ impl UGen for ASR {
     fn reset(&mut self) {
         self.level = 0.0;
         self.stage = AsrStage::Idle;
+        self.triggered = false;
     }
 
     fn process(
@@ -181,6 +320,7 @@ impl UGen for ASR {
         for ch in 0..output.num_channels() {
             let mut level = self.level;
             let mut stage = self.stage;
+            let mut triggered = self.triggered;
             let gate_ch = gate_buf.channel(ch % gate_buf.num_channels()).samples();
             let out = output.channel_mut(ch).samples_mut();
 
@@ -201,6 +341,7 @@ impl UGen for ASR {
                     AsrStage::Idle => {
                         if gate_on {
                             stage = AsrStage::Attack;
+                            triggered = true;
                         }
                     }
                     AsrStage::Attack => {
@@ -241,7 +382,181 @@ impl UGen for ASR {
             if ch == 0 {
                 self.level = level;
                 self.stage = stage;
+                self.triggered = triggered;
             }
         }
+    }
+
+    fn is_done(&self) -> bool {
+        // Done when we've been triggered and returned to idle
+        self.triggered && self.stage == AsrStage::Idle
+    }
+}
+
+// --- ADSR ---
+
+/// Full ADSR envelope with configurable sustain level.
+///
+/// Inputs: gate, attack (seconds), decay (seconds), sustain (level 0-1), release (seconds).
+///
+/// - Gate on: Attack → peak (1.0) → Decay → Sustain level
+/// - Gate off: Release → 0.0
+///
+/// Reports `is_done()` = true when the envelope returns to Idle after Release.
+pub struct ADSR {
+    level: f32,
+    stage: AdsrStage,
+    triggered: bool,
+    sample_rate: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AdsrStage {
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+impl ADSR {
+    pub fn new() -> Self {
+        ADSR {
+            level: 0.0,
+            stage: AdsrStage::Idle,
+            triggered: false,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static ADSR_INPUTS: [InputSpec; 5] = [
+    InputSpec { name: "gate", rate: Rate::Audio },
+    InputSpec { name: "attack", rate: Rate::Audio },
+    InputSpec { name: "decay", rate: Rate::Audio },
+    InputSpec { name: "sustain", rate: Rate::Audio },
+    InputSpec { name: "release", rate: Rate::Audio },
+];
+static ADSR_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for ADSR {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "ADSR", inputs: &ADSR_INPUTS, outputs: &ADSR_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        self.level = 0.0;
+        self.stage = AdsrStage::Idle;
+        self.triggered = false;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let gate_buf = inputs[0];
+        let attack_buf = inputs.get(1).copied();
+        let decay_buf = inputs.get(2).copied();
+        let sustain_buf = inputs.get(3).copied();
+        let release_buf = inputs.get(4).copied();
+
+        for ch in 0..output.num_channels() {
+            let mut level = self.level;
+            let mut stage = self.stage;
+            let mut triggered = self.triggered;
+            let gate_ch = gate_buf.channel(ch % gate_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let gate = gate_ch[i];
+                let attack_time = attack_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.01)
+                    .max(0.0001);
+                let decay_time = decay_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0001);
+                let sustain_level = sustain_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+                let release_time = release_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0001);
+
+                let gate_on = gate > 0.0;
+
+                match stage {
+                    AdsrStage::Idle => {
+                        if gate_on {
+                            stage = AdsrStage::Attack;
+                            triggered = true;
+                        }
+                    }
+                    AdsrStage::Attack => {
+                        if !gate_on {
+                            stage = AdsrStage::Release;
+                        } else {
+                            let rate = 1.0 / (attack_time * self.sample_rate);
+                            level += rate;
+                            if level >= 1.0 {
+                                level = 1.0;
+                                stage = AdsrStage::Decay;
+                            }
+                        }
+                    }
+                    AdsrStage::Decay => {
+                        if !gate_on {
+                            stage = AdsrStage::Release;
+                        } else {
+                            let rate = (1.0 - sustain_level) / (decay_time * self.sample_rate);
+                            level -= rate;
+                            if level <= sustain_level {
+                                level = sustain_level;
+                                stage = AdsrStage::Sustain;
+                            }
+                        }
+                    }
+                    AdsrStage::Sustain => {
+                        if !gate_on {
+                            stage = AdsrStage::Release;
+                        }
+                        level = sustain_level;
+                    }
+                    AdsrStage::Release => {
+                        if gate_on {
+                            stage = AdsrStage::Attack;
+                        } else {
+                            let rate = level.max(0.001) / (release_time * self.sample_rate);
+                            level -= rate;
+                            if level <= 0.0 {
+                                level = 0.0;
+                                stage = AdsrStage::Idle;
+                            }
+                        }
+                    }
+                }
+
+                out[i] = level;
+            }
+
+            if ch == 0 {
+                self.level = level;
+                self.stage = stage;
+                self.triggered = triggered;
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.triggered && self.stage == AdsrStage::Idle
     }
 }

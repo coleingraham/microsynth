@@ -136,6 +136,16 @@ impl SynthDefBuilder {
     }
 }
 
+/// A named parameter on a live synth: maps a name to the NodeId of its
+/// Const node in the graph.
+#[derive(Debug, Clone)]
+pub struct SynthParam {
+    /// Parameter name (e.g. "freq", "amp").
+    pub name: String,
+    /// NodeId of the Const node that holds this parameter's value.
+    pub node_id: NodeId,
+}
+
 /// A live instance of a SynthDef in the render graph.
 ///
 /// Tracks the mapping from SynthDef node indices to live `NodeId`s
@@ -147,15 +157,23 @@ pub struct Synth {
     node_ids: Vec<NodeId>,
     /// The output NodeId in the live graph.
     output_node: NodeId,
+    /// Named parameters with their live NodeIds.
+    params: Vec<SynthParam>,
 }
 
 impl Synth {
     /// Create a new Synth tracking instance.
-    pub(crate) fn new(def_name: String, node_ids: Vec<NodeId>, output_node: NodeId) -> Self {
+    pub(crate) fn new(
+        def_name: String,
+        node_ids: Vec<NodeId>,
+        output_node: NodeId,
+        params: Vec<SynthParam>,
+    ) -> Self {
         Synth {
             def_name,
             node_ids,
             output_node,
+            params,
         }
     }
 
@@ -174,12 +192,23 @@ impl Synth {
         self.output_node
     }
 
+    /// Get the named parameters on this synth.
+    pub fn params(&self) -> &[SynthParam] {
+        &self.params
+    }
+
+    /// Find the NodeId for a named parameter. Returns None if not found.
+    pub fn param_node(&self, name: &str) -> Option<NodeId> {
+        self.params.iter().find(|p| p.name == name).map(|p| p.node_id)
+    }
+
     /// Create a lightweight clone for bookkeeping.
     pub(crate) fn clone_handle(&self) -> Self {
         Synth {
             def_name: self.def_name.clone(),
             node_ids: self.node_ids.clone(),
             output_node: self.output_node,
+            params: self.params.clone(),
         }
     }
 }

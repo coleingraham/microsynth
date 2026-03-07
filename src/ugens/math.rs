@@ -40,6 +40,11 @@ impl UGen for Const {
             output.channel_mut(ch).fill(self.value);
         }
     }
+
+    fn set_value(&mut self, value: f32) -> bool {
+        self.value = value;
+        true
+    }
 }
 
 /// Which binary operation to perform.

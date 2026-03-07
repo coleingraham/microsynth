@@ -322,9 +322,10 @@ pub fn available_ugens() -> Vec<JsValue> {
         "sinOsc", "saw", "pulse", "tri", "phasor",
         "whiteNoise", "pinkNoise",
         "onePole", "lpf", "hpf", "bpf",
-        "line", "asr",
+        "line", "perc", "asr", "adsr",
         "delay",
         "pan2", "mix", "sampleAndHold",
+        "impulse", "lag", "clip",
     ];
     names.iter().map(|&n| JsValue::from_str(n)).collect()
 }

@@ -79,4 +79,17 @@ pub trait UGen: Send {
     /// - `output`: the output buffer to write into; channel count has been
     ///   pre-set by the graph according to `output_channels`.
     fn process(&mut self, context: &ProcessContext, inputs: &[&AudioBuffer], output: &mut AudioBuffer);
+
+    /// Set an internal scalar value (e.g. the value of a Const node).
+    /// Returns true if the node accepted the value.
+    fn set_value(&mut self, _value: f32) -> bool {
+        false
+    }
+
+    /// Query whether this node has finished producing useful output
+    /// (e.g. an envelope that reached its end). Used by the engine to
+    /// implement done actions (auto-freeing voices).
+    fn is_done(&self) -> bool {
+        false
+    }
 }

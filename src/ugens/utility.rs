@@ -1,4 +1,4 @@
-//! Utility UGens: Pan2, Mix, SampleAndHold.
+//! Utility UGens: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip.
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
@@ -187,6 +187,223 @@ impl UGen for SampleAndHold {
             if ch == 0 {
                 self.held_value = held;
                 self.prev_trig = prev_trig;
+            }
+        }
+    }
+}
+
+// --- Impulse ---
+
+/// Periodic impulse generator. Outputs 1.0 once per period, 0.0 otherwise.
+///
+/// Inputs: freq (Hz — impulses per second).
+/// Fires on the very first sample, then at each period boundary.
+pub struct Impulse {
+    phase: f32,
+    sample_rate: f32,
+    first: bool,
+}
+
+impl Impulse {
+    pub fn new() -> Self {
+        Impulse {
+            phase: 0.0,
+            sample_rate: 44100.0,
+            first: true,
+        }
+    }
+}
+
+static IMPULSE_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
+static IMPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for Impulse {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "Impulse", inputs: &IMPULSE_INPUTS, outputs: &IMPULSE_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.phase = 0.0;
+        self.first = true;
+    }
+
+    fn reset(&mut self) {
+        self.phase = 0.0;
+        self.first = true;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let freq_buf = inputs.first().copied();
+        let inv_sr = 1.0 / self.sample_rate;
+
+        for ch in 0..output.num_channels() {
+            let mut phase = self.phase;
+            let mut first = self.first;
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let freq = freq_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1.0);
+
+                if first {
+                    out[i] = 1.0;
+                    first = false;
+                    phase += freq * inv_sr;
+                } else {
+                    phase += freq * inv_sr;
+                    if phase >= 1.0 {
+                        phase -= phase.floor();
+                        out[i] = 1.0;
+                    } else {
+                        out[i] = 0.0;
+                    }
+                }
+            }
+
+            if ch == 0 {
+                self.phase = phase;
+                self.first = first;
+            }
+        }
+    }
+}
+
+// --- Lag ---
+
+/// Exponential lag (one-pole smoothing filter) for parameter smoothing.
+///
+/// Inputs: in (signal to smooth), time (lag time in seconds).
+/// Smoothly follows the input with the given time constant.
+/// Useful for avoiding clicks when changing parameters.
+pub struct Lag {
+    y1: f32,
+    sample_rate: f32,
+}
+
+impl Lag {
+    pub fn new() -> Self {
+        Lag {
+            y1: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static LAG_INPUTS: [InputSpec; 2] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "time", rate: Rate::Audio },
+];
+static LAG_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for Lag {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "Lag", inputs: &LAG_INPUTS, outputs: &LAG_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        self.y1 = 0.0;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let time_buf = inputs.get(1).copied();
+
+        for ch in 0..output.num_channels() {
+            let mut y1 = self.y1;
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let x = in_ch[i];
+                let lag_time = time_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0);
+
+                if lag_time <= 0.0 {
+                    y1 = x;
+                } else {
+                    // One-pole coefficient from time constant
+                    let coeff = (-1.0 / (lag_time * self.sample_rate)).exp();
+                    y1 = x + coeff * (y1 - x);
+                }
+                out[i] = y1;
+            }
+
+            if ch == 0 {
+                self.y1 = y1;
+            }
+        }
+    }
+}
+
+// --- Clip ---
+
+/// Hard clipper: clamps the input signal between lo and hi.
+///
+/// Inputs: in (signal), lo (minimum), hi (maximum).
+pub struct Clip;
+
+impl Clip {
+    pub fn new() -> Self {
+        Clip
+    }
+}
+
+static CLIP_INPUTS: [InputSpec; 3] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "lo", rate: Rate::Audio },
+    InputSpec { name: "hi", rate: Rate::Audio },
+];
+static CLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for Clip {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "Clip", inputs: &CLIP_INPUTS, outputs: &CLIP_OUTPUTS }
+    }
+
+    fn init(&mut self, _context: &ProcessContext) {}
+    fn reset(&mut self) {}
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let lo_buf = inputs.get(1).copied();
+        let hi_buf = inputs.get(2).copied();
+
+        for ch in 0..output.num_channels() {
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let x = in_ch[i];
+                let lo = lo_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(-1.0);
+                let hi = hi_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1.0);
+                out[i] = x.clamp(lo, hi);
             }
         }
     }

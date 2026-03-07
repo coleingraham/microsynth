@@ -8,6 +8,8 @@ pub mod dsl;
 pub mod engine;
 pub mod graph;
 pub mod node;
+pub mod sample;
+pub mod scheduler;
 pub mod synthdef;
 pub mod ugens;
 #[cfg(target_arch = "wasm32")]
@@ -19,5 +21,7 @@ pub use context::{ProcessContext, Rate};
 pub use engine::{Engine, EngineConfig};
 pub use graph::AudioGraph;
 pub use node::{InputSpec, NodeId, OutputSpec, UGen, UGenSpec};
-pub use synthdef::{Synth, SynthDef, SynthDefBuilder};
+pub use sample::{Sample, SampleBank, SampleId};
+pub use scheduler::{EventAction, Scheduler, VoiceId};
+pub use synthdef::{Synth, SynthDef, SynthDefBuilder, SynthParam};
 pub use ugens::register_builtins;

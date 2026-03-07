@@ -321,4 +321,27 @@ impl AudioGraph {
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
+
+    /// Set an internal scalar value on a node (e.g. change a Const node's value).
+    /// Returns true if the node accepted the value.
+    /// This does NOT require `prepare()` — it's safe to call between renders.
+    pub fn set_node_value(&mut self, id: NodeId, value: f32) -> bool {
+        match self.nodes.get_mut(id.index()) {
+            Some(Some(slot)) => slot.ugen.set_value(value),
+            _ => false,
+        }
+    }
+
+    /// Check if a node reports that it is done (e.g. envelope finished).
+    pub fn node_is_done(&self, id: NodeId) -> bool {
+        match self.nodes.get(id.index()) {
+            Some(Some(slot)) => slot.ugen.is_done(),
+            _ => false,
+        }
+    }
+
+    /// Get the UGenSpec for a node.
+    pub fn node_spec(&self, id: NodeId) -> Option<crate::node::UGenSpec> {
+        self.nodes.get(id.index())?.as_ref().map(|s| s.ugen.spec())
+    }
 }

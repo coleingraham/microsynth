@@ -5,25 +5,30 @@
 //! - `oscillators`: SinOsc, Saw, Pulse, Tri, Phasor
 //! - `noise`: WhiteNoise, PinkNoise
 //! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF
-//! - `envelopes`: Line, ASR
+//! - `envelopes`: Line, Perc, ASR, ADSR
 //! - `delay`: Delay
-//! - `utility`: Pan2, Mix, SampleAndHold
+//! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
+//! - `playbuf`: PlayBuf (sample playback)
 
+pub mod bus;
 pub mod delay;
 pub mod envelopes;
 pub mod filters;
 pub mod math;
 pub mod noise;
 pub mod oscillators;
+pub mod playbuf;
 pub mod utility;
 
 // Re-export everything for convenience.
+pub use bus::*;
 pub use delay::*;
 pub use envelopes::*;
 pub use filters::*;
 pub use math::*;
 pub use noise::*;
 pub use oscillators::*;
+pub use playbuf::*;
 pub use utility::*;
 
 use crate::context::Rate;
@@ -143,11 +148,32 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
     reg.register(
+        "perc",
+        || Box::new(Perc::new()),
+        &[
+            InputSpec { name: "attack", rate: Rate::Audio },
+            InputSpec { name: "release", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
         "asr",
         || Box::new(ASR::new()),
         &[
             InputSpec { name: "gate", rate: Rate::Audio },
             InputSpec { name: "attack", rate: Rate::Audio },
+            InputSpec { name: "release", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "adsr",
+        || Box::new(ADSR::new()),
+        &[
+            InputSpec { name: "gate", rate: Rate::Audio },
+            InputSpec { name: "attack", rate: Rate::Audio },
+            InputSpec { name: "decay", rate: Rate::Audio },
+            InputSpec { name: "sustain", rate: Rate::Audio },
             InputSpec { name: "release", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
@@ -188,6 +214,31 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[
             InputSpec { name: "in", rate: Rate::Audio },
             InputSpec { name: "trig", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "impulse",
+        || Box::new(Impulse::new()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "lag",
+        || Box::new(Lag::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "time", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "clip",
+        || Box::new(Clip::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "lo", rate: Rate::Audio },
+            InputSpec { name: "hi", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
