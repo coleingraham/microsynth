@@ -1,0 +1,12 @@
+[package]
+name = "microsynth"
+version = "0.1.0"
+edition = "2024"
+description = "A small real-time and non real-time audio synthesis engine"
+license = "MIT"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
