@@ -489,6 +489,52 @@ fn test_compile_negative_param() {
     assert!((value - -5.0).abs() < 1e-6, "expected -5.0, got {value}");
 }
 
+// -- Zero-arg UGen tests -----------------------------------------------------
+
+#[test]
+fn test_compile_zero_arg_ugen_in_let() {
+    let mut reg = UGenRegistry::new();
+    microsynth::ugens::register_builtins(&mut reg);
+    // whiteNoise is a zero-arg UGen used as a variable-like binding
+    let source = r#"
+        synthdef test amp=0.3 =
+            let sig = whiteNoise
+            sig * amp
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "test");
+}
+
+#[test]
+fn test_compile_hihat_preset() {
+    let mut reg = UGenRegistry::new();
+    microsynth::ugens::register_builtins(&mut reg);
+    let source = r#"
+        synthdef hihat amp=0.3 =
+            let env = perc 0.001 0.08
+            let sig = whiteNoise
+            let filt = hpf sig 8000.0 1.0
+            filt * amp * env
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "hihat");
+}
+
+#[test]
+fn test_compile_filtered_noise_preset() {
+    let mut reg = UGenRegistry::new();
+    microsynth::ugens::register_builtins(&mut reg);
+    let source = r#"
+        synthdef wind cutoff=600.0 q=5.0 amp=0.2 gate=1.0 =
+            let env = asr gate 0.01 0.5
+            let n = whiteNoise
+            let filt = bpf n cutoff q
+            filt * amp * env
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "wind");
+}
+
 // -- Error tests -------------------------------------------------------------
 
 #[test]

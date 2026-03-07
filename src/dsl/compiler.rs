@@ -113,9 +113,28 @@ impl<'a> Compiler<'a> {
                 Ok(self.builder.add_node(move || Box::new(ugens::Const::new(v))))
             }
 
-            Expr::Var(name) => self.scope.get(name).copied().ok_or_else(|| CompileError {
-                message: alloc::format!("undefined variable: {name}"),
-            }),
+            Expr::Var(name) => {
+                if let Some(&idx) = self.scope.get(name) {
+                    Ok(idx)
+                } else if let Some(entry) = self.registry.get(name) {
+                    // Zero-argument UGen (e.g. whiteNoise, pinkNoise)
+                    if entry.input_names.is_empty() {
+                        let factory = entry.factory;
+                        Ok(self.builder.add_node(move || factory()))
+                    } else {
+                        Err(CompileError {
+                            message: alloc::format!(
+                                "{name} requires {} arguments",
+                                entry.input_names.len()
+                            ),
+                        })
+                    }
+                } else {
+                    Err(CompileError {
+                        message: alloc::format!("undefined variable: {name}"),
+                    })
+                }
+            }
 
             Expr::App(func_name, args) => {
                 let entry = self
