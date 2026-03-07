@@ -10,6 +10,8 @@ pub mod graph;
 pub mod node;
 pub mod synthdef;
 pub mod ugens;
+#[cfg(feature = "web")]
+pub mod web;
 
 // Re-export core types for convenience.
 pub use buffer::{AudioBuffer, Block, MAX_BLOCK_SIZE};

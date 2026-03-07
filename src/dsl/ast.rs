@@ -1,5 +1,6 @@
 //! Abstract syntax tree for the microsynth DSL.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 

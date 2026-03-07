@@ -5,8 +5,18 @@ edition = "2024"
 description = "A small real-time and non real-time audio synthesis engine"
 license = "MIT"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = ["std"]
 std = []
+web = ["wasm-bindgen", "js-sys"]
 
 [dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = true
