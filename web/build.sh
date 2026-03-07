@@ -19,8 +19,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 WASM_RAW="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/microsynth.wasm"
 
-echo "Building microsynth for wasm32-unknown-unknown..."
-cargo build \
+# Detect a toolchain that has wasm32-unknown-unknown installed.
+# Prefer stable, fall back to nightly, then default.
+TOOLCHAIN=""
+if rustup target list --toolchain stable 2>/dev/null | grep -q 'wasm32-unknown-unknown (installed)'; then
+    TOOLCHAIN="+stable"
+elif rustup target list --toolchain nightly 2>/dev/null | grep -q 'wasm32-unknown-unknown (installed)'; then
+    TOOLCHAIN="+nightly"
+else
+    echo "Warning: wasm32-unknown-unknown not found on stable or nightly."
+    echo "Run: rustup target add wasm32-unknown-unknown"
+fi
+
+echo "Building microsynth for wasm32-unknown-unknown... ${TOOLCHAIN:-(default toolchain)}"
+cargo ${TOOLCHAIN} build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
     --target wasm32-unknown-unknown \
     --release \
