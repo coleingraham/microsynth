@@ -140,19 +140,19 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
 
     voiceGate(voiceId, value) {
         if (!this.wasm) return;
-        this.wasm.ms_voice_gate(voiceId, value);
+        this.wasm.ms_voice_gate(BigInt(voiceId), value);
     }
 
     voiceParam(voiceId, param, value) {
         if (!this.wasm) return;
         const { ptr, len } = this.writeString(param);
-        this.wasm.ms_voice_param(voiceId, ptr, len, value);
+        this.wasm.ms_voice_param(BigInt(voiceId), ptr, len, value);
         this.wasm.ms_free(ptr, len);
     }
 
     freeVoice(voiceId) {
         if (!this.wasm) return;
-        this.wasm.ms_free_voice(voiceId);
+        this.wasm.ms_free_voice(BigInt(voiceId));
     }
 
     process(inputs, outputs, parameters) {
