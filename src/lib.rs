@@ -4,10 +4,12 @@ extern crate alloc;
 
 pub mod buffer;
 pub mod context;
+pub mod dsl;
 pub mod engine;
 pub mod graph;
 pub mod node;
 pub mod synthdef;
+pub mod ugens;
 
 // Re-export core types for convenience.
 pub use buffer::{AudioBuffer, Block, MAX_BLOCK_SIZE};

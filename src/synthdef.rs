@@ -14,9 +14,9 @@ pub struct SynthDefEdge {
     pub to_input: usize,
 }
 
-/// Factory function that creates a UGen instance.
-/// SynthDefs store these so they can instantiate fresh copies.
-pub type UGenFactory = fn() -> Box<dyn UGen>;
+/// Factory that creates a UGen instance.
+/// Boxed closure so it can capture state (e.g. constant values from DSL).
+pub type UGenFactory = Box<dyn Fn() -> Box<dyn UGen> + Send + Sync>;
 
 /// An immutable template for a synthesis graph.
 ///
@@ -28,14 +28,14 @@ pub type UGenFactory = fn() -> Box<dyn UGen>;
 /// the live render graph.
 pub struct SynthDef {
     name: String,
-    /// Factory functions for each node in the def.
+    /// Factory closures for each node in the def.
     factories: Vec<UGenFactory>,
     /// Connections between nodes.
     edges: Vec<SynthDefEdge>,
     /// Which node index is the output of this SynthDef.
     output_node: usize,
-    /// Named parameters that can be set per-instance.
-    param_names: Vec<(&'static str, usize, usize)>, // (name, node_index, input_index)
+    /// Named parameters: (name, node_index, input_index).
+    param_names: Vec<(String, usize, usize)>,
 }
 
 impl SynthDef {
@@ -45,7 +45,7 @@ impl SynthDef {
     }
 
     /// Get the parameter names.
-    pub fn param_names(&self) -> &[(&'static str, usize, usize)] {
+    pub fn param_names(&self) -> &[(String, usize, usize)] {
         &self.param_names
     }
 
@@ -77,7 +77,7 @@ pub struct SynthDefBuilder {
     factories: Vec<UGenFactory>,
     edges: Vec<SynthDefEdge>,
     output_node: Option<usize>,
-    param_names: Vec<(&'static str, usize, usize)>,
+    param_names: Vec<(String, usize, usize)>,
 }
 
 impl SynthDefBuilder {
@@ -93,9 +93,12 @@ impl SynthDefBuilder {
     }
 
     /// Add a UGen to the SynthDef. Returns its index.
-    pub fn add_node(&mut self, factory: UGenFactory) -> usize {
+    pub fn add_node<F>(&mut self, factory: F) -> usize
+    where
+        F: Fn() -> Box<dyn UGen> + Send + Sync + 'static,
+    {
         let idx = self.factories.len();
-        self.factories.push(factory);
+        self.factories.push(Box::new(factory));
         idx
     }
 
@@ -109,8 +112,8 @@ impl SynthDefBuilder {
     }
 
     /// Name a parameter: associates a name with a specific node's input port.
-    pub fn param(&mut self, name: &'static str, node_index: usize, input_index: usize) {
-        self.param_names.push((name, node_index, input_index));
+    pub fn param(&mut self, name: impl Into<String>, node_index: usize, input_index: usize) {
+        self.param_names.push((name.into(), node_index, input_index));
     }
 
     /// Set which node is the output of this SynthDef.

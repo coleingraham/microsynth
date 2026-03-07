@@ -32,7 +32,14 @@ src/
 ├── node.rs         # UGen trait, NodeId, InputSpec, OutputSpec, UGenSpec
 ├── graph.rs        # AudioGraph: DAG, topo sort, pull render, runtime modification
 ├── synthdef.rs     # SynthDef (immutable template), SynthDefBuilder, Synth (live instance)
-└── engine.rs       # Engine: owns graph + context, drives rendering
+├── engine.rs       # Engine: owns graph + context, drives rendering
+├── ugens.rs        # Built-in UGens: Const, BinOpUGen, NegUGen
+└── dsl/
+    ├── mod.rs      # Public API, compile() entry point, DslError type
+    ├── lexer.rs    # Tokenizer (keywords, numbers, operators, comments)
+    ├── ast.rs      # AST: Program, SynthDefDecl, Expr, Binding, BinOp
+    ├── parser.rs   # Recursive descent parser (Haskell-inspired syntax)
+    └── compiler.rs # AST → SynthDef compilation, UGenRegistry
 ```
 
 ## Core Types
@@ -43,7 +50,53 @@ src/
 - `Rate` — `Audio` | `Control`
 - `UGen` trait — `spec()`, `init()`, `reset()`, `process()`, `output_channels()`
 - `AudioGraph` — nodes + edges, topo sort, pull-based `render()`
-- `SynthDef` — immutable template with `UGenFactory` functions
+- `SynthDef` — immutable template with `UGenFactory` closures
 - `SynthDefBuilder` — builds SynthDefs
 - `Synth` — tracks live NodeIds for a SynthDef instance
 - `Engine` — top-level API, owns graph + context
+
+## DSL
+
+Haskell-inspired text-based DSL for defining synthesis graphs. Compiles
+to `SynthDef` templates via: tokenize → parse → compile.
+
+### Syntax
+
+```haskell
+-- Parameters with defaults, function application by juxtaposition
+synthdef pad freq=440.0 amp=0.5 =
+  let osc = sinOsc freq 0.0
+  let env = envGen 0.01 1.0
+  osc * env * amp
+
+-- Inline let...in variant
+synthdef simple x=1.0 = let y = x * 2.0 in y + 1.0
+
+-- Arithmetic operators: + - * / with standard precedence
+-- Function application binds tighter than operators:
+--   sinOsc freq * amp  →  (sinOsc freq) * amp
+-- Comments: -- to end of line
+```
+
+### Compilation Pipeline
+
+1. **Lexer** — source text → tokens (keywords, idents, numbers, operators)
+2. **Parser** — tokens → AST (recursive descent, operator precedence)
+3. **Compiler** — AST → SynthDef using a `UGenRegistry` that maps names to factories
+
+### UGenRegistry
+
+Maps DSL identifiers to UGen factories + input/output specs. Users register
+their own UGens; the compiler uses built-in `Const`, `BinOpUGen`, `NegUGen`
+for literals and arithmetic.
+
+### Design Decisions
+
+- **No external parser dependencies** — hand-written lexer and recursive descent
+  parser, keeping the zero-dependency policy.
+- **`UGenFactory` is `Box<dyn Fn>` not `fn()`** — closures can capture parsed
+  values (e.g. constant defaults).
+- **Parameters become Const nodes** — each DSL parameter creates a `Const` UGen
+  outputting its default value. Runtime parameter modification is future work.
+- **Positional arguments** — `sinOsc freq 0.0` maps arguments to inputs in
+  declaration order per the UGen's `InputSpec` list.
