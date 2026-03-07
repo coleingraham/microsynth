@@ -7,6 +7,12 @@
  *   ms_alloc(size) -> ptr
  *   ms_free(ptr, size)
  *   ms_compile(source_ptr, source_len) -> 0|1
+ *   ms_compile_def(source_ptr, source_len) -> 0|1
+ *   ms_spawn_voice() -> voice_id (u64, 0=error)
+ *   ms_voice_gate(voice_id, value)
+ *   ms_voice_param(voice_id, param_ptr, param_len, value)
+ *   ms_free_voice(voice_id)
+ *   ms_free_done() -> count
  *   ms_render(out_left_ptr, out_right_ptr)
  */
 class MicrosynthProcessor extends AudioWorkletProcessor {
@@ -17,6 +23,7 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         this.wasm = null;
         this.leftPtr = 0;
         this.rightPtr = 0;
+        this.frameCount = 0;
 
         // The main thread sends us WASM bytes and DSL source via the port.
         this.port.onmessage = (e) => this.handleMessage(e.data);
@@ -34,6 +41,21 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
                 break;
             case 'compile':
                 this.compileDSL(msg.source);
+                break;
+            case 'compileDef':
+                this.compileDef(msg.source);
+                break;
+            case 'spawnVoice':
+                this.spawnVoice(msg.id);
+                break;
+            case 'voiceGate':
+                this.voiceGate(msg.voiceId, msg.value);
+                break;
+            case 'voiceParam':
+                this.voiceParam(msg.voiceId, msg.param, msg.value);
+                break;
+            case 'freeVoice':
+                this.freeVoice(msg.voiceId);
                 break;
             case 'stop':
                 this.ready = false;
@@ -61,28 +83,26 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         }
     }
 
+    writeString(str) {
+        const encoder = typeof TextEncoder !== 'undefined'
+            ? new TextEncoder()
+            : { encode: (s) => new Uint8Array([...s].map(c => c.charCodeAt(0))) };
+        const encoded = encoder.encode(str);
+        const ptr = this.wasm.ms_alloc(encoded.length);
+        const memory = new Uint8Array(this.wasm.memory.buffer);
+        memory.set(encoded, ptr);
+        return { ptr, len: encoded.length };
+    }
+
     compileDSL(source) {
         if (!this.wasm) {
             this.port.postMessage({ type: 'error', message: 'WASM not initialized' });
             return;
         }
 
-        // Write the source string into WASM memory
-        const encoder = typeof TextEncoder !== 'undefined'
-            ? new TextEncoder()
-            : { encode: (s) => new Uint8Array([...s].map(c => c.charCodeAt(0))) };
-        const encoded = encoder.encode(source);
-        const srcPtr = this.wasm.ms_alloc(encoded.length);
-
-        // Copy into WASM memory
-        const memory = new Uint8Array(this.wasm.memory.buffer);
-        memory.set(encoded, srcPtr);
-
-        // Compile
-        const result = this.wasm.ms_compile(srcPtr, encoded.length);
-
-        // Free the source buffer
-        this.wasm.ms_free(srcPtr, encoded.length);
+        const { ptr: srcPtr, len } = this.writeString(source);
+        const result = this.wasm.ms_compile(srcPtr, len);
+        this.wasm.ms_free(srcPtr, len);
 
         if (result === 0) {
             this.ready = true;
@@ -93,6 +113,48 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         }
     }
 
+    compileDef(source) {
+        if (!this.wasm) {
+            this.port.postMessage({ type: 'error', message: 'WASM not initialized' });
+            return;
+        }
+
+        const { ptr: srcPtr, len } = this.writeString(source);
+        const result = this.wasm.ms_compile_def(srcPtr, len);
+        this.wasm.ms_free(srcPtr, len);
+
+        if (result === 0) {
+            this.ready = true;
+            this.port.postMessage({ type: 'defCompiled' });
+        } else {
+            this.ready = false;
+            this.port.postMessage({ type: 'error', message: 'DSL compilation failed' });
+        }
+    }
+
+    spawnVoice(requestId) {
+        if (!this.wasm) return;
+        const voiceId = Number(this.wasm.ms_spawn_voice());
+        this.port.postMessage({ type: 'voiceSpawned', id: requestId, voiceId });
+    }
+
+    voiceGate(voiceId, value) {
+        if (!this.wasm) return;
+        this.wasm.ms_voice_gate(voiceId, value);
+    }
+
+    voiceParam(voiceId, param, value) {
+        if (!this.wasm) return;
+        const { ptr, len } = this.writeString(param);
+        this.wasm.ms_voice_param(voiceId, ptr, len, value);
+        this.wasm.ms_free(ptr, len);
+    }
+
+    freeVoice(voiceId) {
+        if (!this.wasm) return;
+        this.wasm.ms_free_voice(voiceId);
+    }
+
     process(inputs, outputs, parameters) {
         if (!this.ready || !this.wasm) {
             // Output silence
@@ -101,6 +163,12 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
 
         const output = outputs[0];
         if (!output || output.length === 0) return true;
+
+        // Periodically free finished voices
+        this.frameCount++;
+        if (this.frameCount % 16 === 0) {
+            this.wasm.ms_free_done();
+        }
 
         // Render 128 samples
         this.wasm.ms_render(this.leftPtr, this.rightPtr);

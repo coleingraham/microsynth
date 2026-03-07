@@ -6,6 +6,7 @@
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 /// Maximum number of simultaneous voices on a single bus.

@@ -27,6 +27,7 @@
 //! └──────────────────┘                └─────────────────────┘
 //! ```
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -60,6 +61,10 @@ impl<T> WasmCell<T> {
 /// Global engine state for the worklet.
 static ENGINE: WasmCell<Option<Engine>> = WasmCell::new(None);
 static REGISTRY: WasmCell<Option<UGenRegistry>> = WasmCell::new(None);
+/// Compiled SynthDefs available for spawning voices.
+static DEFS: WasmCell<Option<Vec<crate::synthdef::SynthDef>>> = WasmCell::new(None);
+/// Bus node for multi-voice mixing.
+static BUS_NODE: WasmCell<Option<crate::node::NodeId>> = WasmCell::new(None);
 
 /// Allocate `size` bytes in WASM linear memory. Returns a pointer.
 /// Used by JS to write string data (DSL source) into WASM memory.
@@ -174,6 +179,144 @@ pub unsafe extern "C" fn ms_render(out_left: *mut f32, out_right: *mut f32) {
         left.fill(0.0);
         right.fill(0.0);
     }
+}
+
+/// Compile DSL source and store the SynthDef(s) for voice spawning.
+/// Also sets up a Bus as the graph sink for multi-voice mixing.
+/// Returns 0 on success, 1 on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_compile_def(source_ptr: *const u8, source_len: usize) -> u32 {
+    let source_bytes = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
+    let source = match core::str::from_utf8(source_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let registry = match unsafe { REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+
+    let defs = match dsl::compile(source, registry) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+
+    if defs.is_empty() {
+        return 1;
+    }
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+
+    // Reset engine for fresh voice management
+    let sr = engine.context().sample_rate;
+    *engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 128,
+    });
+
+    // Create a bus node as the graph sink
+    let bus = crate::ugens::Bus::new(32);
+    let bus_id = engine.graph_mut().add_node(Box::new(bus));
+    engine.graph_mut().set_sink(bus_id);
+    engine.prepare();
+
+    unsafe {
+        *BUS_NODE.get_mut() = Some(bus_id);
+        *DEFS.get_mut() = Some(defs);
+    }
+
+    0
+}
+
+/// Spawn a voice from the first compiled SynthDef, connected to the bus.
+/// Returns the voice ID (> 0), or 0 on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_spawn_voice() -> u64 {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let defs = match unsafe { DEFS.get_mut() }.as_ref() {
+        Some(d) => d,
+        None => return 0,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 0,
+    };
+
+    if defs.is_empty() {
+        return 0;
+    }
+
+    match engine.spawn_voice_on_bus(&defs[0], bus_id) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
+}
+
+/// Set the gate parameter on a voice. gate > 0 = note on, gate = 0 = note off.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_voice_gate(voice_id: u64, value: f32) {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine.set_voice_param(crate::scheduler::VoiceId(voice_id), "gate", value);
+}
+
+/// Set a named parameter on a voice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_voice_param(
+    voice_id: u64,
+    param_ptr: *const u8,
+    param_len: usize,
+    value: f32,
+) {
+    let param_bytes = unsafe { core::slice::from_raw_parts(param_ptr, param_len) };
+    let param = match core::str::from_utf8(param_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine.set_voice_param(crate::scheduler::VoiceId(voice_id), param, value);
+}
+
+/// Free a voice by ID.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_free_voice(voice_id: u64) {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine.free_voice(crate::scheduler::VoiceId(voice_id));
+    engine.prepare();
+}
+
+/// Free all voices that have finished (e.g. envelope completed).
+/// Returns the number of voices freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_free_done() -> u32 {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let count = engine.free_done_synths();
+    if count > 0 {
+        engine.prepare();
+    }
+    count as u32
 }
 
 // ============================================================================
