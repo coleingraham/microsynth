@@ -1,6 +1,6 @@
 /// Maximum block size for audio processing.
-/// 64 samples is standard (matches Web Audio render quantum).
-pub const MAX_BLOCK_SIZE: usize = 64;
+/// 128 samples matches the Web Audio render quantum.
+pub const MAX_BLOCK_SIZE: usize = 128;
 
 /// A single-channel buffer of samples for one block.
 /// Fixed-size array on the stack — no heap allocation.
