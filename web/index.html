@@ -130,7 +130,6 @@
         button.warn { background: var(--warn); border-color: var(--warn); color: #111; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
         button.small { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
-        .ms-wave-btn.active { background: var(--accent); border-color: var(--accent); }
 
         /* Status */
         .status {
@@ -439,13 +438,7 @@
             <div id="ms-status" class="status"></div>
 
             <div class="toolbar">
-                <label class="small">Synthdef:</label>
-                <button class="ms-wave-btn small" data-wave="sin">sin</button>
-                <button class="ms-wave-btn small" data-wave="saw">saw</button>
-                <button class="ms-wave-btn small" data-wave="tri">tri</button>
-                <button class="ms-wave-btn small" data-wave="pulse">pulse</button>
-                <button class="ms-wave-btn small" data-wave="fm">fm</button>
-                <button class="ms-wave-btn small" data-wave="noise">noise</button>
+                <label class="small">Uses synthdef from Editor tab</label>
                 <div class="toolbar-spacer"></div>
                 <label class="small" id="ms-loop-info"></label>
             </div>
@@ -466,6 +459,7 @@
             <code>pan2</code> <code>mix</code> <code>sampleAndHold</code>
             <code>impulse</code> <code>lag</code> <code>clip</code>
             <code>waveTable</code>
+            <code>sinTable</code> <code>sawTable</code> <code>triTable</code> <code>squareTable</code>
         </div>
     </div>
 
@@ -630,50 +624,6 @@
                 editor.value = PRESETS[key];
                 if (isPlaying) stopAudio();
             }
-        });
-
-        // MicroScore waveform preset buttons
-        const MS_WAVE_DEFS = {
-            sin: `synthdef tone freq=440.0 amp=0.3 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let sig = sinOsc freq 0.0
-    sig * amp * env`,
-            saw: `synthdef tone freq=440.0 amp=0.3 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let sig = saw freq
-    sig * amp * env`,
-            tri: `synthdef tone freq=440.0 amp=0.3 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let sig = tri freq
-    sig * amp * env`,
-            pulse: `synthdef tone freq=440.0 amp=0.3 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let sig = pulse freq 0.5
-    sig * amp * env`,
-            fm: `synthdef tone freq=440.0 amp=0.25 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let mod = sinOsc (freq * 1.5) 0.0 * (freq * 0.9)
-    let sig = sinOsc (freq + mod) 0.0
-    sig * amp * env`,
-            noise: `synthdef tone freq=440.0 amp=0.2 gate=1.0 =
-    let env = asr gate 0.01 0.3
-    let sig = whiteNoise
-    let filt = lpf sig freq 2.0
-    filt * amp * env`,
-        };
-
-        document.querySelectorAll('.ms-wave-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const wave = btn.dataset.wave;
-                if (MS_WAVE_DEFS[wave]) {
-                    editor.value = MS_WAVE_DEFS[wave];
-                    presetSelect.value = '';
-                    if (isPlaying) stopAudio();
-                    // Highlight active button
-                    document.querySelectorAll('.ms-wave-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                }
-            });
         });
 
         // ====================================================================

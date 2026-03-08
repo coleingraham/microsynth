@@ -253,4 +253,30 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[InputSpec { name: "freq", rate: Rate::Audio }],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
+
+    // -- Pre-built wavetable oscillators --
+    reg.register(
+        "sinTable",
+        || Box::new(sine_table()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "sawTable",
+        || Box::new(saw_table()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "triTable",
+        || Box::new(tri_table()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "squareTable",
+        || Box::new(square_table()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
 }
