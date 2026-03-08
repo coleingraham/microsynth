@@ -421,18 +421,19 @@
             </div>
 
             <textarea id="ms-editor" spellcheck="false" style="height: 220px;">-- MicroScore events
--- Format: bar:step  note  velocity  duration(steps)
--- Notes: C4, D#3, Gb5 or MIDI numbers (60, 64, 67)
--- Lines starting with -- are comments
+-- Syntax: @bar:step [+offset] target type params...
+-- target: i0, i1 (instrument) or r:bass (role)
+-- type: n (note), c (control)
+-- params: p:pitch[+/-cents] v:velocity d:duration
 
-0:0   C4   0.8   2
-0:4   E4   0.7   2
-0:8   G4   0.8   2
-0:12  C5   0.6   4
-1:0   E4   0.7   2
-1:4   G4   0.8   2
-1:8   C5   0.7   2
-1:12  E5   0.6   4</textarea>
+@0:0  i0 n p:60 v:100 d:2
+@0:4  i0 n p:64 v:90  d:2
+@0:8  i0 n p:67 v:100 d:2
+@0:12 i0 n p:72 v:80  d:4
+@1:0  i0 n p:64 v:90  d:2
+@1:4  i0 n p:67 v:100 d:2
+@1:8  i0 n p:72 v:90  d:2
+@1:12 i0 n p:76 v:80  d:4</textarea>
 
             <div id="ms-status" class="status"></div>
 
@@ -1029,33 +1030,60 @@
                 const line = raw.trim();
                 if (!line || line.startsWith('--')) continue;
 
-                const parts = line.split(/\s+/);
-                if (parts.length < 4) continue;
-
-                // Parse bar:step
-                const posMatch = parts[0].match(/^(\d+):(\d+)$/);
+                // Match @bar:step [+offset] target type params...
+                const posMatch = line.match(/^@(\d+):(\d+)/);
                 if (!posMatch) continue;
                 const bar = parseInt(posMatch[1], 10);
                 const step = parseInt(posMatch[2], 10);
 
-                // Parse note (name or MIDI number)
-                let midi = parseFloat(parts[1]);
-                if (isNaN(midi)) {
-                    midi = parseNoteName(parts[1]);
-                }
-                if (isNaN(midi)) continue;
+                // Parse optional tick offset: +N or -N after bar:step
+                let tickOffset = 0;
+                const offsetMatch = line.match(/^@\d+:\d+\s+([+-]\d+)/);
+                if (offsetMatch) tickOffset = parseInt(offsetMatch[1], 10);
 
-                const vel = parseFloat(parts[2]);
-                const dur = parseFloat(parts[3]);
-                if (isNaN(vel) || isNaN(dur)) continue;
+                // Tokenize remaining params after position and optional offset
+                const tokens = line.replace(/^@\d+:\d+\s*([+-]\d+)?/, '').trim().split(/\s+/);
+                if (tokens.length < 2) continue;
+
+                // tokens[0] = target (i0, r:bass, etc.)
+                // tokens[1] = type (n, c)
+                const eventType = tokens[1];
+                if (eventType !== 'n') continue; // only handle notes for playback
+
+                // Parse named params from remaining tokens
+                let pitch = 60, cents = 0, velocity = 100, duration = 1;
+                for (let i = 2; i < tokens.length; i++) {
+                    const tok = tokens[i];
+                    if (tok.startsWith('p:') || tok.startsWith('p_rel:')) {
+                        // p:60, p:60+50, p:60-25, p_rel:0
+                        const val = tok.replace(/^p(?:_rel)?:/, '');
+                        const centMatch = val.match(/^(-?\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)?$/);
+                        if (centMatch) {
+                            pitch = parseFloat(centMatch[1]);
+                            if (centMatch[2]) cents = parseFloat(centMatch[2]);
+                        }
+                    } else if (tok.startsWith('v:')) {
+                        velocity = parseFloat(tok.slice(2));
+                    } else if (tok.startsWith('d:')) {
+                        duration = parseFloat(tok.slice(2));
+                    }
+                }
 
                 const absoluteStep = bar * gridSteps + step;
-                const timeMs = absoluteStep * stepDurationMs;
-                const durationMs = dur * stepDurationMs;
+                // Apply tick offset (in PPQN ticks, approximate as fraction of step)
+                const timeMs = absoluteStep * stepDurationMs + tickOffset * (stepDurationMs / 24);
+                const durationMs = duration * stepDurationMs;
 
-                events.push({ timeMs, freq: noteToHz(midi), vel, durationMs });
+                // Convert pitch index to Hz (12-TET) with cent offset
+                let freq = noteToHz(pitch);
+                if (cents !== 0) freq *= Math.pow(2, cents / 1200);
 
-                const endStep = absoluteStep + dur;
+                // Velocity 0-127 -> amplitude 0-1
+                const amp = Math.min(velocity / 127, 1.0);
+
+                events.push({ timeMs: Math.max(0, timeMs), freq, vel: amp, durationMs });
+
+                const endStep = absoluteStep + duration;
                 if (endStep > maxEndStep) maxEndStep = endStep;
             }
 
