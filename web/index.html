@@ -310,6 +310,7 @@
         <div class="tabs">
             <button class="tab active" data-tab="editor">Editor</button>
             <button class="tab" data-tab="sequencer">Sequencer</button>
+            <button class="tab" data-tab="microscore">MicroScore</button>
         </div>
 
         <!-- ==================== EDITOR TAB ==================== -->
@@ -392,6 +393,53 @@
                 <label class="small">Using synthdef from Editor tab</label>
                 <div class="toolbar-spacer"></div>
                 <button id="seq-clear" class="small">Clear Pattern</button>
+            </div>
+        </div>
+
+        <!-- ==================== MICROSCORE TAB ==================== -->
+        <div id="tab-microscore" class="tab-panel">
+            <div class="seq-controls">
+                <label>BPM:</label>
+                <input type="number" id="ms-bpm" value="120" min="20" max="300" step="1">
+                <label>Time:</label>
+                <select id="ms-timesig">
+                    <option value="4/4" selected>4/4</option>
+                    <option value="3/4">3/4</option>
+                    <option value="6/8">6/8</option>
+                    <option value="7/8">7/8</option>
+                    <option value="5/4">5/4</option>
+                </select>
+                <label>Grid:</label>
+                <select id="ms-grid">
+                    <option value="8">8</option>
+                    <option value="16" selected>16</option>
+                    <option value="32">32</option>
+                </select>
+                <div class="toolbar-spacer"></div>
+                <button id="ms-play" class="primary" disabled>Play Loop</button>
+                <button id="ms-stop" disabled>Stop</button>
+            </div>
+
+            <textarea id="ms-editor" spellcheck="false" style="height: 220px;">-- MicroScore events
+-- Format: bar:step  note  velocity  duration(steps)
+-- Notes: C4, D#3, Gb5 or MIDI numbers (60, 64, 67)
+-- Lines starting with -- are comments
+
+0:0   C4   0.8   2
+0:4   E4   0.7   2
+0:8   G4   0.8   2
+0:12  C5   0.6   4
+1:0   E4   0.7   2
+1:4   G4   0.8   2
+1:8   C5   0.7   2
+1:12  E5   0.6   4</textarea>
+
+            <div id="ms-status" class="status"></div>
+
+            <div class="toolbar">
+                <label class="small">Uses synthdef from Editor tab</label>
+                <div class="toolbar-spacer"></div>
+                <label class="small" id="ms-loop-info"></label>
             </div>
         </div>
 
@@ -916,6 +964,189 @@
         }
 
         // ====================================================================
+        // MicroScore
+        // ====================================================================
+        const msEditor = document.getElementById('ms-editor');
+        const msBpmInput = document.getElementById('ms-bpm');
+        const msTimesigSelect = document.getElementById('ms-timesig');
+        const msGridSelect = document.getElementById('ms-grid');
+        const msPlayBtn = document.getElementById('ms-play');
+        const msStopBtn = document.getElementById('ms-stop');
+        const msStatusEl = document.getElementById('ms-status');
+        const msLoopInfo = document.getElementById('ms-loop-info');
+
+        let msRunning = false;
+        let msTimerIds = [];     // all active timeout IDs
+        let msEvents = [];       // parsed events: [{time, freq, vel, dur}, ...]
+        let msLoopLength = 0;    // loop length in ms
+
+        // Tab support for MicroScore editor
+        msEditor.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = msEditor.selectionStart;
+                const end = msEditor.selectionEnd;
+                msEditor.value = msEditor.value.substring(0, start) + '    ' + msEditor.value.substring(end);
+                msEditor.selectionStart = msEditor.selectionEnd = start + 4;
+            }
+        });
+
+        // Note name -> MIDI number
+        const NOTE_NAMES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+        function parseNoteName(name) {
+            const m = name.match(/^([A-Ga-g])([#b]?)(\d+)$/);
+            if (!m) return NaN;
+            const letter = m[1].toUpperCase();
+            const accidental = m[2];
+            const octave = parseInt(m[3], 10);
+            let midi = NOTE_NAMES[letter];
+            if (midi === undefined) return NaN;
+            if (accidental === '#') midi += 1;
+            else if (accidental === 'b') midi -= 1;
+            // MIDI: C4 = 60, so octave 4 starts at 60
+            return midi + (octave + 1) * 12;
+        }
+
+        function noteToHz(midi) {
+            return 440.0 * Math.pow(2, (midi - 69) / 12);
+        }
+
+        function parseMicroScoreEvents() {
+            const bpm = parseFloat(msBpmInput.value) || 120;
+            const [num, den] = msTimesigSelect.value.split('/').map(Number);
+            const gridSteps = parseInt(msGridSelect.value, 10);
+
+            // Step duration in ms
+            const barDurationMs = (num * (4 / den) * 60000) / bpm;
+            const stepDurationMs = barDurationMs / gridSteps;
+
+            const lines = msEditor.value.split('\n');
+            const events = [];
+            let maxEndStep = 0;
+
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (!line || line.startsWith('--')) continue;
+
+                const parts = line.split(/\s+/);
+                if (parts.length < 4) continue;
+
+                // Parse bar:step
+                const posMatch = parts[0].match(/^(\d+):(\d+)$/);
+                if (!posMatch) continue;
+                const bar = parseInt(posMatch[1], 10);
+                const step = parseInt(posMatch[2], 10);
+
+                // Parse note (name or MIDI number)
+                let midi = parseFloat(parts[1]);
+                if (isNaN(midi)) {
+                    midi = parseNoteName(parts[1]);
+                }
+                if (isNaN(midi)) continue;
+
+                const vel = parseFloat(parts[2]);
+                const dur = parseFloat(parts[3]);
+                if (isNaN(vel) || isNaN(dur)) continue;
+
+                const absoluteStep = bar * gridSteps + step;
+                const timeMs = absoluteStep * stepDurationMs;
+                const durationMs = dur * stepDurationMs;
+
+                events.push({ timeMs, freq: noteToHz(midi), vel, durationMs });
+
+                const endStep = absoluteStep + dur;
+                if (endStep > maxEndStep) maxEndStep = endStep;
+            }
+
+            // Loop length: snap to full bars
+            const totalBars = Math.ceil(maxEndStep / gridSteps);
+            const loopLengthMs = totalBars * barDurationMs;
+
+            return { events, loopLengthMs, totalBars, eventCount: events.length };
+        }
+
+        function setMsStatus(msg, type = '') {
+            msStatusEl.textContent = msg;
+            msStatusEl.className = 'status' + (type ? ' ' + type : '');
+        }
+
+        msPlayBtn.addEventListener('click', async () => {
+            if (msRunning) return;
+            try {
+                const parsed = parseMicroScoreEvents();
+                if (parsed.eventCount === 0) {
+                    setMsStatus('No valid events found', 'error');
+                    return;
+                }
+
+                if (!workletNode) await initWorklet();
+                await workletCompileDef(editor.value);
+                ensureAudioConnected();
+
+                msEvents = parsed.events;
+                msLoopLength = parsed.loopLengthMs;
+                msRunning = true;
+                msPlayBtn.disabled = true;
+                msStopBtn.disabled = false;
+                msLoopInfo.textContent = `${parsed.eventCount} events, ${parsed.totalBars} bars, loop ${(parsed.loopLengthMs / 1000).toFixed(1)}s`;
+                setMsStatus('Playing loop', 'ok');
+                if (!animFrame) drawScope();
+
+                msStartTime = performance.now();
+                scheduleMsLoop();
+            } catch (e) {
+                setMsStatus(e.message || String(e), 'error');
+            }
+        });
+
+        msStopBtn.addEventListener('click', stopMicroScore);
+
+        function stopMicroScore() {
+            msRunning = false;
+            for (const id of msTimerIds) clearTimeout(id);
+            msTimerIds = [];
+            msPlayBtn.disabled = false;
+            msStopBtn.disabled = true;
+            msLoopInfo.textContent = '';
+            setMsStatus('Stopped');
+        }
+
+        function scheduleMsLoop() {
+            if (!msRunning) return;
+
+            // Clear previous timers
+            for (const id of msTimerIds) clearTimeout(id);
+            msTimerIds = [];
+
+            // Schedule all events in this loop iteration
+            for (const evt of msEvents) {
+                const tid = setTimeout(async () => {
+                    if (!msRunning) return;
+                    const vid = await workletSpawnVoice();
+                    if (vid > 0) {
+                        workletSend({ type: 'voiceParam', voiceId: vid, param: 'freq', value: evt.freq });
+                        workletSend({ type: 'voiceParam', voiceId: vid, param: 'amp', value: evt.vel });
+                        workletSend({ type: 'voiceGate', voiceId: vid, value: 1.0 });
+
+                        // Gate off after duration
+                        const gateOffDelay = Math.max(evt.durationMs - 10, evt.durationMs * 0.9);
+                        setTimeout(() => {
+                            workletSend({ type: 'voiceGate', voiceId: vid, value: 0.0 });
+                        }, gateOffDelay);
+                    }
+                }, evt.timeMs);
+                msTimerIds.push(tid);
+            }
+
+            // Schedule the next loop iteration
+            const loopTid = setTimeout(() => {
+                if (msRunning) scheduleMsLoop();
+            }, msLoopLength);
+            msTimerIds.push(loopTid);
+        }
+
+        // ====================================================================
         // Oscilloscope
         // ====================================================================
         function drawScope() {
@@ -990,6 +1221,7 @@
                 playBtn.disabled = false;
                 oneshotBtn.disabled = false;
                 seqPlayBtn.disabled = false;
+                msPlayBtn.disabled = false;
                 setStatus('Ready');
 
                 // Build sequencer grid
