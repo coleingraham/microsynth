@@ -381,6 +381,32 @@ impl Engine {
         removed
     }
 
+    /// Schedule a gate-on at `on_time` and auto gate-off after `duration_samples`.
+    ///
+    /// Both times are absolute sample offsets. Use `TimeConfig::position_to_samples`
+    /// and `TimeConfig::steps_to_samples` to convert from musical time.
+    pub fn schedule_note(&mut self, voice: VoiceId, on_time: u64, duration_samples: u64) {
+        self.scheduler.schedule_note(voice, on_time, on_time + duration_samples);
+    }
+
+    /// Schedule a note with attack-aligned pre-trigger.
+    ///
+    /// `grid_time` is where the attack peak should land (absolute sample offset).
+    /// The gate-on is scheduled at `grid_time - attack_secs` so the envelope
+    /// reaches full level at the musical grid position.
+    /// Gate-off is scheduled at `grid_time + duration_samples`.
+    pub fn schedule_note_aligned(
+        &mut self,
+        voice: VoiceId,
+        grid_time: u64,
+        attack_secs: f32,
+        duration_samples: u64,
+    ) {
+        let attack_samples = (attack_secs * self.context.sample_rate) as u64;
+        let on_time = grid_time.saturating_sub(attack_samples);
+        self.scheduler.schedule_note(voice, on_time, grid_time + duration_samples);
+    }
+
     /// Current sample offset (monotonic time counter).
     pub fn sample_offset(&self) -> u64 {
         self.context.sample_offset

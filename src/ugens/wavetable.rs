@@ -119,3 +119,91 @@ fn read_interpolated_wrap(data: &[f32], index: f64, _len: f64) -> f32 {
     let frac = (index - index.floor()) as f32;
     data[i0] + frac * (data[i1] - data[i0])
 }
+
+// ---- Waveform generators ------------------------------------------------
+
+const DEFAULT_TABLE_SIZE: usize = 2048;
+
+/// Generate a single-cycle sine waveform.
+pub fn generate_sine(len: usize) -> Arc<Sample> {
+    use core::f32::consts::PI;
+    let data: alloc::vec::Vec<f32> = (0..len)
+        .map(|i| (2.0 * PI * i as f32 / len as f32).sin())
+        .collect();
+    Arc::new(Sample::from_mono(&data, 44100.0))
+}
+
+/// Generate a single-cycle sawtooth waveform (band-limited via additive synthesis).
+pub fn generate_saw(len: usize) -> Arc<Sample> {
+    let harmonics = 64;
+    let data: alloc::vec::Vec<f32> = (0..len)
+        .map(|i| {
+            use core::f32::consts::PI;
+            let phase = 2.0 * PI * i as f32 / len as f32;
+            let mut val = 0.0f32;
+            for h in 1..=harmonics {
+                let sign = if h % 2 == 0 { -1.0 } else { 1.0 };
+                val += sign * (h as f32 * phase).sin() / h as f32;
+            }
+            val * (2.0 / core::f32::consts::PI)
+        })
+        .collect();
+    Arc::new(Sample::from_mono(&data, 44100.0))
+}
+
+/// Generate a single-cycle triangle waveform (band-limited via additive synthesis).
+pub fn generate_tri(len: usize) -> Arc<Sample> {
+    let harmonics = 64;
+    let data: alloc::vec::Vec<f32> = (0..len)
+        .map(|i| {
+            use core::f32::consts::PI;
+            let phase = 2.0 * PI * i as f32 / len as f32;
+            let mut val = 0.0f32;
+            for k in 0..harmonics {
+                let h = 2 * k + 1; // odd harmonics only
+                let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                val += sign * (h as f32 * phase).sin() / (h as f32 * h as f32);
+            }
+            val * (8.0 / (PI * PI))
+        })
+        .collect();
+    Arc::new(Sample::from_mono(&data, 44100.0))
+}
+
+/// Generate a single-cycle square/pulse waveform (band-limited via additive synthesis).
+pub fn generate_square(len: usize) -> Arc<Sample> {
+    let harmonics = 64;
+    let data: alloc::vec::Vec<f32> = (0..len)
+        .map(|i| {
+            use core::f32::consts::PI;
+            let phase = 2.0 * PI * i as f32 / len as f32;
+            let mut val = 0.0f32;
+            for k in 0..harmonics {
+                let h = 2 * k + 1; // odd harmonics only
+                val += (h as f32 * phase).sin() / h as f32;
+            }
+            val * (4.0 / PI)
+        })
+        .collect();
+    Arc::new(Sample::from_mono(&data, 44100.0))
+}
+
+/// Create a WaveTable pre-loaded with a sine waveform.
+pub fn sine_table() -> WaveTable {
+    WaveTable::new().with_waveform(generate_sine(DEFAULT_TABLE_SIZE))
+}
+
+/// Create a WaveTable pre-loaded with a sawtooth waveform.
+pub fn saw_table() -> WaveTable {
+    WaveTable::new().with_waveform(generate_saw(DEFAULT_TABLE_SIZE))
+}
+
+/// Create a WaveTable pre-loaded with a triangle waveform.
+pub fn tri_table() -> WaveTable {
+    WaveTable::new().with_waveform(generate_tri(DEFAULT_TABLE_SIZE))
+}
+
+/// Create a WaveTable pre-loaded with a square waveform.
+pub fn square_table() -> WaveTable {
+    WaveTable::new().with_waveform(generate_square(DEFAULT_TABLE_SIZE))
+}
