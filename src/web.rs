@@ -28,8 +28,10 @@
 //! ```
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 #[cfg(feature = "web")]
 use alloc::string::{String, ToString};
+use alloc::string::String as AllocString;
 use alloc::vec::Vec;
 
 use crate::dsl::{self, UGenRegistry};
@@ -66,6 +68,121 @@ static REGISTRY: WasmCell<Option<UGenRegistry>> = WasmCell::new(None);
 static DEFS: WasmCell<Option<Vec<crate::synthdef::SynthDef>>> = WasmCell::new(None);
 /// Bus node for multi-voice mixing.
 static BUS_NODE: WasmCell<Option<crate::node::NodeId>> = WasmCell::new(None);
+
+/// Named SynthDef registry for multi-timbral playback.
+static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::SynthDef>>> =
+    WasmCell::new(None);
+
+/// Initialize the engine with a Bus node as the graph sink.
+/// Call once before `ms_register_def` / `ms_spawn_voice_named`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
+    let mut registry = UGenRegistry::new();
+    register_builtins(&mut registry);
+
+    let config = EngineConfig {
+        sample_rate,
+        block_size: 128,
+    };
+    let mut engine = Engine::new(config);
+
+    // Create a bus node as the graph sink
+    let bus = crate::ugens::Bus::new(64);
+    let bus_id = engine.graph_mut().add_node(Box::new(bus));
+    engine.graph_mut().set_sink(bus_id);
+    engine.prepare();
+
+    unsafe {
+        *ENGINE.get_mut() = Some(engine);
+        *REGISTRY.get_mut() = Some(registry);
+        *BUS_NODE.get_mut() = Some(bus_id);
+        *DEF_REGISTRY.get_mut() = Some(BTreeMap::new());
+        *DEFS.get_mut() = None;
+    }
+}
+
+/// Register a named SynthDef. Compiles the DSL source and stores the first
+/// resulting SynthDef under the given name.
+/// Returns 0 on success, 1 on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_register_def(
+    name_ptr: *const u8,
+    name_len: usize,
+    source_ptr: *const u8,
+    source_len: usize,
+) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let source_bytes = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
+    let source = match core::str::from_utf8(source_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let ugen_registry = match unsafe { REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+
+    let defs = match dsl::compile(source, ugen_registry) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+
+    if defs.is_empty() {
+        return 1;
+    }
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+
+    def_registry.insert(AllocString::from(name), defs.into_iter().next().unwrap());
+    0
+}
+
+/// Spawn a voice from a named SynthDef onto the bus.
+/// Returns voice_id > 0, or 0 on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_spawn_voice_named(
+    name_ptr: *const u8,
+    name_len: usize,
+) -> u64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let def = match def_registry.get(name) {
+        Some(d) => d,
+        None => return 0,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 0,
+    };
+
+    match engine.spawn_voice_on_bus(def, bus_id) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
+}
 
 /// Allocate `size` bytes in WASM linear memory. Returns a pointer.
 /// Used by JS to write string data (DSL source) into WASM memory.
