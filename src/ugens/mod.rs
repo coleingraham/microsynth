@@ -139,6 +139,32 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
 
+    // -- Comb filter --
+    reg.register(
+        "combFilter",
+        || Box::new(CombFilter::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "delay", rate: Rate::Audio },
+            InputSpec { name: "feedback", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- GVerb (Schroeder reverb) --
+    reg.register(
+        "gverb",
+        || Box::new(GVerb::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "roomsize", rate: Rate::Audio },
+            InputSpec { name: "damping", rate: Rate::Audio },
+            InputSpec { name: "wet", rate: Rate::Audio },
+            InputSpec { name: "dry", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
     // -- Envelopes --
     reg.register(
         "line",

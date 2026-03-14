@@ -1,4 +1,4 @@
-//! Filter UGens: OnePole, BiquadLPF, BiquadHPF, BiquadBPF.
+//! Filter UGens: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, CombFilter, GVerb.
 //!
 //! Biquad filters use the standard transposed direct form II implementation.
 //! Coefficients are recalculated per-sample to support audio-rate modulation
@@ -7,6 +7,7 @@
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
 // --- OnePole ---
@@ -357,6 +358,372 @@ impl UGen for BiquadBPF {
 
             if ch == 0 {
                 self.state = state;
+            }
+        }
+    }
+}
+
+// --- CombFilter ---
+
+/// Maximum comb filter delay time in seconds.
+const MAX_COMB_DELAY_SECS: f32 = 1.0;
+
+/// Feedback comb filter (IIR).
+///
+/// y[n] = x[n] + feedback * y[n - delay]
+///
+/// Inputs: in (signal), delay (delay time in seconds), feedback (0.0 to ~0.99).
+/// Useful for Karplus-Strong synthesis, flanging, and as a building block for reverbs.
+pub struct CombFilter {
+    buffer: Vec<f32>,
+    write_pos: usize,
+    sample_rate: f32,
+}
+
+impl CombFilter {
+    pub fn new() -> Self {
+        CombFilter {
+            buffer: Vec::new(),
+            write_pos: 0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static COMB_INPUTS: [InputSpec; 3] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "delay", rate: Rate::Audio },
+    InputSpec { name: "feedback", rate: Rate::Audio },
+];
+static COMB_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for CombFilter {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "CombFilter", inputs: &COMB_INPUTS, outputs: &COMB_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        let max_samples = (MAX_COMB_DELAY_SECS * context.sample_rate) as usize + 1;
+        self.buffer.resize(max_samples, 0.0);
+        self.write_pos = 0;
+    }
+
+    fn reset(&mut self) {
+        self.buffer.fill(0.0);
+        self.write_pos = 0;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let delay_buf = inputs.get(1).copied();
+        let fb_buf = inputs.get(2).copied();
+        let buf_len = self.buffer.len();
+        if buf_len == 0 {
+            return;
+        }
+        let max_delay = (buf_len - 1) as f32;
+
+        for ch in 0..output.num_channels() {
+            let mut write_pos = self.write_pos;
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let delay_time = delay_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.01)
+                    .max(0.0);
+                let feedback = fb_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.5)
+                    .clamp(-0.999, 0.999);
+
+                let delay_samples = (delay_time * self.sample_rate)
+                    .min(max_delay)
+                    .max(1.0);
+
+                // Read from delay line with linear interpolation
+                let delay_int = delay_samples as usize;
+                let frac = delay_samples - delay_int as f32;
+                let read_a = (write_pos + buf_len - delay_int) % buf_len;
+                let read_b = (write_pos + buf_len - delay_int - 1) % buf_len;
+                let delayed = self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
+
+                // IIR comb: output = input + feedback * delayed_output
+                let y = in_ch[i] + feedback * delayed;
+
+                // Write to delay line
+                self.buffer[write_pos] = y;
+                out[i] = y;
+
+                write_pos = (write_pos + 1) % buf_len;
+            }
+
+            if ch == 0 {
+                self.write_pos = write_pos;
+            }
+        }
+    }
+}
+
+// --- GVerb ---
+
+/// Internal delay line for reverb components.
+struct ReverbDelay {
+    buffer: Vec<f32>,
+    write_pos: usize,
+}
+
+impl ReverbDelay {
+    fn new(size: usize) -> Self {
+        ReverbDelay {
+            buffer: alloc::vec![0.0; size.max(1)],
+            write_pos: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.write_pos = 0;
+    }
+
+    /// Read from the delay line at a fixed tap.
+    #[inline]
+    fn read(&self, delay: usize) -> f32 {
+        let len = self.buffer.len();
+        let pos = (self.write_pos + len - delay) % len;
+        self.buffer[pos]
+    }
+
+    /// Write a sample and advance.
+    #[inline]
+    fn write_and_advance(&mut self, sample: f32) {
+        self.buffer[self.write_pos] = sample;
+        self.write_pos = (self.write_pos + 1) % self.buffer.len();
+    }
+}
+
+/// A damped comb filter for use inside the reverb.
+struct ReverbComb {
+    delay: ReverbDelay,
+    filter_state: f32,
+    delay_samples: usize,
+}
+
+impl ReverbComb {
+    fn new(delay_samples: usize) -> Self {
+        ReverbComb {
+            delay: ReverbDelay::new(delay_samples + 1),
+            filter_state: 0.0,
+            delay_samples,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.delay.clear();
+        self.filter_state = 0.0;
+    }
+
+    /// Process one sample through the damped comb filter.
+    #[inline]
+    fn tick(&mut self, input: f32, feedback: f32, damping: f32) -> f32 {
+        let delayed = self.delay.read(self.delay_samples);
+        // One-pole lowpass on feedback path for damping
+        self.filter_state = delayed * (1.0 - damping) + self.filter_state * damping;
+        let y = input + self.filter_state * feedback;
+        self.delay.write_and_advance(y);
+        delayed
+    }
+}
+
+/// An allpass filter for use inside the reverb.
+struct ReverbAllpass {
+    delay: ReverbDelay,
+    delay_samples: usize,
+}
+
+impl ReverbAllpass {
+    fn new(delay_samples: usize) -> Self {
+        ReverbAllpass {
+            delay: ReverbDelay::new(delay_samples + 1),
+            delay_samples,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.delay.clear();
+    }
+
+    /// Process one sample through the allpass.
+    #[inline]
+    fn tick(&mut self, input: f32, feedback: f32) -> f32 {
+        let delayed = self.delay.read(self.delay_samples);
+        let y = -input + delayed;
+        self.delay.write_and_advance(input + delayed * feedback);
+        y
+    }
+}
+
+/// Schroeder-style reverb (similar to FreeVerb/GVerb).
+///
+/// Architecture: 8 parallel damped comb filters → 4 series allpass filters.
+/// Produces stereo output from mono input via slightly different delay taps
+/// for left and right channels.
+///
+/// Inputs:
+/// - in: audio signal
+/// - roomsize: room size factor (0.0 to 1.0, scales feedback)
+/// - damping: high frequency damping (0.0 to 1.0)
+/// - wet: wet signal level (0.0 to 1.0)
+/// - dry: dry signal level (0.0 to 1.0)
+pub struct GVerb {
+    combs_l: [ReverbComb; 8],
+    combs_r: [ReverbComb; 8],
+    allpasses_l: [ReverbAllpass; 4],
+    allpasses_r: [ReverbAllpass; 4],
+}
+
+// Comb filter delay lengths in samples at 44100 Hz (prime-ish numbers for diffusion).
+const COMB_DELAYS_L: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+// Stereo spread offset for right channel decorrelation.
+const STEREO_SPREAD: usize = 23;
+const ALLPASS_DELAYS_L: [usize; 4] = [556, 441, 341, 225];
+
+impl GVerb {
+    pub fn new() -> Self {
+        GVerb {
+            combs_l: core::array::from_fn(|i| ReverbComb::new(COMB_DELAYS_L[i])),
+            combs_r: core::array::from_fn(|i| ReverbComb::new(COMB_DELAYS_L[i] + STEREO_SPREAD)),
+            allpasses_l: core::array::from_fn(|i| ReverbAllpass::new(ALLPASS_DELAYS_L[i])),
+            allpasses_r: core::array::from_fn(|i| ReverbAllpass::new(ALLPASS_DELAYS_L[i] + STEREO_SPREAD)),
+        }
+    }
+}
+
+static GVERB_INPUTS: [InputSpec; 5] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "roomsize", rate: Rate::Audio },
+    InputSpec { name: "damping", rate: Rate::Audio },
+    InputSpec { name: "wet", rate: Rate::Audio },
+    InputSpec { name: "dry", rate: Rate::Audio },
+];
+static GVERB_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for GVerb {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "GVerb", inputs: &GVERB_INPUTS, outputs: &GVERB_OUTPUTS }
+    }
+
+    fn init(&mut self, _context: &ProcessContext) {}
+
+    fn reset(&mut self) {
+        for c in &mut self.combs_l { c.clear(); }
+        for c in &mut self.combs_r { c.clear(); }
+        for a in &mut self.allpasses_l { a.clear(); }
+        for a in &mut self.allpasses_r { a.clear(); }
+    }
+
+    fn output_channels(&self, _input_channels: &[usize]) -> usize {
+        2 // always stereo output
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let roomsize_buf = inputs.get(1).copied();
+        let damping_buf = inputs.get(2).copied();
+        let wet_buf = inputs.get(3).copied();
+        let dry_buf = inputs.get(4).copied();
+
+        let in_ch = in_buf.channel(0).samples();
+        let block_size = output.channel(0).len();
+
+        // Left channel
+        let out_l = output.channel_mut(0).samples_mut();
+        for i in 0..block_size {
+            let input = in_ch[i];
+            let roomsize = roomsize_buf
+                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                .unwrap_or(0.5)
+                .clamp(0.0, 1.0);
+            let damping = damping_buf
+                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                .unwrap_or(0.5)
+                .clamp(0.0, 1.0);
+            let wet = wet_buf
+                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                .unwrap_or(0.3)
+                .clamp(0.0, 1.0);
+            let dry = dry_buf
+                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                .unwrap_or(0.7)
+                .clamp(0.0, 1.0);
+
+            // Scale roomsize to feedback (0.0 → 0.7, 1.0 → 0.98)
+            let feedback = 0.7 + roomsize * 0.28;
+
+            // Sum of parallel comb filters
+            let mut comb_sum = 0.0;
+            for comb in &mut self.combs_l {
+                comb_sum += comb.tick(input, feedback, damping);
+            }
+
+            // Series allpass filters
+            let mut signal = comb_sum;
+            for ap in &mut self.allpasses_l {
+                signal = ap.tick(signal, 0.5);
+            }
+
+            out_l[i] = input * dry + signal * wet;
+        }
+
+        // Right channel
+        if output.num_channels() >= 2 {
+            let in_samples = in_buf.channel(0).samples();
+            let out_r = output.channel_mut(1).samples_mut();
+
+            for i in 0..block_size {
+                let input = in_samples[i];
+                let roomsize = roomsize_buf
+                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+                let damping = damping_buf
+                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+                let wet = wet_buf
+                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                    .unwrap_or(0.3)
+                    .clamp(0.0, 1.0);
+                let dry = dry_buf
+                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
+                    .unwrap_or(0.7)
+                    .clamp(0.0, 1.0);
+
+                let feedback = 0.7 + roomsize * 0.28;
+
+                let mut comb_sum = 0.0;
+                for comb in &mut self.combs_r {
+                    comb_sum += comb.tick(input, feedback, damping);
+                }
+
+                let mut signal = comb_sum;
+                for ap in &mut self.allpasses_r {
+                    signal = ap.tick(signal, 0.5);
+                }
+
+                out_r[i] = input * dry + signal * wet;
             }
         }
     }
