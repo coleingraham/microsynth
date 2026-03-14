@@ -25,17 +25,20 @@ pub enum Token {
     SynthDef,
     Let,
     In,
+    Bus,
+    Route,
 
     // Literals
     Ident(String),
     Number(f32),
 
     // Operators
-    Eq,    // =
-    Plus,  // +
-    Minus, // -
-    Star,  // *
-    Slash, // /
+    Eq,       // =
+    FatArrow, // =>
+    Plus,     // +
+    Minus,    // -
+    Star,     // *
+    Slash,    // /
 
     // Delimiters
     LParen, // (
@@ -55,9 +58,12 @@ impl fmt::Display for Token {
             Token::SynthDef => write!(f, "synthdef"),
             Token::Let => write!(f, "let"),
             Token::In => write!(f, "in"),
+            Token::Bus => write!(f, "bus"),
+            Token::Route => write!(f, "route"),
             Token::Ident(s) => write!(f, "{s}"),
             Token::Number(n) => write!(f, "{n}"),
             Token::Eq => write!(f, "="),
+            Token::FatArrow => write!(f, "=>"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -117,12 +123,22 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned>, LexError> {
                 col += 1;
             }
             '=' => {
-                tokens.push(Spanned {
-                    token: Token::Eq,
-                    span,
-                });
-                pos += 1;
-                col += 1;
+                // Check for => (fat arrow)
+                if pos + 1 < chars.len() && chars[pos + 1] == '>' {
+                    tokens.push(Spanned {
+                        token: Token::FatArrow,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
+                } else {
+                    tokens.push(Spanned {
+                        token: Token::Eq,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
+                }
             }
             '+' => {
                 tokens.push(Spanned {
@@ -215,6 +231,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned>, LexError> {
                     "synthdef" => Token::SynthDef,
                     "let" => Token::Let,
                     "in" => Token::In,
+                    "bus" => Token::Bus,
+                    "route" => Token::Route,
                     _ => Token::Ident(word),
                 };
                 tokens.push(Spanned { token, span });

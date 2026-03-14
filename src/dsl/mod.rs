@@ -34,10 +34,11 @@ pub mod compiler;
 pub mod lexer;
 pub mod parser;
 
-pub use compiler::{compile_program, compile_synthdef, CompileError, UGenEntry, UGenRegistry};
+pub use compiler::{compile_program, compile_routing, compile_synthdef, CompileError, UGenEntry, UGenRegistry};
 pub use lexer::LexError;
 pub use parser::ParseError;
 
+use crate::routing::RoutingGraph;
 use crate::synthdef::SynthDef;
 use alloc::vec::Vec;
 use core::fmt;
@@ -81,10 +82,29 @@ impl From<CompileError> for DslError {
 /// Parse and compile DSL source into SynthDefs.
 ///
 /// This is the main entry point: tokenize → parse → compile.
+/// Bus and route declarations are ignored; use `compile_with_routing`
+/// to also produce a routing graph.
 pub fn compile(source: &str, registry: &UGenRegistry) -> Result<Vec<SynthDef>, DslError> {
     let tokens = lexer::tokenize(source)?;
     let mut parser = parser::Parser::new(tokens);
     let program = parser.parse_program()?;
     let defs = compile_program(&program, registry)?;
     Ok(defs)
+}
+
+/// Parse and compile DSL source into SynthDefs and a RoutingGraph.
+///
+/// Returns `(synthdefs, routing_graph)`. The routing graph contains
+/// bus and route declarations from the source, with effect references
+/// resolved against the compiled SynthDefs.
+pub fn compile_with_routing(
+    source: &str,
+    registry: &UGenRegistry,
+) -> Result<(Vec<SynthDef>, RoutingGraph), DslError> {
+    let tokens = lexer::tokenize(source)?;
+    let mut parser = parser::Parser::new(tokens);
+    let program = parser.parse_program()?;
+    let defs = compile_program(&program, registry)?;
+    let routing = compile_routing(&program, &defs)?;
+    Ok((defs, routing))
 }

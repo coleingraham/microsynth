@@ -116,6 +116,12 @@ impl<'a> Compiler<'a> {
             Expr::Var(name) => {
                 if let Some(&idx) = self.scope.get(name) {
                     Ok(idx)
+                } else if name == "audioIn" {
+                    // Special handling: audioIn creates an AudioIn pass-through node
+                    // and marks it as an audio input on the SynthDef
+                    let idx = self.builder.add_node(|| Box::new(ugens::AudioIn));
+                    self.builder.audio_input("in", idx);
+                    Ok(idx)
                 } else if let Some(entry) = self.registry.get(name) {
                     // Zero-argument UGen (e.g. whiteNoise, pinkNoise)
                     if entry.input_names.is_empty() {
@@ -224,6 +230,59 @@ pub fn compile_program(
         .iter()
         .map(|decl| compile_synthdef(decl, registry))
         .collect()
+}
+
+/// Compile a program's bus and route declarations into a RoutingGraph.
+///
+/// The `defs` parameter should be the SynthDefs compiled from the same program,
+/// so that route declarations can reference effect SynthDefs by name.
+pub fn compile_routing(
+    program: &crate::dsl::ast::Program,
+    defs: &[crate::synthdef::SynthDef],
+) -> Result<crate::routing::RoutingGraph, CompileError> {
+    let mut routing = crate::routing::RoutingGraph::new();
+
+    // Create buses from declarations
+    for bus_decl in &program.buses {
+        routing.add_bus(bus_decl.name.clone(), bus_decl.channels);
+    }
+
+    // Process route declarations
+    for route_decl in &program.routes {
+        // chain: [source_bus, effect1, ..., effectN, target_bus]
+        // Process consecutive triplets: bus => effect => bus
+        let chain = &route_decl.chain;
+        // Walk the chain in steps of 2: each pair (bus, effect) followed by next bus
+        let mut i = 0;
+        while i + 2 <= chain.len() - 1 {
+            let source_name = &chain[i];
+            let effect_name = &chain[i + 1];
+            let target_name = &chain[i + 2];
+
+            let source_bus = routing.bus_by_name(source_name).ok_or_else(|| {
+                CompileError {
+                    message: alloc::format!("unknown bus in route: {source_name}"),
+                }
+            })?;
+
+            let target_bus = routing.bus_by_name(target_name).ok_or_else(|| {
+                CompileError {
+                    message: alloc::format!("unknown bus in route: {target_name}"),
+                }
+            })?;
+
+            let def = defs.iter().find(|d| d.name() == effect_name).ok_or_else(|| {
+                CompileError {
+                    message: alloc::format!("unknown effect synthdef in route: {effect_name}"),
+                }
+            })?;
+
+            routing.add_effect(source_bus, def, target_bus);
+            i += 2;
+        }
+    }
+
+    Ok(routing)
 }
 
 /// A compilation error.

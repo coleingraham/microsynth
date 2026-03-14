@@ -246,6 +246,14 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
 
+    // -- Bus / Routing --
+    reg.register(
+        "audioIn",
+        || Box::new(AudioIn),
+        &[InputSpec { name: "in", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
     // -- Wavetable --
     reg.register(
         "waveTable",

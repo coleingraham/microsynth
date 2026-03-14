@@ -4,10 +4,29 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// A complete DSL program (one or more SynthDef declarations).
+/// A complete DSL program: SynthDef declarations, bus declarations, and route declarations.
 #[derive(Debug, Clone)]
 pub struct Program {
     pub defs: Vec<SynthDefDecl>,
+    pub buses: Vec<BusDecl>,
+    pub routes: Vec<RouteDecl>,
+}
+
+/// A bus declaration: `bus NAME CHANNELS`
+#[derive(Debug, Clone)]
+pub struct BusDecl {
+    pub name: String,
+    /// Number of audio channels (e.g. 2 for stereo).
+    pub channels: usize,
+}
+
+/// A route declaration: `route SOURCE => EFFECT => TARGET`
+///
+/// The chain is a list of names: [source_bus, effect1, ..., target_bus].
+/// The first and last entries are bus names; middle entries are effect SynthDef names.
+#[derive(Debug, Clone)]
+pub struct RouteDecl {
+    pub chain: Vec<String>,
 }
 
 /// A SynthDef declaration.
