@@ -193,10 +193,61 @@
 //!
 //! | Name | Inputs | Description |
 //! |------|--------|-------------|
-//! | `delay` | `in`, `time` (sec, max 5s) | Delay line with linear interpolation |
+//! | `delay` | `in`, `time` (sec, max 5s) | Simple delay line (no feedback) |
+//! | `feedbackDelay` | `in`, `time` (sec), `feedback` | Delay with feedback for echo/dub effects |
+//!
+//! `feedbackDelay` feeds the output back into the delay line:
+//! `y[n] = x[n] + feedback * y[n - time]`. Use feedback values
+//! between 0.0 and 0.9 for clean repeating echoes; higher values
+//! (up to 0.999) produce dub-style runaway repeats.
 //!
 //! ```text
-//! delay sig 0.25           -- quarter-second delay
+//! delay sig 0.25                  -- quarter-second delay (no repeats)
+//! feedbackDelay sig 0.3 0.5       -- 300ms echo, 50% feedback
+//! feedbackDelay sig 0.5 0.7       -- half-second dub delay
+//! ```
+//!
+//! ## Dynamics
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `compressor` | `in`, `sidechain`, `threshold` (dB), `ratio`, `attack` (sec), `release` (sec), `makeup` (dB) | Feed-forward compressor with sidechain |
+//!
+//! The compressor reduces dynamic range by attenuating signals whose
+//! sidechain input exceeds the threshold. The `sidechain` input controls
+//! what signal is used for level detection — pass the same signal as `in`
+//! for normal compression, or a different signal for sidechain compression
+//! (e.g. ducking synths when a kick hits).
+//!
+//! - `threshold`: level in dB above which compression begins (e.g. -10.0)
+//! - `ratio`: compression ratio (e.g. 4.0 = 4:1 compression)
+//! - `attack`: how fast the compressor reacts to level increases (seconds)
+//! - `release`: how fast the compressor recovers after level drops (seconds)
+//! - `makeup`: gain in dB added after compression to restore volume
+//!
+//! ```text
+//! -- Self-sidechain compression (normal compressor)
+//! compressor sig sig (0.0 - 10.0) 4.0 0.01 0.1 6.0
+//!
+//! -- Sidechain compression: duck pads when kick hits
+//! -- (in a routing context, kick feeds sidechain input)
+//! compressor padSig kickSig (0.0 - 20.0) 8.0 0.001 0.1 0.0
+//! ```
+//!
+//! ### Sidechain Compression with Routing
+//!
+//! To use sidechain compression in a routing graph, define the compressor
+//! effect as a SynthDef with `audioIn` for the main signal, and route the
+//! sidechain signal separately:
+//!
+//! ```text
+//! -- Self-compressing effect
+//! synthdef busComp threshold=-10.0 ratio=4.0 makeup=6.0 =
+//!   let sig = audioIn
+//!   compressor sig sig threshold ratio 0.01 0.1 makeup
+//!
+//! bus drums 2
+//! route drums => busComp => main
 //! ```
 //!
 //! ## Utility

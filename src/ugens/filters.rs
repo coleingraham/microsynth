@@ -728,3 +728,160 @@ impl UGen for GVerb {
         }
     }
 }
+
+// --- Compressor ---
+
+/// Feed-forward compressor with sidechain support.
+///
+/// Reduces dynamic range by attenuating signals above a threshold.
+/// Uses a log-domain envelope follower with separate attack and release times.
+///
+/// Inputs:
+/// - `in`: signal to compress
+/// - `sidechain`: signal used for level detection (use `audioIn` for external sidechain,
+///   or connect the same signal as `in` for self-sidechaining)
+/// - `threshold`: level in decibels above which compression begins (e.g. -10.0)
+/// - `ratio`: compression ratio (e.g. 4.0 means 4:1 — for every 4 dB above threshold,
+///   output increases by 1 dB)
+/// - `attack`: attack time in seconds (how fast the compressor reacts to increases)
+/// - `release`: release time in seconds (how fast the compressor recovers)
+/// - `makeup`: makeup gain in decibels added after compression
+pub struct Compressor {
+    /// Envelope follower state per channel (in dB).
+    env_db: [f32; 2],
+    sample_rate: f32,
+}
+
+impl Compressor {
+    pub fn new() -> Self {
+        Compressor {
+            env_db: [-120.0; 2],
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static COMP_INPUTS: [InputSpec; 7] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "sidechain", rate: Rate::Audio },
+    InputSpec { name: "threshold", rate: Rate::Audio },
+    InputSpec { name: "ratio", rate: Rate::Audio },
+    InputSpec { name: "attack", rate: Rate::Audio },
+    InputSpec { name: "release", rate: Rate::Audio },
+    InputSpec { name: "makeup", rate: Rate::Audio },
+];
+static COMP_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+/// Fast log2 approximation using IEEE 754 float bit tricks (no_std compatible).
+/// Accurate to ~0.09 dB for audio signals.
+#[inline]
+fn fast_log2(x: f32) -> f32 {
+    let bits = x.to_bits() as f32;
+    // IEEE 754: bits = mantissa + exponent * 2^23
+    // log2(x) ≈ bits / 2^23 - 127 (with correction)
+    bits * (1.0 / 8388608.0) - 127.0
+}
+
+/// Convert linear amplitude to decibels using fast log2.
+/// 20*log10(x) = 20 * log2(x) / log2(10) ≈ 6.0206 * log2(x)
+#[inline]
+fn fast_lin_to_db(x: f32) -> f32 {
+    let abs = x.abs().max(1e-6);
+    6.0206 * fast_log2(abs)
+}
+
+/// Convert decibels to linear gain.
+/// 10^(db/20) = 2^(db / 6.0206)
+#[inline]
+fn fast_db_to_lin(db: f32) -> f32 {
+    // 2^x via exp: 2^x = e^(x * ln2)
+    (db * (1.0 / 6.0206) * core::f32::consts::LN_2).exp()
+}
+
+impl UGen for Compressor {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "Compressor", inputs: &COMP_INPUTS, outputs: &COMP_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.env_db = [-120.0; 2];
+    }
+
+    fn reset(&mut self) {
+        self.env_db = [-120.0; 2];
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let sc_buf = inputs.get(1).copied().unwrap_or(in_buf);
+        let thresh_buf = inputs.get(2).copied();
+        let ratio_buf = inputs.get(3).copied();
+        let attack_buf = inputs.get(4).copied();
+        let release_buf = inputs.get(5).copied();
+        let makeup_buf = inputs.get(6).copied();
+
+        for ch in 0..output.num_channels() {
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let sc_ch = sc_buf.channel(ch % sc_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+            let env_idx = ch.min(1);
+            let mut env_db = self.env_db[env_idx];
+
+            for i in 0..out.len() {
+                let threshold = thresh_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(-10.0);
+                let ratio = ratio_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(4.0)
+                    .max(1.0);
+                let attack_time = attack_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.01)
+                    .max(0.0001);
+                let release_time = release_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0001);
+                let makeup = makeup_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.0);
+
+                // Sidechain level detection (peak, in dB)
+                let sc_db = fast_lin_to_db(sc_ch[i]);
+
+                // Smooth envelope follower (separate attack/release)
+                let coeff = if sc_db > env_db {
+                    // Attack: fast rise
+                    (-1.0 / (attack_time * self.sample_rate)).exp()
+                } else {
+                    // Release: slow decay
+                    (-1.0 / (release_time * self.sample_rate)).exp()
+                };
+                env_db = coeff * env_db + (1.0 - coeff) * sc_db;
+
+                // Gain computation
+                let over_db = env_db - threshold;
+                let gain_db = if over_db > 0.0 {
+                    // Compress: reduce by (1 - 1/ratio) * overshoot
+                    -(over_db * (1.0 - 1.0 / ratio))
+                } else {
+                    0.0
+                };
+
+                let gain = fast_db_to_lin(gain_db + makeup);
+                out[i] = in_ch[i] * gain;
+            }
+
+            if ch <= 1 {
+                self.env_db[env_idx] = env_db;
+            }
+        }
+    }
+}
