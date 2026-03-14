@@ -354,4 +354,9 @@ impl AudioGraph {
     pub fn node_spec(&self, id: NodeId) -> Option<crate::node::UGenSpec> {
         self.nodes.get(id.index())?.as_ref().map(|s| s.ugen.spec())
     }
+
+    /// Count the number of edges connected to a node's inputs.
+    pub fn edges_to(&self, node_id: NodeId) -> usize {
+        self.edges.iter().filter(|e| e.to == node_id).count()
+    }
 }

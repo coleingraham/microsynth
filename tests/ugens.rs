@@ -679,3 +679,206 @@ fn test_oscillator_multichannel_expansion() {
         "SinOsc should expand to 2 channels with 2-ch freq input"
     );
 }
+
+// ============================================================================
+// FeedbackDelay tests
+// ============================================================================
+
+#[test]
+fn test_feedback_delay_produces_echoes() {
+    // FeedbackDelay with a short delay and high feedback should produce
+    // decaying echoes: output amplitude should decrease over time when
+    // input stops after initial impulse.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let time = engine.graph_mut().add_node(Box::new(Const::new(0.01))); // 10ms
+    let fb = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let delay = engine.graph_mut().add_node(Box::new(FeedbackDelay::new()));
+    engine.graph_mut().connect(src, delay, 0);
+    engine.graph_mut().connect(time, delay, 1);
+    engine.graph_mut().connect(fb, delay, 2);
+    engine.graph_mut().set_sink(delay);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    // With constant input of 1.0 and feedback 0.5, the output should
+    // converge to 1 / (1 - 0.5) = 2.0 after the delay line fills.
+    let last = *output[0].last().unwrap();
+    assert!(
+        last >= 1.5,
+        "feedback delay with const input should accumulate to >= 1.5, got {last}"
+    );
+}
+
+#[test]
+fn test_feedback_delay_zero_feedback_matches_delay() {
+    // With feedback=0, FeedbackDelay should behave like plain Delay.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let time = engine.graph_mut().add_node(Box::new(Const::new(0.01)));
+    let fb = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let delay = engine.graph_mut().add_node(Box::new(FeedbackDelay::new()));
+    engine.graph_mut().connect(src, delay, 0);
+    engine.graph_mut().connect(time, delay, 1);
+    engine.graph_mut().connect(fb, delay, 2);
+    engine.graph_mut().set_sink(delay);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    // With zero feedback and const 1.0 input, output should converge to 1.0
+    // (the feedback delay writes input then reads, so first sample = input value)
+    let last = *output[0].last().unwrap();
+    assert!(
+        (last - 1.0).abs() < 0.01,
+        "with zero feedback, should output 1.0, got {last}"
+    );
+}
+
+#[test]
+fn test_dsl_feedback_delay_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef echo freq=440.0 =
+            let sig = sinOsc freq 0.0
+            feedbackDelay sig 0.25 0.5
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "echo");
+}
+
+// ============================================================================
+// Compressor tests
+// ============================================================================
+
+#[test]
+fn test_compressor_reduces_loud_signal() {
+    // A loud signal above threshold should be attenuated.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(1.0))); // 0 dB
+    let sc = engine.graph_mut().add_node(Box::new(Const::new(1.0)));  // sidechain = same
+    let thresh = engine.graph_mut().add_node(Box::new(Const::new(-20.0))); // -20 dB threshold
+    let ratio = engine.graph_mut().add_node(Box::new(Const::new(4.0)));    // 4:1
+    let attack = engine.graph_mut().add_node(Box::new(Const::new(0.001))); // 1ms attack
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let makeup = engine.graph_mut().add_node(Box::new(Const::new(0.0)));   // no makeup
+    let comp = engine.graph_mut().add_node(Box::new(Compressor::new()));
+
+    engine.graph_mut().connect(src, comp, 0);
+    engine.graph_mut().connect(sc, comp, 1);
+    engine.graph_mut().connect(thresh, comp, 2);
+    engine.graph_mut().connect(ratio, comp, 3);
+    engine.graph_mut().connect(attack, comp, 4);
+    engine.graph_mut().connect(release, comp, 5);
+    engine.graph_mut().connect(makeup, comp, 6);
+    engine.graph_mut().set_sink(comp);
+    engine.prepare();
+
+    // Render several blocks so envelope settles
+    let output = engine.render_offline(20);
+    let last = *output[0].last().unwrap();
+    // Input is 1.0 (0 dB), threshold is -20 dB, ratio 4:1
+    // Over threshold by 20 dB, gain reduction = 20 * (1 - 1/4) = 15 dB
+    // Output should be around -15 dB ≈ 0.178
+    assert!(
+        last < 0.5,
+        "compressor should attenuate loud signal, got {last}"
+    );
+    assert!(
+        last > 0.05,
+        "compressor shouldn't silence the signal completely, got {last}"
+    );
+}
+
+#[test]
+fn test_compressor_passes_quiet_signal() {
+    // A signal below threshold should pass through uncompressed.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(0.01))); // very quiet
+    let sc = engine.graph_mut().add_node(Box::new(Const::new(0.01)));
+    let thresh = engine.graph_mut().add_node(Box::new(Const::new(-6.0)));
+    let ratio = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+    let attack = engine.graph_mut().add_node(Box::new(Const::new(0.001)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let makeup = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let comp = engine.graph_mut().add_node(Box::new(Compressor::new()));
+
+    engine.graph_mut().connect(src, comp, 0);
+    engine.graph_mut().connect(sc, comp, 1);
+    engine.graph_mut().connect(thresh, comp, 2);
+    engine.graph_mut().connect(ratio, comp, 3);
+    engine.graph_mut().connect(attack, comp, 4);
+    engine.graph_mut().connect(release, comp, 5);
+    engine.graph_mut().connect(makeup, comp, 6);
+    engine.graph_mut().set_sink(comp);
+    engine.prepare();
+
+    let output = engine.render_offline(20);
+    let last = *output[0].last().unwrap();
+    // 0.01 is ~-40 dB, well below -6 dB threshold. Should pass through.
+    assert!(
+        (last - 0.01).abs() < 0.005,
+        "quiet signal should pass through uncompressed, got {last}"
+    );
+}
+
+#[test]
+fn test_compressor_makeup_gain() {
+    // Makeup gain should boost the output.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(0.1))); // -20 dB
+    let sc = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let thresh = engine.graph_mut().add_node(Box::new(Const::new(-6.0)));  // above signal
+    let ratio = engine.graph_mut().add_node(Box::new(Const::new(4.0)));
+    let attack = engine.graph_mut().add_node(Box::new(Const::new(0.001)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let makeup = engine.graph_mut().add_node(Box::new(Const::new(12.0)));  // +12 dB makeup
+    let comp = engine.graph_mut().add_node(Box::new(Compressor::new()));
+
+    engine.graph_mut().connect(src, comp, 0);
+    engine.graph_mut().connect(sc, comp, 1);
+    engine.graph_mut().connect(thresh, comp, 2);
+    engine.graph_mut().connect(ratio, comp, 3);
+    engine.graph_mut().connect(attack, comp, 4);
+    engine.graph_mut().connect(release, comp, 5);
+    engine.graph_mut().connect(makeup, comp, 6);
+    engine.graph_mut().set_sink(comp);
+    engine.prepare();
+
+    let output = engine.render_offline(20);
+    let last = *output[0].last().unwrap();
+    // Signal is below threshold, so no compression.
+    // Makeup of +12 dB ≈ 4x gain. 0.1 * 4 ≈ 0.4
+    assert!(
+        last > 0.3,
+        "makeup gain should boost output, got {last}"
+    );
+}
+
+#[test]
+fn test_dsl_compressor_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef compressed freq=440.0 =
+            let sig = sinOsc freq 0.0
+            compressor sig sig (0.0 - 10.0) 4.0 0.01 0.1 6.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "compressed");
+
+    // Render to verify no crash
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "compressed synth should produce output");
+}

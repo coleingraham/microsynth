@@ -2,8 +2,10 @@ use crate::buffer::AudioBuffer;
 use crate::context::ProcessContext;
 use crate::graph::AudioGraph;
 use crate::node::NodeId;
+use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
 use crate::synthdef::{Synth, SynthDef, SynthParam};
+use crate::ugens;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -120,12 +122,20 @@ impl Engine {
             })
             .collect();
 
+        // Build audio input mapping: name → live NodeId
+        let audio_input_nodes: Vec<(String, NodeId)> = def
+            .audio_inputs()
+            .iter()
+            .map(|(name, node_index)| (name.clone(), node_ids[*node_index]))
+            .collect();
+
         let output_id = node_ids[def.output_node()];
         let synth = Synth::new(
             String::from(def.name()),
             node_ids,
             output_id,
             params,
+            audio_input_nodes,
         );
 
         self.synths.push(synth.clone_handle());
@@ -415,5 +425,127 @@ impl Engine {
     /// Current time in seconds.
     pub fn time_secs(&self) -> f64 {
         self.context.time_secs()
+    }
+
+    // -- Routing graph integration --
+
+    /// Build a routing graph into the engine's audio graph.
+    ///
+    /// Creates Bus UGen nodes for each bus, instantiates effect SynthDefs,
+    /// wires source bus outputs to effect AudioIn nodes, wires effect outputs
+    /// to target bus input slots, and sets the main bus as the graph's sink.
+    ///
+    /// `effect_defs` is a lookup slice: for each effect, the def whose name
+    /// matches is used. Call `prepare()` after this method.
+    pub fn build_routing(
+        &mut self,
+        routing: &mut RoutingGraph,
+        effect_defs: &[SynthDef],
+    ) {
+        // 1. Create Bus UGen nodes for each bus
+        for bus_id in routing.bus_ids().collect::<Vec<_>>() {
+            let (_, channels) = routing.bus_info(bus_id).unwrap();
+            let bus_node = self.graph.add_node(
+                alloc::boxed::Box::new(ugens::Bus::new(channels)),
+            );
+            routing.set_bus_node(bus_id, bus_node);
+        }
+
+        // 2. Set main bus as the graph's sink
+        if let Some(main_node) = routing.bus_node(routing.main_bus()) {
+            self.graph.set_sink(main_node);
+        }
+
+        // 3. Instantiate effects and wire them up
+        for i in 0..routing.num_effects() {
+            let source_bus = routing.effects()[i].source_bus;
+            let target_bus = routing.effects()[i].target_bus;
+            let def_name = routing.effects()[i].def_name.clone();
+
+            // Find the matching SynthDef
+            let def = match effect_defs.iter().find(|d| d.name() == def_name) {
+                Some(d) => d,
+                None => continue, // skip if def not found
+            };
+
+            // Instantiate the effect SynthDef
+            let synth = self.instantiate_synthdef(def);
+
+            // Wire source bus output → effect's AudioIn node
+            if let Some(source_node) = routing.bus_node(source_bus) {
+                if let Some(audio_in_node) = synth.audio_input_node("in") {
+                    self.graph.connect(source_node, audio_in_node, 0);
+                }
+            }
+
+            // Wire effect output → target bus input slot
+            if let Some(target_node) = routing.bus_node(target_bus) {
+                // Find a free input slot on the target bus
+                let bus_max = match self.graph.node_spec(target_node) {
+                    Some(spec) => spec.inputs.len(),
+                    None => continue,
+                };
+                let used_slots = self.count_connections_to(target_node);
+                if used_slots < bus_max {
+                    self.graph.connect(synth.output_node(), target_node, used_slots);
+                }
+            }
+
+            // Store the synth handle
+            routing.effects_mut()[i].synth = Some(synth);
+        }
+    }
+
+    /// Spawn a voice on a routing bus.
+    ///
+    /// Delegates to `spawn_voice_on_bus` using the bus's live NodeId.
+    pub fn spawn_voice_on_routing_bus(
+        &mut self,
+        def: &SynthDef,
+        routing: &RoutingGraph,
+        bus_id: BusId,
+    ) -> Option<VoiceId> {
+        let bus_node = routing.bus_node(bus_id)?;
+        self.spawn_voice_on_bus(def, bus_node)
+    }
+
+    /// Set a named parameter on an effect by EffectId.
+    /// Returns true if the effect and parameter were found.
+    pub fn set_effect_param(
+        &mut self,
+        routing: &RoutingGraph,
+        effect_id: EffectId,
+        name: &str,
+        value: f32,
+    ) -> bool {
+        if let Some(synth) = routing.effect_synth(effect_id) {
+            if let Some(node_id) = synth.param_node(name) {
+                return self.graph.set_node_value(node_id, value);
+            }
+        }
+        false
+    }
+
+    /// Set a named parameter on an effect with a smooth glide.
+    /// Returns true if the effect and parameter were found.
+    pub fn set_effect_param_glide(
+        &mut self,
+        routing: &RoutingGraph,
+        effect_id: EffectId,
+        name: &str,
+        target: f32,
+        glide_secs: f32,
+    ) -> bool {
+        if let Some(synth) = routing.effect_synth(effect_id) {
+            if let Some(node_id) = synth.param_node(name) {
+                return self.graph.set_node_target(node_id, target, glide_secs);
+            }
+        }
+        false
+    }
+
+    /// Count how many edges connect to a given node (for finding free bus slots).
+    fn count_connections_to(&self, node_id: NodeId) -> usize {
+        self.graph.edges_to(node_id)
     }
 }

@@ -36,6 +36,9 @@ pub struct SynthDef {
     output_node: usize,
     /// Named parameters: (name, node_index, input_index).
     param_names: Vec<(String, usize, usize)>,
+    /// Audio input nodes: (name, node_index). These are AudioIn UGen nodes
+    /// that receive external audio (e.g. from a bus) when used in an effect chain.
+    audio_inputs: Vec<(String, usize)>,
 }
 
 impl SynthDef {
@@ -52,6 +55,12 @@ impl SynthDef {
     /// Number of nodes in this SynthDef.
     pub fn num_nodes(&self) -> usize {
         self.factories.len()
+    }
+
+    /// Get the audio input nodes (name, node_index).
+    /// These are AudioIn UGen nodes that receive external audio from buses.
+    pub fn audio_inputs(&self) -> &[(String, usize)] {
+        &self.audio_inputs
     }
 
     /// Get the edges.
@@ -78,6 +87,7 @@ pub struct SynthDefBuilder {
     edges: Vec<SynthDefEdge>,
     output_node: Option<usize>,
     param_names: Vec<(String, usize, usize)>,
+    audio_inputs: Vec<(String, usize)>,
 }
 
 impl SynthDefBuilder {
@@ -89,6 +99,7 @@ impl SynthDefBuilder {
             edges: Vec::new(),
             output_node: None,
             param_names: Vec::new(),
+            audio_inputs: Vec::new(),
         }
     }
 
@@ -116,6 +127,13 @@ impl SynthDefBuilder {
         self.param_names.push((name.into(), node_index, input_index));
     }
 
+    /// Mark a node as an audio input (e.g. an AudioIn UGen that receives
+    /// external audio from a bus). The routing system uses this to wire
+    /// bus outputs into effect SynthDefs.
+    pub fn audio_input(&mut self, name: impl Into<String>, node_index: usize) {
+        self.audio_inputs.push((name.into(), node_index));
+    }
+
     /// Set which node is the output of this SynthDef.
     pub fn set_output(&mut self, node_index: usize) {
         self.output_node = Some(node_index);
@@ -132,6 +150,7 @@ impl SynthDefBuilder {
             edges: self.edges,
             output_node: self.output_node.expect("SynthDef must have an output node"),
             param_names: self.param_names,
+            audio_inputs: self.audio_inputs,
         }
     }
 }
@@ -159,6 +178,9 @@ pub struct Synth {
     output_node: NodeId,
     /// Named parameters with their live NodeIds.
     params: Vec<SynthParam>,
+    /// Audio input nodes: (name, live NodeId). Used by the routing system
+    /// to wire bus outputs into effect synths.
+    audio_input_nodes: Vec<(String, NodeId)>,
 }
 
 impl Synth {
@@ -168,12 +190,14 @@ impl Synth {
         node_ids: Vec<NodeId>,
         output_node: NodeId,
         params: Vec<SynthParam>,
+        audio_input_nodes: Vec<(String, NodeId)>,
     ) -> Self {
         Synth {
             def_name,
             node_ids,
             output_node,
             params,
+            audio_input_nodes,
         }
     }
 
@@ -202,6 +226,19 @@ impl Synth {
         self.params.iter().find(|p| p.name == name).map(|p| p.node_id)
     }
 
+    /// Get the audio input nodes (name, live NodeId).
+    pub fn audio_input_nodes(&self) -> &[(String, NodeId)] {
+        &self.audio_input_nodes
+    }
+
+    /// Find the NodeId for a named audio input. Returns None if not found.
+    pub fn audio_input_node(&self, name: &str) -> Option<NodeId> {
+        self.audio_input_nodes
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, id)| *id)
+    }
+
     /// Create a lightweight clone for bookkeeping.
     pub(crate) fn clone_handle(&self) -> Self {
         Synth {
@@ -209,6 +246,7 @@ impl Synth {
             node_ids: self.node_ids.clone(),
             output_node: self.output_node,
             params: self.params.clone(),
+            audio_input_nodes: self.audio_input_nodes.clone(),
         }
     }
 }

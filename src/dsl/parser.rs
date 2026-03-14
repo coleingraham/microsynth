@@ -37,18 +37,31 @@ impl Parser {
         Parser { tokens, pos: 0 }
     }
 
-    /// Parse a complete program (one or more synthdefs).
+    /// Parse a complete program (synthdefs, bus declarations, and route declarations).
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         self.skip_newlines();
         let mut defs = Vec::new();
+        let mut buses = Vec::new();
+        let mut routes = Vec::new();
         while !self.at_eof() {
-            defs.push(self.parse_synthdef()?);
+            if self.check(&Token::SynthDef) {
+                defs.push(self.parse_synthdef()?);
+            } else if self.check(&Token::Bus) {
+                buses.push(self.parse_bus_decl()?);
+            } else if self.check(&Token::Route) {
+                routes.push(self.parse_route_decl()?);
+            } else {
+                return Err(self.error(&alloc::format!(
+                    "expected 'synthdef', 'bus', or 'route', got {}",
+                    self.current().token
+                )));
+            }
             self.skip_newlines();
         }
-        if defs.is_empty() {
-            return Err(self.error("expected at least one synthdef"));
+        if defs.is_empty() && buses.is_empty() && routes.is_empty() {
+            return Err(self.error("expected at least one declaration"));
         }
-        Ok(Program { defs })
+        Ok(Program { defs, buses, routes })
     }
 
     /// Parse a single synthdef declaration.
@@ -109,6 +122,42 @@ impl Parser {
         let body = self.parse_body()?;
 
         Ok(SynthDefDecl { name, params, body })
+    }
+
+    /// Parse a bus declaration: `bus NAME CHANNELS`
+    fn parse_bus_decl(&mut self) -> Result<BusDecl, ParseError> {
+        self.expect(Token::Bus)?;
+        let name = self.expect_ident()?;
+        let channels = self.expect_number()? as usize;
+        if channels == 0 {
+            return Err(self.error("bus must have at least 1 channel"));
+        }
+        Ok(BusDecl { name, channels })
+    }
+
+    /// Parse a route declaration: `route NAME (=> NAME)+`
+    fn parse_route_decl(&mut self) -> Result<RouteDecl, ParseError> {
+        self.expect(Token::Route)?;
+        let mut chain = Vec::new();
+        chain.push(self.expect_ident()?);
+
+        // Expect at least one => NAME
+        if !self.check(&Token::FatArrow) {
+            return Err(self.error("expected '=>' in route declaration"));
+        }
+
+        while self.check(&Token::FatArrow) {
+            self.advance(); // consume =>
+            chain.push(self.expect_ident()?);
+        }
+
+        if chain.len() < 3 {
+            return Err(self.error(
+                "route must have at least 3 elements: source => effect => target",
+            ));
+        }
+
+        Ok(RouteDecl { chain })
     }
 
     /// Parse the body of a synthdef: delegates to parse_expr which handles
