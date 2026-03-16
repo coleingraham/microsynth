@@ -1342,3 +1342,151 @@ fn test_dsl_overdrive_compiles() {
     let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "overdrive DSL synth should produce output");
 }
+
+// ============================================================================
+// Band-limited oscillator tests
+// ============================================================================
+
+#[test]
+fn test_blsaw_range() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let osc = engine.graph_mut().add_node(Box::new(BlSaw::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().set_sink(osc);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    for &s in &output[0] {
+        assert!(s >= -1.01 && s <= 1.01, "BlSaw sample {s} out of range");
+    }
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.5, "BlSaw should produce significant output, max was {max}");
+}
+
+#[test]
+fn test_blpulse_square_symmetry() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let width = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let osc = engine.graph_mut().add_node(Box::new(BlPulse::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(width, osc, 1);
+    engine.graph_mut().set_sink(osc);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    let positive = output[0].iter().filter(|&&s| s > 0.0).count();
+    let negative = output[0].iter().filter(|&&s| s < 0.0).count();
+    let total = positive + negative;
+    // With width=0.5, expect roughly equal positive and negative samples
+    let ratio = positive as f32 / total as f32;
+    assert!(
+        ratio > 0.4 && ratio < 0.6,
+        "BlPulse with width=0.5 should be ~symmetric, got ratio {ratio}"
+    );
+}
+
+#[test]
+fn test_bltri_range() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let osc = engine.graph_mut().add_node(Box::new(BlTri::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().set_sink(osc);
+    engine.prepare();
+
+    let output = engine.render_offline(20);
+    for &s in &output[0] {
+        assert!(s >= -1.5 && s <= 1.5, "BlTri sample {s} out of range");
+    }
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.3, "BlTri should produce significant output, max was {max}");
+}
+
+// ============================================================================
+// Physical model tests
+// ============================================================================
+
+#[test]
+fn test_pluck_trigger_produces_output() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let decay = engine.graph_mut().add_node(Box::new(Const::new(0.99)));
+    let trig = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let pluck = engine.graph_mut().add_node(Box::new(Pluck::new()));
+    engine.graph_mut().connect(freq, pluck, 0);
+    engine.graph_mut().connect(decay, pluck, 1);
+    engine.graph_mut().connect(trig, pluck, 2);
+    engine.graph_mut().set_sink(pluck);
+    engine.prepare();
+
+    let output = engine.render_offline(4);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.01, "Pluck should produce output after trigger, max was {max}");
+}
+
+#[test]
+fn test_pluck_decays_to_silence() {
+    let config = EngineConfig { sample_rate: 44100.0, block_size: 64 };
+    let mut engine = Engine::new(config);
+    // Use Impulse at very low freq to trigger once at the start
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let decay = engine.graph_mut().add_node(Box::new(Const::new(0.95)));
+    let trig = engine.graph_mut().add_node(Box::new(Impulse::new()));
+    let trig_freq = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    engine.graph_mut().connect(trig_freq, trig, 0);
+    let pluck = engine.graph_mut().add_node(Box::new(Pluck::new()));
+    engine.graph_mut().connect(freq, pluck, 0);
+    engine.graph_mut().connect(decay, pluck, 1);
+    engine.graph_mut().connect(trig, pluck, 2);
+    engine.graph_mut().set_sink(pluck);
+    engine.prepare();
+
+    // Render many blocks to let it decay
+    let output = engine.render_offline(500);
+    // Check the last 64 samples are near-silent
+    let tail = &output[0][output[0].len() - 64..];
+    let tail_max = tail.iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        tail_max < 0.01,
+        "Pluck should decay to near-silence, tail max was {tail_max}"
+    );
+}
+
+#[test]
+fn test_bowed_produces_output() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(220.0)));
+    let pressure = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let position = engine.graph_mut().add_node(Box::new(Const::new(0.13)));
+    let bowed = engine.graph_mut().add_node(Box::new(Bowed::new()));
+    engine.graph_mut().connect(freq, bowed, 0);
+    engine.graph_mut().connect(pressure, bowed, 1);
+    engine.graph_mut().connect(position, bowed, 2);
+    engine.graph_mut().set_sink(bowed);
+    engine.prepare();
+
+    // Bowed model needs some blocks to start oscillating
+    let output = engine.render_offline(50);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.001, "Bowed should produce output with pressure=0.5, max was {max}");
+}
+
+#[test]
+fn test_bowed_silence_at_zero_pressure() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(220.0)));
+    let pressure = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let position = engine.graph_mut().add_node(Box::new(Const::new(0.13)));
+    let bowed = engine.graph_mut().add_node(Box::new(Bowed::new()));
+    engine.graph_mut().connect(freq, bowed, 0);
+    engine.graph_mut().connect(pressure, bowed, 1);
+    engine.graph_mut().connect(position, bowed, 2);
+    engine.graph_mut().set_sink(bowed);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max < 0.01, "Bowed should be near-silent with pressure=0, max was {max}");
+}
