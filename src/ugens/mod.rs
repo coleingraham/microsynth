@@ -7,12 +7,14 @@
 //! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, CombFilter, GVerb, Compressor
 //! - `envelopes`: Line, Perc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
+//! - `distortion`: SoftClip, Overdrive
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 
 pub mod bus;
 pub mod delay;
+pub mod distortion;
 pub mod envelopes;
 pub mod filters;
 pub mod math;
@@ -25,6 +27,7 @@ pub mod wavetable;
 // Re-export everything for convenience.
 pub use bus::*;
 pub use delay::*;
+pub use distortion::*;
 pub use envelopes::*;
 pub use filters::*;
 pub use math::*;
@@ -294,6 +297,28 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
             InputSpec { name: "attack", rate: Rate::Audio },
             InputSpec { name: "release", rate: Rate::Audio },
             InputSpec { name: "makeup", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Distortion --
+    reg.register(
+        "softClip",
+        || Box::new(SoftClip::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "drive", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "overdrive",
+        || Box::new(Overdrive::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "drive", rate: Rate::Audio },
+            InputSpec { name: "tone", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
