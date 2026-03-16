@@ -1077,3 +1077,268 @@ fn test_overdrive_asymmetry() {
         "overdrive should be asymmetric: pos={pos}, neg={neg}"
     );
 }
+
+#[test]
+fn test_softclip_zero_input() {
+    // tanh(0) = 0 regardless of drive
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(100.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let s = output.channel(0).samples()[0];
+    assert!(s.abs() < 1e-6, "tanh(0) should be 0, got {s}");
+}
+
+#[test]
+fn test_softclip_zero_drive() {
+    // drive=0 means tanh(0 * x) = tanh(0) = 0 for any input
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.8)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let s = output.channel(0).samples()[0];
+    assert!(s.abs() < 1e-6, "drive=0 should produce silence, got {s}");
+}
+
+#[test]
+fn test_softclip_negative_input_bounds() {
+    // Large negative input should be bounded to [-1, 0)
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(-10.0)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let s = output.channel(0).samples()[0];
+    assert!(s >= -1.0 && s <= 0.0, "tanh(-10) should be in [-1, 0], got {s}");
+    assert!(s < -0.99, "tanh(-10) should be near -1.0, got {s}");
+}
+
+#[test]
+fn test_softclip_with_oscillator() {
+    // SoftClip on a sine oscillator should produce bounded output
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(osc, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    for &s in &output[0] {
+        assert!(s >= -1.0 && s <= 1.0, "softclip on oscillator should be bounded, got {s}");
+    }
+    // Should have non-trivial output
+    let max = output[0].iter().copied().fold(0.0f32, f32::max);
+    assert!(max > 0.3, "softclip on sine should produce output, max={max}");
+}
+
+#[test]
+fn test_overdrive_zero_drive() {
+    // drive=0 means gained=0 for all input, so clipped=0, tone filter → 0, output=mix*0=0
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.8)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render_offline(5);
+    let last = *output[0].last().unwrap();
+    assert!(last.abs() < 0.01, "drive=0, mix=1 should produce near silence, got {last}");
+}
+
+#[test]
+fn test_overdrive_tone_dark_vs_bright() {
+    // Run a saw through overdrive with high drive to generate harmonics,
+    // then compare dark (tone=0) vs bright (tone=1). Dark should have lower RMS.
+    let render_with_tone = |tone_val: f32| -> f32 {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+        let osc = engine.graph_mut().add_node(Box::new(Saw::new()));
+        engine.graph_mut().connect(freq, osc, 0);
+
+        let drive = engine.graph_mut().add_node(Box::new(Const::new(8.0)));
+        let tone = engine.graph_mut().add_node(Box::new(Const::new(tone_val)));
+        let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+        let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+        engine.graph_mut().connect(osc, od, 0);
+        engine.graph_mut().connect(drive, od, 1);
+        engine.graph_mut().connect(tone, od, 2);
+        engine.graph_mut().connect(mix, od, 3);
+        engine.graph_mut().set_sink(od);
+        engine.prepare();
+
+        // Render enough blocks for tone filter to settle
+        let output = engine.render_offline(20);
+        // Compute RMS of last block
+        let samples = &output[0][output[0].len() - 128..];
+        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+        (sum_sq / samples.len() as f32).sqrt()
+    };
+
+    let rms_dark = render_with_tone(0.0);
+    let rms_bright = render_with_tone(1.0);
+
+    assert!(
+        rms_bright > rms_dark,
+        "bright tone should have higher RMS than dark: bright={rms_bright}, dark={rms_dark}"
+    );
+}
+
+#[test]
+fn test_overdrive_half_mix() {
+    // mix=0.5 should blend dry and wet equally
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.4)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(1.0))); // bright to minimize filter lag
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    let s = *output[0].last().unwrap();
+    // Output should be between dry (0.4) and fully wet value
+    // At mix=0.5: out = 0.5 * 0.4 + 0.5 * wet
+    // wet is tanh(5*0.4) = tanh(2.0) ≈ 0.964 (positive side)
+    // So output ≈ 0.2 + 0.5 * ~0.964 ≈ 0.682
+    assert!(s > 0.2 && s < 0.95, "half mix should blend dry and wet, got {s}");
+    // Should differ from both pure dry (0.4) and pure wet
+    assert!((s - 0.4).abs() > 0.05, "half mix should differ from dry, got {s}");
+}
+
+#[test]
+fn test_overdrive_negative_clipping_bounded() {
+    // Very large negative input: cubic clip on negative side clamps at -1.5,
+    // so output of clipping stage is bounded. Verify with settled tone filter.
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(-10.0)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render_offline(20);
+    let last = *output[0].last().unwrap();
+    // Cubic soft clip of -1.5: -1.5 - (-1.5)^3/3.375 = -1.5 - (-3.375/3.375) = -1.5 + 1.0 = -0.5
+    // After tone filter settles to this constant, output should be near -1.0
+    assert!(last >= -1.5 && last <= 0.0, "negative clipping should be bounded, got {last}");
+}
+
+#[test]
+fn test_overdrive_with_oscillator() {
+    // Overdrive on a sine should produce non-silent bounded output
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(osc, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.1, "overdrive on sine should produce output, max={max}");
+    assert!(max <= 1.5, "overdrive output should be bounded, max={max}");
+}
+
+#[test]
+fn test_dsl_softclip_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef distorted freq=440.0 =
+            let sig = sinOsc freq 0.0
+            softClip sig 3.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "distorted");
+
+    // Render to verify no crash
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "softClip DSL synth should produce output");
+}
+
+#[test]
+fn test_dsl_overdrive_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef overdriven freq=440.0 =
+            let sig = saw freq
+            overdrive sig 5.0 0.5 1.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "overdriven");
+
+    // Render to verify no crash
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "overdrive DSL synth should produce output");
+}
