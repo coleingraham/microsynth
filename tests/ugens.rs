@@ -882,3 +882,198 @@ fn test_dsl_compressor_compiles() {
     let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "compressed synth should produce output");
 }
+
+// ============================================================================
+// Distortion tests
+// ============================================================================
+
+#[test]
+fn test_softclip_bounds() {
+    // A loud constant (10.0) through SoftClip should be bounded to (-1, 1)
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let samples = output.channel(0).samples();
+    for &s in samples {
+        assert!(s >= -1.0 && s <= 1.0, "softclip output should be in [-1,1], got {s}");
+    }
+    // tanh(10) should be very close to 1
+    assert!(samples[0] > 0.99, "tanh(10) should be near 1.0, got {}", samples[0]);
+}
+
+#[test]
+fn test_softclip_passes_small_signals() {
+    // tanh(0.1) ≈ 0.0997 — nearly linear for small signals
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let s = output.channel(0).samples()[0];
+    assert!((s - 0.1).abs() < 0.01, "small signal should pass nearly unchanged, got {s}");
+}
+
+#[test]
+fn test_softclip_drive_increases_saturation() {
+    // Low drive
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+    let out_low = engine.render().unwrap().channel(0).samples()[0];
+
+    // High drive
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+    let out_high = engine.render().unwrap().channel(0).samples()[0];
+
+    assert!(
+        out_high > out_low,
+        "higher drive should produce more saturation: low={out_low}, high={out_high}"
+    );
+    assert!(out_high > 0.99, "drive=10 on 0.5 should be near 1.0, got {out_high}");
+}
+
+#[test]
+fn test_softclip_symmetry() {
+    // Positive input
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.7)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+    let pos = engine.render().unwrap().channel(0).samples()[0];
+
+    // Negative input
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(-0.7)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+    let sc = engine.graph_mut().add_node(Box::new(SoftClip::new()));
+    engine.graph_mut().connect(input, sc, 0);
+    engine.graph_mut().connect(drive, sc, 1);
+    engine.graph_mut().set_sink(sc);
+    engine.prepare();
+    let neg = engine.render().unwrap().channel(0).samples()[0];
+
+    assert!(
+        (pos + neg).abs() < 1e-6,
+        "softclip should be symmetric: pos={pos}, neg={neg}"
+    );
+}
+
+#[test]
+fn test_overdrive_bounded_output() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render_offline(4);
+    for &s in &output[0] {
+        assert!(
+            s.abs() <= 1.5,
+            "overdrive output should be bounded, got {s}"
+        );
+    }
+}
+
+#[test]
+fn test_overdrive_dry_wet_mix() {
+    let config = EngineConfig::default();
+
+    // mix = 0.0 should pass input through unchanged
+    let mut engine = Engine::new(config);
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.3)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+
+    let output = engine.render().unwrap();
+    let s = output.channel(0).samples()[0];
+    assert!(
+        (s - 0.3).abs() < 1e-6,
+        "mix=0 should pass dry signal, got {s}"
+    );
+}
+
+#[test]
+fn test_overdrive_asymmetry() {
+    // Positive input
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(1.0))); // bright to minimize filter effect
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+    // Render several blocks to let the tone filter settle
+    let out_pos = engine.render_offline(10);
+    let pos = *out_pos[0].last().unwrap();
+
+    // Negative input
+    let mut engine = Engine::new(EngineConfig::default());
+    let input = engine.graph_mut().add_node(Box::new(Const::new(-0.5)));
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+    let tone = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let od = engine.graph_mut().add_node(Box::new(Overdrive::new()));
+    engine.graph_mut().connect(input, od, 0);
+    engine.graph_mut().connect(drive, od, 1);
+    engine.graph_mut().connect(tone, od, 2);
+    engine.graph_mut().connect(mix, od, 3);
+    engine.graph_mut().set_sink(od);
+    engine.prepare();
+    let out_neg = engine.render_offline(10);
+    let neg = *out_neg[0].last().unwrap();
+
+    // Asymmetric clipping: |pos| != |neg|
+    assert!(
+        (pos.abs() - neg.abs()).abs() > 0.01,
+        "overdrive should be asymmetric: pos={pos}, neg={neg}"
+    );
+}
