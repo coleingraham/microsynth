@@ -3,6 +3,7 @@
 //! Organized by category:
 //! - `math`: Const, BinOp, Neg (arithmetic primitives)
 //! - `oscillators`: SinOsc, Saw, Pulse, Tri, Phasor
+//! - `bl_oscillators`: BlSaw, BlPulse, BlTri (band-limited via polyBLEP)
 //! - `noise`: WhiteNoise, PinkNoise
 //! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, CombFilter, GVerb, Compressor
 //! - `envelopes`: Line, Perc, ASR, ADSR
@@ -11,7 +12,9 @@
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
+//! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 
+pub mod bl_oscillators;
 pub mod bus;
 pub mod delay;
 pub mod distortion;
@@ -20,11 +23,14 @@ pub mod filters;
 pub mod math;
 pub mod noise;
 pub mod oscillators;
+pub mod physical;
 pub mod playbuf;
+pub(crate) mod rng;
 pub mod utility;
 pub mod wavetable;
 
 // Re-export everything for convenience.
+pub use bl_oscillators::*;
 pub use bus::*;
 pub use delay::*;
 pub use distortion::*;
@@ -33,6 +39,7 @@ pub use filters::*;
 pub use math::*;
 pub use noise::*;
 pub use oscillators::*;
+pub use physical::*;
 pub use playbuf::*;
 pub use utility::*;
 pub use wavetable::*;
@@ -84,6 +91,51 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "phasor",
         || Box::new(Phasor::new()),
         &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Band-limited Oscillators (polyBLEP) --
+    reg.register(
+        "blSaw",
+        || Box::new(BlSaw::new()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "blPulse",
+        || Box::new(BlPulse::new()),
+        &[
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "width", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "blTri",
+        || Box::new(BlTri::new()),
+        &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Physical Models --
+    reg.register(
+        "pluck",
+        || Box::new(Pluck::new()),
+        &[
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "decay", rate: Rate::Audio },
+            InputSpec { name: "trig", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "bowed",
+        || Box::new(Bowed::new()),
+        &[
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "pressure", rate: Rate::Audio },
+            InputSpec { name: "position", rate: Rate::Audio },
+        ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
 
