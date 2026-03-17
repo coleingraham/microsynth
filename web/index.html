@@ -278,18 +278,127 @@
         input[type="file"] { display: none; }
 
         /* UGen reference */
-        .ugen-list {
+        .ugen-ref {
+            margin-top: 0.75rem;
+        }
+        .ugen-ref-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .ugen-ref-header strong {
+            font-size: 0.8rem;
+        }
+        .ugen-ref-toggle {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            transition: transform 0.15s;
+        }
+        .ugen-ref-toggle.open { transform: rotate(90deg); }
+        .ugen-ref-body {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .ugen-ref-body.open { display: block; }
+        .ugen-ref-categories {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface2);
+        }
+        .ugen-cat-btn {
+            padding: 0.35rem 0.7rem;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            font-size: 0.7rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+        .ugen-cat-btn:hover { color: var(--text); }
+        .ugen-cat-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+        .ugen-cat-content {
+            padding: 0.5rem;
+        }
+        .ugen-card {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.35rem 0.5rem;
+            border-radius: 4px;
+            align-items: baseline;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .ugen-card:hover { background: var(--surface2); }
+        .ugen-card-name {
+            font-family: var(--mono);
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--success);
+            white-space: nowrap;
+            min-width: 100px;
+        }
+        .ugen-card-sig {
+            font-family: var(--mono);
             font-size: 0.7rem;
             color: var(--text-dim);
-            margin-top: 0.75rem;
-            line-height: 1.7;
+            white-space: nowrap;
         }
-        .ugen-list code {
-            background: var(--surface);
-            padding: 0.1rem 0.3rem;
-            border-radius: 3px;
+        .ugen-card-desc {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+        }
+        .ugen-detail {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.6rem 0.75rem;
+            margin: 0.35rem 0.5rem 0.5rem;
+            font-size: 0.75rem;
+        }
+        .ugen-detail-title {
             font-family: var(--mono);
+            font-size: 0.85rem;
+            color: var(--success);
+            font-weight: 600;
+            margin-bottom: 0.3rem;
+        }
+        .ugen-detail-desc {
             color: var(--text);
+            margin-bottom: 0.5rem;
+            line-height: 1.4;
+        }
+        .ugen-detail table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.7rem;
+        }
+        .ugen-detail th {
+            text-align: left;
+            color: var(--text-dim);
+            padding: 0.2rem 0.5rem 0.2rem 0;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+        }
+        .ugen-detail td {
+            padding: 0.2rem 0.5rem 0.2rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .ugen-detail td:first-child {
+            font-family: var(--mono);
+            color: var(--warn);
+            white-space: nowrap;
         }
         .section-label {
             font-size: 0.75rem;
@@ -328,6 +437,8 @@
                     <option value="perc_hit">Perc hit (one-shot)</option>
                     <option value="kick">Kick drum</option>
                     <option value="hihat">Hi-hat</option>
+                    <option value="pluck">Plucked string</option>
+                    <option value="bowed">Bowed string</option>
                 </select>
                 <div class="toolbar-spacer"></div>
                 <div class="file-controls">
@@ -449,18 +560,7 @@
             <canvas id="scope"></canvas>
         </div>
 
-        <div class="ugen-list">
-            <strong>Available UGens:</strong>
-            <code>sinOsc</code> <code>saw</code> <code>pulse</code> <code>tri</code> <code>phasor</code>
-            <code>whiteNoise</code> <code>pinkNoise</code>
-            <code>lpf</code> <code>hpf</code> <code>bpf</code> <code>onePole</code>
-            <code>line</code> <code>perc</code> <code>asr</code> <code>adsr</code>
-            <code>delay</code>
-            <code>pan2</code> <code>mix</code> <code>sampleAndHold</code>
-            <code>impulse</code> <code>lag</code> <code>clip</code>
-            <code>waveTable</code>
-            <code>sinTable</code> <code>sawTable</code> <code>triTable</code> <code>squareTable</code>
-        </div>
+        <div class="ugen-ref" id="ugen-ref"></div>
     </div>
 
     <script type="module">
@@ -523,6 +623,16 @@
     let sig = whiteNoise
     let filt = hpf sig 8000.0 1.0
     filt * amp * env`,
+
+            pluck: `synthdef pluck freq=220.0 decay=0.995 amp=0.5 =
+    let trig = impulse 0.0
+    let sig = pluck freq decay trig
+    sig * amp`,
+
+            bowed: `synthdef bowed freq=220.0 pressure=0.5 position=0.13 amp=0.4 gate=1.0 =
+    let env = asr gate 0.3 0.3
+    let sig = bowed freq pressure position
+    sig * amp * env`,
         };
 
         // ====================================================================
@@ -1261,6 +1371,158 @@
         }
 
         start();
+
+        // ====================================================================
+        // UGen Reference
+        // ====================================================================
+        const UGEN_DOCS = {
+            Oscillators: [
+                { name: 'sinOsc', args: [['freq','Hz',440],['phase','radians',0]], desc: 'Sine oscillator with phase offset.' },
+                { name: 'saw', args: [['freq','Hz',440]], desc: 'Naive sawtooth oscillator.' },
+                { name: 'pulse', args: [['freq','Hz',440],['width','0\u20131',0.5]], desc: 'Pulse oscillator with variable width.' },
+                { name: 'tri', args: [['freq','Hz',440]], desc: 'Naive triangle oscillator.' },
+                { name: 'phasor', args: [['freq','Hz',440]], desc: 'Ramp from 0 to 1 at given frequency.' },
+                { name: 'blSaw', args: [['freq','Hz',440]], desc: 'Band-limited sawtooth (polyBLEP anti-aliasing).' },
+                { name: 'blPulse', args: [['freq','Hz',440],['width','0\u20131',0.5]], desc: 'Band-limited pulse with variable width (polyBLEP).' },
+                { name: 'blTri', args: [['freq','Hz',440]], desc: 'Band-limited triangle via integrated polyBLEP square.' },
+            ],
+            Noise: [
+                { name: 'whiteNoise', args: [], desc: 'White noise generator (uniform random \u00b11).' },
+                { name: 'pinkNoise', args: [], desc: 'Pink noise (1/f) via Voss-McCartney algorithm.' },
+            ],
+            Filters: [
+                { name: 'lpf', args: [['in','signal',null],['freq','Hz',1000],['q','resonance',0.707]], desc: 'Second-order lowpass filter.' },
+                { name: 'hpf', args: [['in','signal',null],['freq','Hz',1000],['q','resonance',0.707]], desc: 'Second-order highpass filter.' },
+                { name: 'bpf', args: [['in','signal',null],['freq','Hz',1000],['q','bandwidth',1.0]], desc: 'Second-order bandpass filter (constant peak gain).' },
+                { name: 'onePole', args: [['in','signal',null],['coeff','\u22121\u20131',0.5]], desc: 'One-pole filter. Positive coeff = lowpass, negative = highpass.' },
+                { name: 'combFilter', args: [['in','signal',null],['delay','seconds',0.01],['feedback','\u22120.999\u20130.999',0.5]], desc: 'Feedback comb filter for flanging, Karplus-Strong, and reverb.' },
+            ],
+            Envelopes: [
+                { name: 'line', args: [['start','value',0],['end','value',1],['dur','seconds',1]], desc: 'Linear ramp from start to end over dur seconds. Holds at end.' },
+                { name: 'perc', args: [['attack','seconds',0.001],['release','seconds',0.1]], desc: 'Percussive envelope: attack up, release down. Fires on init.' },
+                { name: 'asr', args: [['gate','0 or 1',null],['attack','seconds',0.01],['release','seconds',0.1]], desc: 'Attack-Sustain-Release envelope with gate control.' },
+                { name: 'adsr', args: [['gate','0 or 1',null],['attack','seconds',0.01],['decay','seconds',0.1],['sustain','0\u20131',0.5],['release','seconds',0.1]], desc: 'Full ADSR envelope with configurable sustain level.' },
+            ],
+            Delay: [
+                { name: 'delay', args: [['in','signal',null],['time','seconds',0.1]], desc: 'Simple delay line with linear interpolation (max 5s).' },
+                { name: 'feedbackDelay', args: [['in','signal',null],['time','seconds',0.25],['feedback','\u22120.999\u20130.999',0.5]], desc: 'Delay line with feedback (max 5s).' },
+            ],
+            Effects: [
+                { name: 'softClip', args: [['in','signal',null],['drive','pre-gain',1.0]], desc: 'Hyperbolic tangent soft clipper with smooth saturation.' },
+                { name: 'overdrive', args: [['in','signal',null],['drive','pre-gain',1.0],['tone','0\u20131',0.5],['mix','dry/wet',1.0]], desc: 'Asymmetric tube-style overdrive with tone control.' },
+                { name: 'compressor', args: [['in','signal',null],['sidechain','signal','in'],['threshold','dB',-10],['ratio','ratio',4],['attack','seconds',0.01],['release','seconds',0.1],['makeup','dB',0]], desc: 'Feed-forward compressor with sidechain support.' },
+                { name: 'gverb', args: [['in','signal',null],['roomsize','0\u20131',0.5],['damping','0\u20131',0.5],['wet','0\u20131',0.3],['dry','0\u20131',0.7]], desc: 'Schroeder-style reverb (8 combs + 4 allpasses).' },
+            ],
+            Physical: [
+                { name: 'pluck', args: [['freq','Hz',440],['decay','0\u20131',0.99],['trig','trigger',null]], desc: 'Karplus-Strong plucked string. Trigger fills delay line with noise burst.' },
+                { name: 'bowed', args: [['freq','Hz',220],['pressure','0\u20131',0.5],['position','0\u20131',0.13]], desc: 'Digital waveguide bowed string with bow friction model.' },
+            ],
+            Utility: [
+                { name: 'pan2', args: [['in','signal',null],['pos','\u22121\u20131',0.0]], desc: 'Equal-power stereo panner (\u22121=left, 0=center, 1=right).' },
+                { name: 'mix', args: [['in','signal',null]], desc: 'Mixes multichannel input down to mono by summing.' },
+                { name: 'sampleAndHold', args: [['in','signal',null],['trig','trigger',null]], desc: 'Captures input when trigger crosses from \u22640 to >0.' },
+                { name: 'impulse', args: [['freq','Hz',1.0]], desc: 'Periodic impulse generator (1.0 once per period, else 0).' },
+                { name: 'lag', args: [['in','signal',null],['time','seconds',0.1]], desc: 'Exponential lag (one-pole smoothing) for parameter smoothing.' },
+                { name: 'clip', args: [['in','signal',null],['lo','min',-1.0],['hi','max',1.0]], desc: 'Hard clipper: clamps signal between lo and hi.' },
+            ],
+            Wavetable: [
+                { name: 'waveTable', args: [['freq','Hz',440]], desc: 'Wavetable oscillator: reads stored waveform at given frequency.' },
+                { name: 'sinTable', args: [['freq','Hz',440]], desc: 'Pre-built wavetable with sine waveform.' },
+                { name: 'sawTable', args: [['freq','Hz',440]], desc: 'Pre-built wavetable with band-limited sawtooth.' },
+                { name: 'triTable', args: [['freq','Hz',440]], desc: 'Pre-built wavetable with band-limited triangle.' },
+                { name: 'squareTable', args: [['freq','Hz',440]], desc: 'Pre-built wavetable with band-limited square.' },
+            ],
+        };
+
+        (function buildUGenRef() {
+            const root = document.getElementById('ugen-ref');
+            const cats = Object.keys(UGEN_DOCS);
+
+            // Header
+            const header = document.createElement('div');
+            header.className = 'ugen-ref-header';
+            header.innerHTML = '<span class="ugen-ref-toggle">&#9654;</span><strong>UGen Reference</strong>';
+            root.appendChild(header);
+
+            const body = document.createElement('div');
+            body.className = 'ugen-ref-body';
+            root.appendChild(body);
+
+            header.addEventListener('click', () => {
+                body.classList.toggle('open');
+                header.querySelector('.ugen-ref-toggle').classList.toggle('open');
+            });
+
+            // Category tabs
+            const catBar = document.createElement('div');
+            catBar.className = 'ugen-ref-categories';
+            body.appendChild(catBar);
+
+            const content = document.createElement('div');
+            content.className = 'ugen-cat-content';
+            body.appendChild(content);
+
+            let openDetail = null;
+
+            function sigStr(ugen) {
+                if (!ugen.args.length) return '';
+                return ugen.args.map(a => a[0]).join(' ');
+            }
+
+            function showCategory(cat) {
+                catBar.querySelectorAll('.ugen-cat-btn').forEach(b =>
+                    b.classList.toggle('active', b.dataset.cat === cat));
+                openDetail = null;
+                content.innerHTML = '';
+                for (const ugen of UGEN_DOCS[cat]) {
+                    const card = document.createElement('div');
+                    card.className = 'ugen-card';
+                    card.innerHTML =
+                        `<span class="ugen-card-name">${ugen.name}</span>` +
+                        `<span class="ugen-card-sig">${sigStr(ugen)}</span>` +
+                        `<span class="ugen-card-desc">\u2014 ${ugen.desc}</span>`;
+                    card.addEventListener('click', () => toggleDetail(ugen, card));
+                    content.appendChild(card);
+                }
+            }
+
+            function toggleDetail(ugen, card) {
+                // Close existing detail
+                const existing = content.querySelector('.ugen-detail');
+                if (existing) {
+                    const wasThisOne = openDetail === ugen.name;
+                    existing.remove();
+                    openDetail = null;
+                    if (wasThisOne) return;
+                }
+                openDetail = ugen.name;
+                const detail = document.createElement('div');
+                detail.className = 'ugen-detail';
+                let html = `<div class="ugen-detail-title">${ugen.name}${ugen.args.length ? ' ' + ugen.args.map(a => a[0]).join(' ') : ''}</div>`;
+                html += `<div class="ugen-detail-desc">${ugen.desc}</div>`;
+                if (ugen.args.length) {
+                    html += '<table><tr><th>Input</th><th>Range / Type</th><th>Default</th></tr>';
+                    for (const [name, range, def] of ugen.args) {
+                        html += `<tr><td>${name}</td><td>${range}</td><td>${def !== null ? def : '\u2014'}</td></tr>`;
+                    }
+                    html += '</table>';
+                } else {
+                    html += '<div style="color:var(--text-dim);font-size:0.7rem;">No inputs.</div>';
+                }
+                card.after(detail);
+            }
+
+            for (const cat of cats) {
+                const btn = document.createElement('button');
+                btn.className = 'ugen-cat-btn';
+                btn.textContent = cat;
+                btn.dataset.cat = cat;
+                btn.addEventListener('click', () => showCategory(cat));
+                catBar.appendChild(btn);
+            }
+
+            showCategory(cats[0]);
+        })();
     </script>
 </body>
 </html>

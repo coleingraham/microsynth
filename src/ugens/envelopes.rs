@@ -1,4 +1,4 @@
-//! Envelope UGens: Line, Perc, ASR, ADSR.
+//! Envelope UGens: Line, XLine, Perc, ExpPerc, ASR, ADSR.
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
@@ -105,6 +105,147 @@ impl UGen for Line {
                 *sample = value;
                 if remaining > 0 {
                     value += self.increment;
+                    remaining -= 1;
+                    if remaining == 0 {
+                        value = self.target;
+                    }
+                }
+            }
+
+            if ch == 0 {
+                self.value = value;
+                self.samples_remaining = remaining;
+                if remaining == 0 && self.initialized {
+                    self.done = true;
+                }
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done
+    }
+}
+
+// --- XLine ---
+
+/// Exponential ramp from `start` to `end` over `dur` seconds, then holds at `end`.
+///
+/// Uses multiplicative interpolation: `value *= ratio` per sample.
+/// If start or end is zero or they differ in sign, values are clamped to ±1e-6.
+///
+/// Reports `is_done()` = true after the ramp completes.
+pub struct XLine {
+    value: f32,
+    ratio: f32,
+    target: f32,
+    samples_remaining: u64,
+    initialized: bool,
+    done: bool,
+    sample_rate: f32,
+}
+
+impl XLine {
+    pub fn new() -> Self {
+        XLine {
+            value: 0.0,
+            ratio: 1.0,
+            target: 1.0,
+            samples_remaining: 0,
+            initialized: false,
+            done: false,
+            sample_rate: 44100.0,
+        }
+    }
+
+    /// Clamp a value away from zero, preserving sign.
+    fn clamp_nonzero(v: f32) -> f32 {
+        if v == 0.0 {
+            1e-6
+        } else if v.abs() < 1e-6 {
+            v.signum() * 1e-6
+        } else {
+            v
+        }
+    }
+}
+
+static XLINE_INPUTS: [InputSpec; 3] = [
+    InputSpec { name: "start", rate: Rate::Audio },
+    InputSpec { name: "end", rate: Rate::Audio },
+    InputSpec { name: "dur", rate: Rate::Audio },
+];
+static XLINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for XLine {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "XLine", inputs: &XLINE_INPUTS, outputs: &XLINE_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.initialized = false;
+        self.done = false;
+    }
+
+    fn reset(&mut self) {
+        self.value = 0.0;
+        self.ratio = 1.0;
+        self.target = 1.0;
+        self.samples_remaining = 0;
+        self.initialized = false;
+        self.done = false;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        if !self.initialized {
+            let raw_start = inputs.first()
+                .map(|b| b.channel(0).samples()[0])
+                .unwrap_or(1.0);
+            let raw_end = inputs.get(1)
+                .map(|b| b.channel(0).samples()[0])
+                .unwrap_or(0.001);
+            let dur = inputs.get(2)
+                .map(|b| b.channel(0).samples()[0])
+                .unwrap_or(1.0)
+                .max(0.0);
+
+            // Ensure same sign and non-zero for exponential interpolation
+            let start = Self::clamp_nonzero(raw_start);
+            let mut end = Self::clamp_nonzero(raw_end);
+            if (start > 0.0) != (end > 0.0) {
+                // Force same sign as start
+                end = end.abs() * start.signum();
+            }
+
+            self.value = start;
+            self.target = end;
+            let total_samples = (dur * self.sample_rate) as u64;
+            if total_samples > 0 {
+                self.ratio = (end / start).powf(1.0 / total_samples as f32);
+                self.samples_remaining = total_samples;
+            } else {
+                self.ratio = 1.0;
+                self.value = end;
+                self.samples_remaining = 0;
+            }
+            self.initialized = true;
+        }
+
+        for ch in 0..output.num_channels() {
+            let mut value = self.value;
+            let mut remaining = self.samples_remaining;
+            let out = output.channel_mut(ch).samples_mut();
+
+            for sample in out.iter_mut() {
+                *sample = value;
+                if remaining > 0 {
+                    value *= self.ratio;
                     remaining -= 1;
                     if remaining == 0 {
                         value = self.target;
@@ -237,6 +378,128 @@ impl UGen for Perc {
                 self.level = level;
                 self.stage = stage;
                 if stage == PercStage::Done {
+                    self.done = true;
+                }
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done
+    }
+}
+
+// --- ExpPerc ---
+
+/// Exponential percussive envelope: linear attack, exponential release.
+///
+/// Attack stage is linear (sub-millisecond, shape inaudible).
+/// Release uses `level *= coeff` where `coeff = exp(-1.0 / (release * sample_rate))`.
+/// Done when level drops below 1e-6.
+///
+/// Reports `is_done()` = true after the release completes.
+pub struct ExpPerc {
+    level: f32,
+    stage: ExpPercStage,
+    done: bool,
+    sample_rate: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ExpPercStage {
+    Attack,
+    Release,
+    Done,
+}
+
+impl ExpPerc {
+    pub fn new() -> Self {
+        ExpPerc {
+            level: 0.0,
+            stage: ExpPercStage::Attack,
+            done: false,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static EXPPERC_INPUTS: [InputSpec; 2] = [
+    InputSpec { name: "attack", rate: Rate::Audio },
+    InputSpec { name: "release", rate: Rate::Audio },
+];
+static EXPPERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for ExpPerc {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "ExpPerc", inputs: &EXPPERC_INPUTS, outputs: &EXPPERC_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.level = 0.0;
+        self.stage = ExpPercStage::Attack;
+        self.done = false;
+    }
+
+    fn reset(&mut self) {
+        self.level = 0.0;
+        self.stage = ExpPercStage::Attack;
+        self.done = false;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let attack_buf = inputs.first().copied();
+        let release_buf = inputs.get(1).copied();
+
+        for ch in 0..output.num_channels() {
+            let mut level = self.level;
+            let mut stage = self.stage;
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let attack_time = attack_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.001)
+                    .max(0.0001);
+                let release_time = release_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.1)
+                    .max(0.0001);
+
+                match stage {
+                    ExpPercStage::Attack => {
+                        let rate = 1.0 / (attack_time * self.sample_rate);
+                        level += rate;
+                        if level >= 1.0 {
+                            level = 1.0;
+                            stage = ExpPercStage::Release;
+                        }
+                    }
+                    ExpPercStage::Release => {
+                        let coeff = (-1.0 / (release_time * self.sample_rate)).exp();
+                        level *= coeff;
+                        if level < 1e-6 {
+                            level = 0.0;
+                            stage = ExpPercStage::Done;
+                        }
+                    }
+                    ExpPercStage::Done => {
+                        level = 0.0;
+                    }
+                }
+
+                out[i] = level;
+            }
+
+            if ch == 0 {
+                self.level = level;
+                self.stage = stage;
+                if stage == ExpPercStage::Done {
                     self.done = true;
                 }
             }

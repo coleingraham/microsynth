@@ -6,7 +6,7 @@
 //! - `bl_oscillators`: BlSaw, BlPulse, BlTri (band-limited via polyBLEP)
 //! - `noise`: WhiteNoise, PinkNoise
 //! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, CombFilter, GVerb, Compressor
-//! - `envelopes`: Line, Perc, ASR, ADSR
+//! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
@@ -232,8 +232,27 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
     reg.register(
+        "xLine",
+        || Box::new(XLine::new()),
+        &[
+            InputSpec { name: "start", rate: Rate::Audio },
+            InputSpec { name: "end", rate: Rate::Audio },
+            InputSpec { name: "dur", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
         "perc",
         || Box::new(Perc::new()),
+        &[
+            InputSpec { name: "attack", rate: Rate::Audio },
+            InputSpec { name: "release", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "expPerc",
+        || Box::new(ExpPerc::new()),
         &[
             InputSpec { name: "attack", rate: Rate::Audio },
             InputSpec { name: "release", rate: Rate::Audio },
