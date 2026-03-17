@@ -73,6 +73,9 @@ static BUS_NODE: WasmCell<Option<crate::node::NodeId>> = WasmCell::new(None);
 static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::SynthDef>>> =
     WasmCell::new(None);
 
+/// Master effect synth (inserted between bus and graph sink).
+static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(None);
+
 /// Initialize the engine with a Bus node as the graph sink.
 /// Call once before `ms_register_def` / `ms_spawn_voice_named`.
 #[unsafe(no_mangle)]
@@ -143,6 +146,84 @@ pub unsafe extern "C" fn ms_register_def(
 
     def_registry.insert(AllocString::from(name), defs.into_iter().next().unwrap());
     0
+}
+
+/// Set a named SynthDef as the master effect, wired between the bus and graph output.
+/// Returns 0 on success, 1 on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_set_bus_master(
+    name_ptr: *const u8,
+    name_len: usize,
+) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let def = match def_registry.get(name) {
+        Some(d) => d,
+        None => return 1,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 1,
+    };
+
+    let synth = engine.instantiate_synthdef(def);
+
+    // Wire bus output → synth's audioIn node
+    if let Some(audio_in_node) = synth.audio_input_node("in") {
+        engine.graph_mut().connect(bus_id, audio_in_node, 0);
+    } else {
+        return 1;
+    }
+
+    // Set the synth's output as the new graph sink
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+
+    unsafe {
+        *MASTER_SYNTH.get_mut() = Some(synth);
+    }
+
+    0
+}
+
+/// Set a parameter on the master effect synth.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_master_param(
+    param_ptr: *const u8,
+    param_len: usize,
+    value: f32,
+) {
+    let param_bytes = unsafe { core::slice::from_raw_parts(param_ptr, param_len) };
+    let param = match core::str::from_utf8(param_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let synth = match unsafe { MASTER_SYNTH.get_mut() }.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+    let node_id = match synth.param_node(param) {
+        Some(id) => id,
+        None => return,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    engine.graph_mut().set_node_value(node_id, value);
 }
 
 /// Spawn a voice from a named SynthDef onto the bus.
