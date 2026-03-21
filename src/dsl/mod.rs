@@ -311,6 +311,61 @@
 //! pingPongDelay sig 0.25 0.4 0.4  -- bouncing delay
 //! ```
 //!
+//! ## LFO (Low Frequency Oscillator)
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `lfo` | `freq` (Hz), `shape` (0–3) | Multi-shape unipolar LFO \[0, 1\] |
+//!
+//! Dedicated modulation source with unipolar \[0, 1\] output. Shape selects waveform:
+//! 0=sine, 1=triangle, 2=sawtooth, 3=square. Non-integer values crossfade.
+//!
+//! ```text
+//! -- Wobble bass: LFO modulates filter cutoff
+//! synthdef wobbleBass freq=55.0 rate=5.0 =
+//!   let osc = blSaw freq
+//!   let mod = lfo rate 0.0
+//!   let cutoff = mod * 4000.0 + 100.0
+//!   lpf osc cutoff 8.0
+//!
+//! -- Stepped wobble: quantized LFO steps
+//! synthdef steppedWobble freq=55.0 rate=4.0 steps=8.0 =
+//!   let osc = blSaw freq
+//!   let mod = lfo rate 2.0
+//!   let stepped = sampleAndHold mod (impulse steps)
+//!   let cutoff = stepped * 4000.0 + 100.0
+//!   lpf osc cutoff 8.0
+//!
+//! -- Square LFO for tremolo gating
+//! lfo 4.0 3.0                       -- 4Hz square gate
+//! ```
+//!
+//! ## Distortion
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `softClip` | `in`, `drive` | Hyperbolic tangent soft clipper, output bounded to (-1, 1) |
+//! | `overdrive` | `in`, `drive`, `tone`, `mix` | Asymmetric tube-style overdrive with tone and mix |
+//! | `waveFolder` | `in`, `drive`, `symmetry` | Wavefolder distortion for aggressive harmonic generation |
+//!
+//! `waveFolder` folds the signal back at ±1 instead of clipping. At high drive
+//! values it creates the dense, metallic harmonic content characteristic of neuro
+//! bass and Buchla-style timbres. `symmetry` (default 0.0) adds DC offset before
+//! folding to introduce even harmonics.
+//!
+//! ```text
+//! softClip sig 3.0              -- warm tanh saturation
+//! overdrive sig 4.0 0.5 1.0     -- tube-style overdrive
+//! waveFolder sig 1.0 0.0        -- gentle fold, odd harmonics only
+//! waveFolder sig 4.0 0.0        -- aggressive neuro bass folding
+//! waveFolder sig 3.0 0.3        -- asymmetric fold, even+odd harmonics
+//!
+//! -- FM Neuro Bass: FM synthesis into wavefolder
+//! synthdef neuroBass freq=55.0 =
+//!   let fm = fmOsc freq 1.0 5.0 0.5
+//!   waveFolder fm 3.0 0.0
+//! ```
+//!
 //! ## Bitcrusher
 //!
 //! | Name | Inputs | Description |

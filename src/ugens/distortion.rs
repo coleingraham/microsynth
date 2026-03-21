@@ -1,6 +1,6 @@
-//! Distortion UGens: SoftClip, Overdrive.
+//! Distortion UGens: SoftClip, Overdrive, WaveFolder.
 //!
-//! Soft clipping and overdrive effects for adding harmonic saturation.
+//! Soft clipping, overdrive, and wavefolder effects for adding harmonic saturation.
 //! These complement the hard `Clip` UGen in `utility`.
 
 use crate::buffer::AudioBuffer;
@@ -175,6 +175,82 @@ impl UGen for Overdrive {
 
             if ch == 0 {
                 self.y1 = y1;
+            }
+        }
+    }
+}
+
+// --- WaveFolder ---
+
+/// Wavefolder distortion for aggressive harmonic generation.
+///
+/// When the driven signal exceeds ±1.0 it "folds" back instead of clipping,
+/// creating dense harmonic content characteristic of neuro bass and Buchla-style
+/// timbres. The fold formula uses `sin` for smooth, continuous folding:
+///
+///   `out = sin(π/2 * drive * in)`
+///
+/// At drive=1.0 the signal passes with mild shaping; at drive=4.0+ the signal
+/// folds multiple times, generating rich odd and even harmonics.
+///
+/// Inputs:
+/// - `in`: audio signal to fold
+/// - `drive`: fold amount (default 1.0). Higher values = more folds = more harmonics.
+/// - `symmetry`: DC offset before folding (default 0.0, range -1 to 1).
+///   Non-zero values break odd-harmonic symmetry, introducing even harmonics.
+pub struct WaveFolder;
+
+impl WaveFolder {
+    pub fn new() -> Self {
+        WaveFolder
+    }
+}
+
+static WAVEFOLDER_INPUTS: [InputSpec; 3] = [
+    InputSpec { name: "in", rate: Rate::Audio },
+    InputSpec { name: "drive", rate: Rate::Audio },
+    InputSpec { name: "symmetry", rate: Rate::Audio },
+];
+static WAVEFOLDER_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+
+impl UGen for WaveFolder {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "WaveFolder", inputs: &WAVEFOLDER_INPUTS, outputs: &WAVEFOLDER_OUTPUTS }
+    }
+
+    fn init(&mut self, _context: &ProcessContext) {}
+    fn reset(&mut self) {}
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let drive_buf = inputs.get(1).copied();
+        let sym_buf = inputs.get(2).copied();
+
+        let half_pi = core::f32::consts::FRAC_PI_2;
+
+        for ch in 0..output.num_channels() {
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let x = in_ch[i];
+                let drive = drive_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1.0)
+                    .max(0.0);
+                let symmetry = sym_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.0)
+                    .clamp(-1.0, 1.0);
+
+                // Apply symmetry offset, then fold via sin
+                let driven = (x + symmetry) * drive;
+                out[i] = (half_pi * driven).sin();
             }
         }
     }

@@ -8,10 +8,11 @@
 //! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, BiquadNotch, AllpassFilter, CombFilter, GVerb, Compressor
 //! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
-//! - `distortion`: SoftClip, Overdrive
+//! - `distortion`: SoftClip, Overdrive, WaveFolder
 //! - `modulation`: Chorus, Flanger, Phaser
 //! - `fm`: FmOsc (two-operator FM synthesis with self-feedback)
 //! - `freqshift`: FreqShift (Hilbert transform frequency shifter)
+//! - `lfo`: Lfo (multi-shape unipolar LFO)
 //! - `stereo`: StereoWidth, PingPongDelay
 //! - `bitcrush`: Bitcrusher (sample rate / bit depth reduction)
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
@@ -28,6 +29,7 @@ pub mod envelopes;
 pub mod filters;
 pub mod fm;
 pub mod freqshift;
+pub mod lfo;
 pub mod math;
 pub mod modulation;
 pub mod noise;
@@ -49,6 +51,7 @@ pub use envelopes::*;
 pub use filters::*;
 pub use fm::*;
 pub use freqshift::*;
+pub use lfo::*;
 pub use math::*;
 pub use modulation::*;
 pub use noise::*;
@@ -521,6 +524,27 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
             InputSpec { name: "drive", rate: Rate::Audio },
             InputSpec { name: "tone", rate: Rate::Audio },
             InputSpec { name: "mix", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "waveFolder",
+        || Box::new(WaveFolder::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "drive", rate: Rate::Audio },
+            InputSpec { name: "symmetry", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- LFO --
+    reg.register(
+        "lfo",
+        || Box::new(Lfo::new()),
+        &[
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "shape", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
