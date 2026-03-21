@@ -5,12 +5,13 @@
 //! - `oscillators`: SinOsc, Saw, Pulse, Tri, Phasor
 //! - `bl_oscillators`: BlSaw, BlPulse, BlTri (band-limited via polyBLEP)
 //! - `noise`: WhiteNoise, PinkNoise
-//! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, CombFilter, GVerb, Compressor
+//! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, BiquadNotch, AllpassFilter, CombFilter, GVerb, Compressor
 //! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive
 //! - `modulation`: Chorus, Flanger, Phaser
-//! - `fm`: FmOsc (two-operator FM synthesis)
+//! - `fm`: FmOsc (two-operator FM synthesis with self-feedback)
+//! - `freqshift`: FreqShift (Hilbert transform frequency shifter)
 //! - `stereo`: StereoWidth, PingPongDelay
 //! - `bitcrush`: Bitcrusher (sample rate / bit depth reduction)
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
@@ -26,6 +27,7 @@ pub mod distortion;
 pub mod envelopes;
 pub mod filters;
 pub mod fm;
+pub mod freqshift;
 pub mod math;
 pub mod modulation;
 pub mod noise;
@@ -46,6 +48,7 @@ pub use distortion::*;
 pub use envelopes::*;
 pub use filters::*;
 pub use fm::*;
+pub use freqshift::*;
 pub use math::*;
 pub use modulation::*;
 pub use noise::*;
@@ -198,6 +201,27 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register(
         "bpf",
         || Box::new(BiquadBPF::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "q", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    reg.register(
+        "notch",
+        || Box::new(BiquadNotch::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "q", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "allpass",
+        || Box::new(AllpassFilter::new()),
         &[
             InputSpec { name: "in", rate: Rate::Audio },
             InputSpec { name: "freq", rate: Rate::Audio },
@@ -392,6 +416,18 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
             InputSpec { name: "freq", rate: Rate::Audio },
             InputSpec { name: "ratio", rate: Rate::Audio },
             InputSpec { name: "index", rate: Rate::Audio },
+            InputSpec { name: "feedback", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Frequency Shifter --
+    reg.register(
+        "freqShift",
+        || Box::new(FreqShift::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "shift", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
