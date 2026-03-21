@@ -9,38 +9,50 @@
 //! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive
+//! - `modulation`: Chorus, Flanger, Phaser
+//! - `fm`: FmOsc (two-operator FM synthesis)
+//! - `stereo`: StereoWidth, PingPongDelay
+//! - `bitcrush`: Bitcrusher (sample rate / bit depth reduction)
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 
+pub mod bitcrush;
 pub mod bl_oscillators;
 pub mod bus;
 pub mod delay;
 pub mod distortion;
 pub mod envelopes;
 pub mod filters;
+pub mod fm;
 pub mod math;
+pub mod modulation;
 pub mod noise;
 pub mod oscillators;
 pub mod physical;
 pub mod playbuf;
 pub(crate) mod rng;
+pub mod stereo;
 pub mod utility;
 pub mod wavetable;
 
 // Re-export everything for convenience.
+pub use bitcrush::*;
 pub use bl_oscillators::*;
 pub use bus::*;
 pub use delay::*;
 pub use distortion::*;
 pub use envelopes::*;
 pub use filters::*;
+pub use fm::*;
 pub use math::*;
+pub use modulation::*;
 pub use noise::*;
 pub use oscillators::*;
 pub use physical::*;
 pub use playbuf::*;
+pub use stereo::*;
 pub use utility::*;
 pub use wavetable::*;
 
@@ -368,6 +380,89 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
             InputSpec { name: "attack", rate: Rate::Audio },
             InputSpec { name: "release", rate: Rate::Audio },
             InputSpec { name: "makeup", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- FM Synthesis --
+    reg.register(
+        "fmOsc",
+        || Box::new(FmOsc::new()),
+        &[
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "ratio", rate: Rate::Audio },
+            InputSpec { name: "index", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Modulation (Chorus, Flanger, Phaser) --
+    reg.register(
+        "chorus",
+        || Box::new(Chorus::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "rate", rate: Rate::Audio },
+            InputSpec { name: "depth", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "flanger",
+        || Box::new(Flanger::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "rate", rate: Rate::Audio },
+            InputSpec { name: "depth", rate: Rate::Audio },
+            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "phaser",
+        || Box::new(Phaser::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "rate", rate: Rate::Audio },
+            InputSpec { name: "depth", rate: Rate::Audio },
+            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Stereo Effects --
+    reg.register(
+        "stereoWidth",
+        || Box::new(StereoWidth::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "width", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "pingPongDelay",
+        || Box::new(PingPongDelay::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "time", rate: Rate::Audio },
+            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Bitcrusher --
+    reg.register(
+        "bitcrusher",
+        || Box::new(Bitcrusher::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "bits", rate: Rate::Audio },
+            InputSpec { name: "downsample", rate: Rate::Audio },
         ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
