@@ -155,6 +155,42 @@ fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
     (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
 }
 
+/// Compute biquad notch (band-reject) coefficients.
+#[inline]
+fn biquad_notch_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+    let w0 = TAU * freq / sample_rate;
+    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
+    let alpha = sin_w0 / (2.0 * q);
+
+    let b0 = 1.0;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    let inv_a0 = 1.0 / a0;
+    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+}
+
+/// Compute biquad allpass coefficients.
+#[inline]
+fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+    let w0 = TAU * freq / sample_rate;
+    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
+    let alpha = sin_w0 / (2.0 * q);
+
+    let b0 = 1.0 - alpha;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 + alpha;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    let inv_a0 = 1.0 / a0;
+    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+}
+
 // --- BiquadLPF ---
 
 /// Second-order Butterworth-style lowpass filter.
@@ -353,6 +389,147 @@ impl UGen for BiquadBPF {
                     .max(0.01);
 
                 let (b0, b1, b2, a1, a2) = biquad_bpf_coeffs(freq, q, sr);
+                out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
+            }
+
+            if ch == 0 {
+                self.state = state;
+            }
+        }
+    }
+}
+
+// --- BiquadNotch ---
+
+/// Second-order notch (band-reject) filter.
+///
+/// Attenuates a narrow band around the center frequency while passing
+/// all other frequencies. The width of the notch is controlled by Q.
+///
+/// Inputs: in (signal), freq (center Hz), q (notch width, default 1.0).
+pub struct BiquadNotch {
+    state: BiquadState,
+    sample_rate: f32,
+}
+
+impl BiquadNotch {
+    pub fn new() -> Self {
+        BiquadNotch { state: BiquadState::new(), sample_rate: 44100.0 }
+    }
+}
+
+impl UGen for BiquadNotch {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "BiquadNotch", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        self.state = BiquadState::new();
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let freq_buf = inputs.get(1).copied();
+        let q_buf = inputs.get(2).copied();
+        let sr = self.sample_rate;
+        let nyquist = sr * 0.5;
+
+        for ch in 0..output.num_channels() {
+            let mut state = self.state;
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let freq = freq_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1000.0)
+                    .clamp(20.0, nyquist - 1.0);
+                let q = q_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1.0)
+                    .max(0.01);
+
+                let (b0, b1, b2, a1, a2) = biquad_notch_coeffs(freq, q, sr);
+                out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
+            }
+
+            if ch == 0 {
+                self.state = state;
+            }
+        }
+    }
+}
+
+// --- AllpassFilter ---
+
+/// Second-order allpass filter.
+///
+/// Passes all frequencies at unity gain but shifts the phase. The phase
+/// shift is frequency-dependent and centered around the specified frequency.
+/// Useful for building phasers, diffusion networks, and custom reverbs.
+///
+/// Inputs: in (signal), freq (center Hz), q (bandwidth, default 0.707).
+pub struct AllpassFilter {
+    state: BiquadState,
+    sample_rate: f32,
+}
+
+impl AllpassFilter {
+    pub fn new() -> Self {
+        AllpassFilter { state: BiquadState::new(), sample_rate: 44100.0 }
+    }
+}
+
+impl UGen for AllpassFilter {
+    fn spec(&self) -> UGenSpec {
+        UGenSpec { name: "AllpassFilter", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+    }
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        self.state = BiquadState::new();
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let freq_buf = inputs.get(1).copied();
+        let q_buf = inputs.get(2).copied();
+        let sr = self.sample_rate;
+        let nyquist = sr * 0.5;
+
+        for ch in 0..output.num_channels() {
+            let mut state = self.state;
+            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let freq = freq_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(1000.0)
+                    .clamp(20.0, nyquist - 1.0);
+                let q = q_buf
+                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
+                    .unwrap_or(0.707)
+                    .max(0.01);
+
+                let (b0, b1, b2, a1, a2) = biquad_allpass_coeffs(freq, q, sr);
                 out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
             }
 

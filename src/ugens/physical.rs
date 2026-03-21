@@ -278,33 +278,31 @@ impl UGen for Bowed {
                 let nut_len = ((total_delay * position) as usize).clamp(1, max_len - 1);
                 let bridge_len = ((total_delay * (1.0 - position)) as usize).clamp(1, max_len - 1);
 
-                // Read returning waves from delay lines
+                // Read returning waves from delay lines (arrived at terminations)
                 let nut_read = (nut_write + max_len - nut_len) % max_len;
                 let nut_out = self.nut_delay[nut_read];
                 let bridge_read = (bridge_write + max_len - bridge_len) % max_len;
                 let bridge_out = self.bridge_delay[bridge_read];
 
-                // Reflections with inversion and lowpass filtering (loss model)
-                // Nut: rigid termination with loss
-                nut_filter = 0.95 * nut_filter + 0.05 * (-nut_out);
-                // Bridge: less lossy
-                bridge_filter = 0.97 * bridge_filter + 0.03 * (-bridge_out);
+                // Reflections at terminations: inversion + one-pole lowpass (loss model)
+                nut_filter = nut_filter * 0.55 + (-nut_out) * 0.45;
+                bridge_filter = bridge_filter * 0.55 + (-bridge_out) * 0.45;
 
-                // String velocity at bow point
+                // String velocity at bow point (sum of incoming waves from both sides)
                 let v_string = nut_filter + bridge_filter;
-                // Bow velocity (normalized by pressure)
                 let v_bow = 0.3 * pressure;
                 let delta_v = v_bow - v_string;
 
                 // Bow-string interaction
                 let force = bow_table(delta_v, pressure) * pressure * 0.3;
 
-                // Inject force into both delay lines
-                self.nut_delay[nut_write] = nut_filter + force;
-                self.bridge_delay[bridge_write] = bridge_filter + force;
+                // Cross-couple: reflected wave from each side passes through
+                // the bow point and enters the opposite delay line
+                self.nut_delay[nut_write] = bridge_filter + force;
+                self.bridge_delay[bridge_write] = nut_filter + force;
 
                 // Output from bridge side (pickup position)
-                out[i] = (bridge_filter + force).clamp(-1.0, 1.0);
+                out[i] = bridge_out.clamp(-1.0, 1.0);
 
                 nut_write = (nut_write + 1) % max_len;
                 bridge_write = (bridge_write + 1) % max_len;

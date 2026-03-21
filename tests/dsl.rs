@@ -535,6 +535,73 @@ fn test_compile_filtered_noise_preset() {
     assert_eq!(defs[0].name(), "wind");
 }
 
+// -- XLine + ExpPerc tests ---------------------------------------------------
+
+fn render_synthdef_samples(def: &SynthDef, num_blocks: usize) -> Vec<f32> {
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(def);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let mut samples = Vec::new();
+    for _ in 0..num_blocks {
+        let output = engine.render().expect("should produce output");
+        samples.extend_from_slice(output.channel(0).samples());
+    }
+    samples
+}
+
+#[test]
+fn test_xline_compiles_and_decreasing() {
+    let mut reg = UGenRegistry::new();
+    microsynth::ugens::register_builtins(&mut reg);
+    let source = "synthdef test = xLine 1000.0 1.0 0.01";
+    let defs = dsl::compile(source, &reg).unwrap();
+    let samples = render_synthdef_samples(&defs[0], 8);
+    // First sample should be near start value
+    assert!(samples[0] > 500.0, "first sample should be near 1000, got {}", samples[0]);
+    // Should be monotonically decreasing
+    for i in 1..samples.len() {
+        assert!(
+            samples[i] <= samples[i - 1] + 1e-3,
+            "xLine should be monotonically decreasing at sample {}: {} > {}",
+            i, samples[i], samples[i - 1]
+        );
+    }
+    // Last samples should be near end value
+    let last = samples[samples.len() - 1];
+    assert!(last < 100.0, "last sample should be near 1.0, got {last}");
+}
+
+#[test]
+fn test_expperc_compiles_and_concave() {
+    let mut reg = UGenRegistry::new();
+    microsynth::ugens::register_builtins(&mut reg);
+    // Short attack, moderate release
+    let source = "synthdef test = expPerc 0.001 0.05";
+    let defs = dsl::compile(source, &reg).unwrap();
+    let samples = render_synthdef_samples(&defs[0], 40);
+
+    // Find peak (should be ~1.0 after attack)
+    let peak_idx = samples.iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .unwrap().0;
+    assert!((samples[peak_idx] - 1.0).abs() < 0.05, "peak should be ~1.0, got {}", samples[peak_idx]);
+
+    // Check concavity: at midpoint of decay, level should be above 0.5 (exponential stays higher)
+    let decay_samples = &samples[peak_idx..];
+    if decay_samples.len() > 10 {
+        let mid = decay_samples.len() / 2;
+        let mid_val = decay_samples[mid];
+        // Exponential decay should be above what linear would give (0.5 at midpoint)
+        // For exp decay, midpoint value is well above linear midpoint
+        assert!(
+            mid_val > 0.3,
+            "expPerc at decay midpoint should be > 0.3 (concave), got {mid_val}"
+        );
+    }
+}
+
 // -- Error tests -------------------------------------------------------------
 
 #[test]

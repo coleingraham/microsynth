@@ -162,6 +162,8 @@
 //! | `lpf` | `in`, `freq` (Hz), `q` | Second-order Butterworth low-pass filter |
 //! | `hpf` | `in`, `freq` (Hz), `q` | Second-order high-pass filter |
 //! | `bpf` | `in`, `freq` (Hz), `q` | Second-order band-pass filter |
+//! | `notch` | `in`, `freq` (Hz), `q` | Second-order notch (band-reject) filter |
+//! | `allpass` | `in`, `freq` (Hz), `q` | Second-order allpass filter (phase shift) |
 //! | `combFilter` | `in`, `delay` (sec), `feedback` | IIR feedback comb filter |
 //! | `gverb` | `in`, `roomsize`, `damping`, `wet`, `dry` | Schroeder reverb (stereo output) |
 //!
@@ -248,6 +250,130 @@
 //!
 //! bus drums 2
 //! route drums => busComp => main
+//! ```
+//!
+//! ## FM Synthesis
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `fmOsc` | `freq` (Hz), `ratio`, `index`, `feedback` | Two-operator FM oscillator with self-feedback |
+//!
+//! The FM oscillator implements phase modulation: a modulator sine wave
+//! modulates the phase of a carrier sine wave. `ratio` sets the modulator
+//! frequency relative to the carrier. `index` controls modulation depth
+//! (brightness). `feedback` feeds the modulator's previous output back
+//! into its own phase for DX7-style harsh/noise timbres.
+//!
+//! ```text
+//! fmOsc 440.0 1.0 2.0 0.0     -- electric piano: ratio=1, index=2
+//! fmOsc 440.0 1.4 5.0 0.0     -- metallic bell: ratio=1.4, index=5
+//! fmOsc 440.0 1.0 3.0 0.5     -- DX7 brass: ratio=1, index=3, feedback=0.5
+//! ```
+//!
+//! ## Frequency Shifter
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `freqShift` | `in`, `shift` (Hz) | Hilbert-transform single-sideband frequency shifter |
+//!
+//! Shifts all frequencies by a fixed Hz offset. Small values (0.5–6 Hz)
+//! simulate Leslie/rotary speaker effects for Hammond organ. Larger values
+//! create metallic, ring-mod-like timbres.
+//!
+//! ```text
+//! freqShift sig 2.0            -- slow Leslie-style shifting
+//! freqShift sig 100.0          -- metallic ring-mod effect
+//! ```
+//!
+//! ## Modulation Effects
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `chorus` | `in`, `rate` (Hz), `depth` (sec), `mix` | Stereo chorus (LFO-modulated delay) |
+//! | `flanger` | `in`, `rate` (Hz), `depth` (sec), `feedback`, `mix` | Flanger (short modulated delay + feedback) |
+//! | `phaser` | `in`, `rate` (Hz), `depth`, `feedback`, `mix` | 4-stage allpass phaser |
+//!
+//! ```text
+//! chorus sig 1.0 0.003 0.5     -- classic chorus: 1Hz rate, 3ms depth
+//! flanger sig 0.3 0.002 0.5 0.5  -- jet flanger
+//! phaser sig 0.4 0.7 0.3 0.5  -- slow phaser sweep
+//! ```
+//!
+//! ## Stereo Effects
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `stereoWidth` | `in`, `width` (0–1) | Stereo widener via Haas effect |
+//! | `pingPongDelay` | `in`, `time` (sec), `feedback`, `mix` | Stereo ping-pong delay |
+//!
+//! ```text
+//! stereoWidth sig 0.7          -- widen stereo image
+//! pingPongDelay sig 0.25 0.4 0.4  -- bouncing delay
+//! ```
+//!
+//! ## LFO (Low Frequency Oscillator)
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `lfo` | `freq` (Hz), `shape` (0–3) | Multi-shape unipolar LFO \[0, 1\] |
+//!
+//! Dedicated modulation source with unipolar \[0, 1\] output. Shape selects waveform:
+//! 0=sine, 1=triangle, 2=sawtooth, 3=square. Non-integer values crossfade.
+//!
+//! ```text
+//! -- Wobble bass: LFO modulates filter cutoff
+//! synthdef wobbleBass freq=55.0 rate=5.0 =
+//!   let osc = blSaw freq
+//!   let mod = lfo rate 0.0
+//!   let cutoff = mod * 4000.0 + 100.0
+//!   lpf osc cutoff 8.0
+//!
+//! -- Stepped wobble: quantized LFO steps
+//! synthdef steppedWobble freq=55.0 rate=4.0 steps=8.0 =
+//!   let osc = blSaw freq
+//!   let mod = lfo rate 2.0
+//!   let stepped = sampleAndHold mod (impulse steps)
+//!   let cutoff = stepped * 4000.0 + 100.0
+//!   lpf osc cutoff 8.0
+//!
+//! -- Square LFO for tremolo gating
+//! lfo 4.0 3.0                       -- 4Hz square gate
+//! ```
+//!
+//! ## Distortion
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `softClip` | `in`, `drive` | Hyperbolic tangent soft clipper, output bounded to (-1, 1) |
+//! | `overdrive` | `in`, `drive`, `tone`, `mix` | Asymmetric tube-style overdrive with tone and mix |
+//! | `waveFolder` | `in`, `drive`, `symmetry` | Wavefolder distortion for aggressive harmonic generation |
+//!
+//! `waveFolder` folds the signal back at ±1 instead of clipping. At high drive
+//! values it creates the dense, metallic harmonic content characteristic of neuro
+//! bass and Buchla-style timbres. `symmetry` (default 0.0) adds DC offset before
+//! folding to introduce even harmonics.
+//!
+//! ```text
+//! softClip sig 3.0              -- warm tanh saturation
+//! overdrive sig 4.0 0.5 1.0     -- tube-style overdrive
+//! waveFolder sig 1.0 0.0        -- gentle fold, odd harmonics only
+//! waveFolder sig 4.0 0.0        -- aggressive neuro bass folding
+//! waveFolder sig 3.0 0.3        -- asymmetric fold, even+odd harmonics
+//!
+//! -- FM Neuro Bass: FM synthesis into wavefolder
+//! synthdef neuroBass freq=55.0 =
+//!   let fm = fmOsc freq 1.0 5.0 0.5
+//!   waveFolder fm 3.0 0.0
+//! ```
+//!
+//! ## Bitcrusher
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `bitcrusher` | `in`, `bits`, `downsample` | Lo-fi bit/sample rate reduction |
+//!
+//! ```text
+//! bitcrusher sig 8.0 4.0       -- 8-bit at 1/4 sample rate
 //! ```
 //!
 //! ## Utility

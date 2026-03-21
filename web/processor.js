@@ -69,6 +69,12 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
             case 'spawnVoiceNamed':
                 this.spawnVoiceNamed(msg.id, msg.name);
                 break;
+            case 'setMasterEffect':
+                this.setMasterEffect(msg.name);
+                break;
+            case 'masterParam':
+                this.masterParam(msg.param, msg.value);
+                break;
             case 'seqStartShell':
                 this.seqStartShell(msg);
                 break;
@@ -213,6 +219,29 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         const voiceId = Number(this.wasm.ms_spawn_voice_named(namePtr, nameLen));
         this.wasm.ms_free(namePtr, nameLen);
         this.port.postMessage({ type: 'voiceSpawned', id: requestId, voiceId });
+    }
+
+    setMasterEffect(name) {
+        if (!this.wasm) {
+            this.port.postMessage({ type: 'error', message: 'WASM not initialized' });
+            return;
+        }
+        const { ptr: namePtr, len: nameLen } = this.writeString(name);
+        const result = this.wasm.ms_set_bus_master(namePtr, nameLen);
+        this.wasm.ms_free(namePtr, nameLen);
+
+        if (result === 0) {
+            this.port.postMessage({ type: 'masterEffectSet', name });
+        } else {
+            this.port.postMessage({ type: 'error', message: `Failed to set master effect: ${name}` });
+        }
+    }
+
+    masterParam(param, value) {
+        if (!this.wasm) return;
+        const { ptr, len } = this.writeString(param);
+        this.wasm.ms_master_param(ptr, len, value);
+        this.wasm.ms_free(ptr, len);
     }
 
     spawnVoiceNamedSync(name) {

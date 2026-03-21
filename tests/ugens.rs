@@ -1490,3 +1490,506 @@ fn test_bowed_silence_at_zero_pressure() {
     let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max < 0.01, "Bowed should be near-silent with pressure=0, max was {max}");
 }
+
+// ============================================================================
+// FmOsc feedback tests
+// ============================================================================
+
+#[test]
+fn test_fmosc_produces_output() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let ratio = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let index = engine.graph_mut().add_node(Box::new(Const::new(2.0)));
+    let feedback = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let fm = engine.graph_mut().add_node(Box::new(FmOsc::new()));
+    engine.graph_mut().connect(freq, fm, 0);
+    engine.graph_mut().connect(ratio, fm, 1);
+    engine.graph_mut().connect(index, fm, 2);
+    engine.graph_mut().connect(feedback, fm, 3);
+    engine.graph_mut().set_sink(fm);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.1, "FmOsc should produce audible output, max was {max}");
+    assert!(max <= 1.0, "FmOsc output should be in [-1, 1], max was {max}");
+}
+
+#[test]
+fn test_fmosc_feedback_changes_timbre() {
+    // Render with feedback=0 and feedback=0.7, compare RMS — they should differ
+    fn render_fm_rms(fb_val: f32) -> f32 {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+        let ratio = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+        let index = engine.graph_mut().add_node(Box::new(Const::new(2.0)));
+        let feedback = engine.graph_mut().add_node(Box::new(Const::new(fb_val)));
+        let fm = engine.graph_mut().add_node(Box::new(FmOsc::new()));
+        engine.graph_mut().connect(freq, fm, 0);
+        engine.graph_mut().connect(ratio, fm, 1);
+        engine.graph_mut().connect(index, fm, 2);
+        engine.graph_mut().connect(feedback, fm, 3);
+        engine.graph_mut().set_sink(fm);
+        engine.prepare();
+
+        let output = engine.render_offline(50);
+        let sum_sq: f32 = output[0].iter().map(|s| s * s).sum();
+        (sum_sq / output[0].len() as f32).sqrt()
+    }
+
+    let rms_no_fb = render_fm_rms(0.0);
+    let rms_with_fb = render_fm_rms(0.7);
+    let diff = (rms_no_fb - rms_with_fb).abs();
+    assert!(
+        diff > 0.01,
+        "Feedback should change timbre: rms_no_fb={rms_no_fb}, rms_with_fb={rms_with_fb}"
+    );
+}
+
+// ============================================================================
+// BiquadNotch tests
+// ============================================================================
+
+#[test]
+fn test_notch_passes_dc() {
+    // A notch filter should pass DC (it only rejects a narrow band).
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(1000.0)));
+    let q = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let filt = engine.graph_mut().add_node(Box::new(BiquadNotch::new()));
+    engine.graph_mut().connect(src, filt, 0);
+    engine.graph_mut().connect(freq, filt, 1);
+    engine.graph_mut().connect(q, filt, 2);
+    engine.graph_mut().set_sink(filt);
+    engine.prepare();
+
+    let output = engine.render_offline(100);
+    let last = *output[0].last().unwrap();
+    assert!(
+        (last - 1.0).abs() < 0.01,
+        "Notch should pass DC, got {last}"
+    );
+}
+
+#[test]
+fn test_notch_attenuates_at_center() {
+    // Feed a sine at the notch frequency — it should be heavily attenuated.
+    let notch_freq = 1000.0;
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(notch_freq)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let filt_freq = engine.graph_mut().add_node(Box::new(Const::new(notch_freq)));
+    let q = engine.graph_mut().add_node(Box::new(Const::new(10.0))); // narrow notch
+    let filt = engine.graph_mut().add_node(Box::new(BiquadNotch::new()));
+    engine.graph_mut().connect(osc, filt, 0);
+    engine.graph_mut().connect(filt_freq, filt, 1);
+    engine.graph_mut().connect(q, filt, 2);
+    engine.graph_mut().set_sink(filt);
+    engine.prepare();
+
+    // Let the filter settle then check output level
+    let output = engine.render_offline(200);
+    let tail: Vec<f32> = output[0].iter().rev().take(64).copied().collect();
+    let rms: f32 = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+    assert!(
+        rms < 0.1,
+        "Notch should heavily attenuate sine at center freq, rms was {rms}"
+    );
+}
+
+// ============================================================================
+// AllpassFilter tests
+// ============================================================================
+
+#[test]
+fn test_allpass_unity_gain() {
+    // An allpass filter should pass all frequencies at unity gain.
+    // Feed a DC signal; after settling, output should equal input.
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(Const::new(0.8)));
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(1000.0)));
+    let q = engine.graph_mut().add_node(Box::new(Const::new(0.707)));
+    let filt = engine.graph_mut().add_node(Box::new(AllpassFilter::new()));
+    engine.graph_mut().connect(src, filt, 0);
+    engine.graph_mut().connect(freq, filt, 1);
+    engine.graph_mut().connect(q, filt, 2);
+    engine.graph_mut().set_sink(filt);
+    engine.prepare();
+
+    let output = engine.render_offline(100);
+    let last = *output[0].last().unwrap();
+    assert!(
+        (last - 0.8).abs() < 0.01,
+        "Allpass should pass DC at unity gain, got {last}"
+    );
+}
+
+#[test]
+fn test_allpass_preserves_rms() {
+    // Feed a sine through allpass — output RMS should be close to input RMS.
+    let mut engine_dry = Engine::new(EngineConfig::default());
+    let freq = engine_dry.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine_dry.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine_dry.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine_dry.graph_mut().connect(freq, osc, 0);
+    engine_dry.graph_mut().connect(phase, osc, 1);
+    engine_dry.graph_mut().set_sink(osc);
+    engine_dry.prepare();
+    let dry_output = engine_dry.render_offline(100);
+    let dry_rms: f32 = (dry_output[0].iter().map(|s| s * s).sum::<f32>() / dry_output[0].len() as f32).sqrt();
+
+    let mut engine_wet = Engine::new(EngineConfig::default());
+    let freq2 = engine_wet.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase2 = engine_wet.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc2 = engine_wet.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine_wet.graph_mut().connect(freq2, osc2, 0);
+    engine_wet.graph_mut().connect(phase2, osc2, 1);
+
+    let filt_freq = engine_wet.graph_mut().add_node(Box::new(Const::new(1000.0)));
+    let q = engine_wet.graph_mut().add_node(Box::new(Const::new(0.707)));
+    let filt = engine_wet.graph_mut().add_node(Box::new(AllpassFilter::new()));
+    engine_wet.graph_mut().connect(osc2, filt, 0);
+    engine_wet.graph_mut().connect(filt_freq, filt, 1);
+    engine_wet.graph_mut().connect(q, filt, 2);
+    engine_wet.graph_mut().set_sink(filt);
+    engine_wet.prepare();
+    let wet_output = engine_wet.render_offline(100);
+    let wet_rms: f32 = (wet_output[0].iter().map(|s| s * s).sum::<f32>() / wet_output[0].len() as f32).sqrt();
+
+    let ratio = wet_rms / dry_rms;
+    assert!(
+        (ratio - 1.0).abs() < 0.05,
+        "Allpass should preserve RMS: dry={dry_rms}, wet={wet_rms}, ratio={ratio}"
+    );
+}
+
+// ============================================================================
+// FreqShift tests
+// ============================================================================
+
+#[test]
+fn test_freqshift_zero_shift_passthrough() {
+    // With shift=0, FreqShift should pass the signal through (approximately).
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let shift = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let fs = engine.graph_mut().add_node(Box::new(FreqShift::new()));
+    engine.graph_mut().connect(osc, fs, 0);
+    engine.graph_mut().connect(shift, fs, 1);
+    engine.graph_mut().set_sink(fs);
+    engine.prepare();
+
+    let output = engine.render_offline(50);
+    let rms: f32 = (output[0].iter().map(|s| s * s).sum::<f32>() / output[0].len() as f32).sqrt();
+    assert!(
+        rms > 0.3,
+        "FreqShift with shift=0 should pass signal through, rms was {rms}"
+    );
+}
+
+#[test]
+fn test_freqshift_produces_output() {
+    // With a non-zero shift, FreqShift should still produce output.
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let shift = engine.graph_mut().add_node(Box::new(Const::new(100.0)));
+    let fs = engine.graph_mut().add_node(Box::new(FreqShift::new()));
+    engine.graph_mut().connect(osc, fs, 0);
+    engine.graph_mut().connect(shift, fs, 1);
+    engine.graph_mut().set_sink(fs);
+    engine.prepare();
+
+    let output = engine.render_offline(50);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.1,
+        "FreqShift should produce audible output with shift=100, max was {max}"
+    );
+}
+
+// ============================================================================
+// WaveFolder tests
+// ============================================================================
+
+#[test]
+fn test_wavefolder_bounded_output() {
+    // Even with high drive, wavefolder output should stay in [-1, 1]
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let drive = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let sym = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let fold = engine.graph_mut().add_node(Box::new(WaveFolder::new()));
+    engine.graph_mut().connect(osc, fold, 0);
+    engine.graph_mut().connect(drive, fold, 1);
+    engine.graph_mut().connect(sym, fold, 2);
+    engine.graph_mut().set_sink(fold);
+    engine.prepare();
+
+    let output = engine.render_offline(10);
+    for s in &output[0] {
+        assert!(
+            s.abs() <= 1.0001,
+            "WaveFolder output should be bounded to [-1,1], got {s}"
+        );
+    }
+}
+
+#[test]
+fn test_wavefolder_drive_increases_harmonics() {
+    // Higher drive should produce more zero crossings (more harmonics)
+    let count_crossings = |drive_val: f32| -> usize {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(100.0)));
+        let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+        let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+        engine.graph_mut().connect(freq, osc, 0);
+        engine.graph_mut().connect(phase, osc, 1);
+
+        let drive = engine.graph_mut().add_node(Box::new(Const::new(drive_val)));
+        let sym = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+        let fold = engine.graph_mut().add_node(Box::new(WaveFolder::new()));
+        engine.graph_mut().connect(osc, fold, 0);
+        engine.graph_mut().connect(drive, fold, 1);
+        engine.graph_mut().connect(sym, fold, 2);
+        engine.graph_mut().set_sink(fold);
+        engine.prepare();
+
+        let output = engine.render_offline(10);
+        let samples = &output[0];
+        let mut crossings = 0;
+        for w in samples.windows(2) {
+            if (w[0] >= 0.0) != (w[1] >= 0.0) {
+                crossings += 1;
+            }
+        }
+        crossings
+    };
+
+    let low_drive = count_crossings(1.0);
+    let high_drive = count_crossings(4.0);
+    assert!(
+        high_drive > low_drive,
+        "Higher drive should produce more zero crossings: low={low_drive}, high={high_drive}"
+    );
+}
+
+#[test]
+fn test_wavefolder_symmetry_changes_output() {
+    // With symmetry != 0, output should differ from symmetry == 0
+    let render_with_sym = |sym_val: f32| -> Vec<f32> {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(100.0)));
+        let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+        let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+        engine.graph_mut().connect(freq, osc, 0);
+        engine.graph_mut().connect(phase, osc, 1);
+
+        let drive = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+        let sym = engine.graph_mut().add_node(Box::new(Const::new(sym_val)));
+        let fold = engine.graph_mut().add_node(Box::new(WaveFolder::new()));
+        engine.graph_mut().connect(osc, fold, 0);
+        engine.graph_mut().connect(drive, fold, 1);
+        engine.graph_mut().connect(sym, fold, 2);
+        engine.graph_mut().set_sink(fold);
+        engine.prepare();
+
+        engine.render_offline(5)
+            .into_iter()
+            .flatten()
+            .collect()
+    };
+
+    let sym_0 = render_with_sym(0.0);
+    let sym_05 = render_with_sym(0.5);
+
+    // Outputs should differ
+    let diff: f32 = sym_0.iter().zip(sym_05.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>() / sym_0.len() as f32;
+    assert!(
+        diff > 0.01,
+        "Different symmetry values should produce different output, avg diff was {diff}"
+    );
+}
+
+// ============================================================================
+// LFO tests
+// ============================================================================
+
+#[test]
+fn test_lfo_unipolar_sine() {
+    // LFO with shape=0 (sine) should output in [0, 1]
+    // 5 Hz LFO needs ~140 blocks (64 samples each) for one full cycle at 44100 Hz
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let shape = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let lfo_node = engine.graph_mut().add_node(Box::new(Lfo::new()));
+    engine.graph_mut().connect(freq, lfo_node, 0);
+    engine.graph_mut().connect(shape, lfo_node, 1);
+    engine.graph_mut().set_sink(lfo_node);
+    engine.prepare();
+
+    let output = engine.render_offline(200);
+    let mut min = f32::MAX;
+    let mut max = f32::MIN;
+    for s in &output[0] {
+        min = min.min(*s);
+        max = max.max(*s);
+    }
+    assert!(min >= -0.001, "LFO sine min should be >= 0, got {min}");
+    assert!(max <= 1.001, "LFO sine max should be <= 1, got {max}");
+    assert!(max > 0.9, "LFO sine should reach near 1.0, got max={max}");
+    assert!(min < 0.1, "LFO sine should reach near 0.0, got min={min}");
+}
+
+#[test]
+fn test_lfo_unipolar_all_shapes() {
+    // All 4 shapes should produce output in [0, 1]
+    for shape_val in [0.0f32, 1.0, 2.0, 3.0] {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+        let shape = engine.graph_mut().add_node(Box::new(Const::new(shape_val)));
+        let lfo_node = engine.graph_mut().add_node(Box::new(Lfo::new()));
+        engine.graph_mut().connect(freq, lfo_node, 0);
+        engine.graph_mut().connect(shape, lfo_node, 1);
+        engine.graph_mut().set_sink(lfo_node);
+        engine.prepare();
+
+        let output = engine.render_offline(200);
+        for s in &output[0] {
+            assert!(
+                *s >= -0.001 && *s <= 1.001,
+                "LFO shape={shape_val} output should be in [0,1], got {s}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_lfo_square_gating() {
+    // Shape=3 (square) should produce values near 0 or 1 only
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+    let shape = engine.graph_mut().add_node(Box::new(Const::new(3.0)));
+    let lfo_node = engine.graph_mut().add_node(Box::new(Lfo::new()));
+    engine.graph_mut().connect(freq, lfo_node, 0);
+    engine.graph_mut().connect(shape, lfo_node, 1);
+    engine.graph_mut().set_sink(lfo_node);
+    engine.prepare();
+
+    let output = engine.render_offline(200);
+    for s in &output[0] {
+        assert!(
+            (*s - 0.0).abs() < 0.01 || (*s - 1.0).abs() < 0.01,
+            "LFO square should produce 0 or 1, got {s}"
+        );
+    }
+}
+
+#[test]
+fn test_lfo_shapes_differ() {
+    // Different shapes should produce different waveforms
+    let render_shape = |shape_val: f32| -> Vec<f32> {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(5.0)));
+        let shape = engine.graph_mut().add_node(Box::new(Const::new(shape_val)));
+        let lfo_node = engine.graph_mut().add_node(Box::new(Lfo::new()));
+        engine.graph_mut().connect(freq, lfo_node, 0);
+        engine.graph_mut().connect(shape, lfo_node, 1);
+        engine.graph_mut().set_sink(lfo_node);
+        engine.prepare();
+
+        engine.render_offline(200)
+            .into_iter()
+            .flatten()
+            .collect()
+    };
+
+    let sine = render_shape(0.0);
+    let tri = render_shape(1.0);
+    let saw = render_shape(2.0);
+    let square = render_shape(3.0);
+
+    // Each pair should differ
+    let diff_sine_tri: f32 = sine.iter().zip(tri.iter())
+        .map(|(a, b)| (a - b).abs()).sum::<f32>() / sine.len() as f32;
+    let diff_tri_saw: f32 = tri.iter().zip(saw.iter())
+        .map(|(a, b)| (a - b).abs()).sum::<f32>() / tri.len() as f32;
+    let diff_saw_square: f32 = saw.iter().zip(square.iter())
+        .map(|(a, b)| (a - b).abs()).sum::<f32>() / saw.len() as f32;
+
+    assert!(diff_sine_tri > 0.01, "Sine and triangle should differ");
+    assert!(diff_tri_saw > 0.01, "Triangle and saw should differ");
+    assert!(diff_saw_square > 0.01, "Saw and square should differ");
+}
+
+#[test]
+fn test_dsl_wavefolder_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef test freq=440.0 =
+            let osc = sinOsc freq 0.0
+            waveFolder osc 3.0 0.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "test");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "waveFolder DSL synth should produce output");
+}
+
+#[test]
+fn test_dsl_lfo_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef wobble freq=55.0 =
+            let osc = blSaw freq
+            let m = lfo 5.0 0.0
+            let cutoff = m * 4000.0 + 100.0
+            lpf osc cutoff 8.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "wobble");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "lfo DSL synth should produce output");
+}
