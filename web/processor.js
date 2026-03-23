@@ -57,6 +57,9 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
             case 'voiceParam':
                 this.voiceParam(msg.voiceId, msg.param, msg.value);
                 break;
+            case 'scheduleNote':
+                this.scheduleNote(msg.voiceId, msg.durationSecs);
+                break;
             case 'freeVoice':
                 this.freeVoice(msg.voiceId);
                 break;
@@ -171,6 +174,14 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
     voiceGate(voiceId, value) {
         if (!this.wasm) return;
         this.wasm.ms_voice_gate(BigInt(voiceId), value);
+    }
+
+    scheduleNote(voiceId, durationSecs) {
+        if (!this.wasm) return;
+        // Schedule gate-on at current sample, gate-off after duration
+        const onSample = BigInt(this.frameCount) * 128n;
+        const offSample = onSample + BigInt(Math.round(durationSecs * sampleRate));
+        this.wasm.ms_schedule_note(BigInt(voiceId), onSample, offSample);
     }
 
     voiceParam(voiceId, param, value) {
