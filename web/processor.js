@@ -70,7 +70,7 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
                 this.registerDef(msg.name, msg.source);
                 break;
             case 'spawnVoiceNamed':
-                this.spawnVoiceNamed(msg.id, msg.name);
+                this.spawnVoiceNamed(msg.id, msg.name, msg.initialAmp);
                 break;
             case 'setMasterEffect':
                 this.setMasterEffect(msg.name);
@@ -224,11 +224,18 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         }
     }
 
-    spawnVoiceNamed(requestId, name) {
+    spawnVoiceNamed(requestId, name, initialAmp) {
         if (!this.wasm) return;
         const { ptr: namePtr, len: nameLen } = this.writeString(name);
         const voiceId = Number(this.wasm.ms_spawn_voice_named(namePtr, nameLen));
         this.wasm.ms_free(namePtr, nameLen);
+        // Set amp immediately before first process() so percussion envelopes
+        // fire at the correct volume
+        if (initialAmp != null && voiceId !== 0) {
+            const { ptr: pPtr, len: pLen } = this.writeString('amp');
+            this.wasm.ms_voice_param(BigInt(voiceId), pPtr, pLen, initialAmp);
+            this.wasm.ms_free(pPtr, pLen);
+        }
         this.port.postMessage({ type: 'voiceSpawned', id: requestId, voiceId });
     }
 
