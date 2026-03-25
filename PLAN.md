@@ -21,6 +21,11 @@ native (desktop/mobile).
   (Kahn's algorithm), guaranteeing all inputs are ready before processing.
 - **Multichannel expansion**: The expansion factor is `max(input_channels...)`.
   Inputs with fewer channels wrap via modulo (SuperCollider semantics).
+- **Spectral UGens are self-contained**: Each spectral effect UGen internally
+  manages its own STFT/ISTFT (input ring buffer, windowed FFT, overlap-add
+  output). No "PV chain" buffer type or spectral rate — they appear as
+  ordinary audio-rate-in/audio-rate-out nodes. FFT is pure Rust radix-2
+  Cooley-Tukey (no external crate), `no_std` compatible.
 
 ## Module Structure
 
@@ -34,6 +39,13 @@ src/
 ├── synthdef.rs     # SynthDef (immutable template), SynthDefBuilder, Synth (live instance)
 ├── engine.rs       # Engine: owns graph + context, drives rendering
 ├── ugens.rs        # Built-in UGens: Const, BinOpUGen, NegUGen
+├── spectral/       # Frequency-domain processing primitives
+│   ├── mod.rs      # Module root
+│   ├── complex.rs  # Complex number type for FFT operations
+│   ├── fft.rs      # Radix-2 Cooley-Tukey FFT/IFFT (in-place, power-of-2)
+│   ├── window.rs   # Window functions (Hann, Hamming, Blackman, BlackmanHarris)
+│   ├── stft.rs     # StftProcessor: overlap-add STFT bridging block-size to FFT-size
+│   └── griffin_lim.rs  # Offline phase reconstruction from magnitude spectrograms
 └── dsl/
     ├── mod.rs      # Public API, compile() entry point, DslError type
     ├── lexer.rs    # Tokenizer (keywords, numbers, operators, comments)

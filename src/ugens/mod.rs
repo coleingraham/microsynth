@@ -19,6 +19,7 @@
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
+//! - `spectral`: SpectralFreeze, PitchShift, SpectralFilter, SpectralGate, SpectralBlur, Convolution
 
 pub mod bitcrush;
 pub mod bl_oscillators;
@@ -37,6 +38,7 @@ pub mod oscillators;
 pub mod physical;
 pub mod playbuf;
 pub(crate) mod rng;
+pub mod spectral;
 pub mod stereo;
 pub mod utility;
 pub mod wavetable;
@@ -58,6 +60,7 @@ pub use noise::*;
 pub use oscillators::*;
 pub use physical::*;
 pub use playbuf::*;
+pub use spectral::*;
 pub use stereo::*;
 pub use utility::*;
 pub use wavetable::*;
@@ -562,6 +565,64 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "waveTable",
         || Box::new(WaveTable::new()),
         &[InputSpec { name: "freq", rate: Rate::Audio }],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+
+    // -- Spectral Processing --
+    reg.register(
+        "spectralFreeze",
+        || Box::new(SpectralFreeze::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "trig", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "pitchShift",
+        || Box::new(PitchShift::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "shift", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "spectralFilter",
+        || Box::new(SpectralFilter::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "freq", rate: Rate::Audio },
+            InputSpec { name: "bandwidth", rate: Rate::Audio },
+            InputSpec { name: "gain", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "spectralGate",
+        || Box::new(SpectralGate::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "threshold", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "spectralBlur",
+        || Box::new(SpectralBlur::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "blur", rate: Rate::Audio },
+        ],
+        &[OutputSpec { name: "out", rate: Rate::Audio }],
+    );
+    reg.register(
+        "convolution",
+        || Box::new(Convolution::new()),
+        &[
+            InputSpec { name: "in", rate: Rate::Audio },
+            InputSpec { name: "mix", rate: Rate::Audio },
+        ],
         &[OutputSpec { name: "out", rate: Rate::Audio }],
     );
 
