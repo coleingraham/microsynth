@@ -10,12 +10,18 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["std"]
-std = []
+std = ["clap"]
 web = ["wasm-bindgen", "js-sys"]
 
 [dependencies]
+clap = { version = "4", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
+
+[[bin]]
+name = "microsynth-cli"
+path = "src/bin/microsynth-cli.rs"
+required-features = ["std"]
 
 [profile.release]
 opt-level = "s"

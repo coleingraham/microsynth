@@ -396,6 +396,44 @@
 //! clip sig (0.0 - 1.0) 1.0 -- clip to [-1, 1]
 //! ```
 //!
+//! ## Spectral Processing
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `spectralFreeze` | `in`, `trig` | Capture and hold spectrum on trigger positive edge |
+//! | `pitchShift` | `in`, `shift` (ratio) | Phase vocoder pitch shifting (1.0=unison, 2.0=octave up) |
+//! | `spectralFilter` | `in`, `freq` (Hz), `bandwidth` (Hz), `gain` | Frequency-domain Gaussian bandpass/notch |
+//! | `spectralGate` | `in`, `threshold` (0–1) | Zero bins below threshold × max magnitude |
+//! | `spectralBlur` | `in`, `blur` (0–1) | Temporal magnitude smoothing (0=pass-through, 1=infinite hold) |
+//! | `convolution` | `in`, `mix` (0–1) | FFT overlap-add convolution with impulse response |
+//!
+//! Spectral UGens process audio in the frequency domain using STFT (Short-Time
+//! Fourier Transform). Each UGen internally handles windowing, FFT, spectral
+//! modification, IFFT, and overlap-add. They introduce `fft_size` samples of
+//! latency (typically 2048 samples ≈ 46ms at 44100 Hz).
+//!
+//! ```text
+//! -- Freeze a pad's spectrum
+//! synthdef frozenPad freq=440.0 trig=0.0 =
+//!   spectralFreeze (saw freq) trig
+//!
+//! -- Pitch shift up one octave
+//! synthdef shifted freq=440.0 =
+//!   pitchShift (saw freq) 2.0
+//!
+//! -- Spectral noise gate
+//! synthdef gated freq=440.0 threshold=0.1 =
+//!   spectralGate (saw freq) threshold
+//!
+//! -- Spectral blur (smeared pad)
+//! synthdef blurred freq=440.0 blur=0.8 =
+//!   spectralBlur (saw freq) blur
+//!
+//! -- Spectral filter boost
+//! synthdef filtered freq=440.0 =
+//!   spectralFilter (whiteNoise) 1000.0 200.0 5.0
+//! ```
+//!
 //! ## Bus / Routing
 //!
 //! | Name | Inputs | Description |

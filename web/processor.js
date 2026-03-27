@@ -57,6 +57,9 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
             case 'voiceParam':
                 this.voiceParam(msg.voiceId, msg.param, msg.value);
                 break;
+            case 'scheduleNote':
+                this.scheduleNote(msg.voiceId, msg.durationSecs);
+                break;
             case 'freeVoice':
                 this.freeVoice(msg.voiceId);
                 break;
@@ -67,7 +70,7 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
                 this.registerDef(msg.name, msg.source);
                 break;
             case 'spawnVoiceNamed':
-                this.spawnVoiceNamed(msg.id, msg.name);
+                this.spawnVoiceNamed(msg.id, msg.name, msg.initialAmp);
                 break;
             case 'setMasterEffect':
                 this.setMasterEffect(msg.name);
@@ -173,6 +176,14 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         this.wasm.ms_voice_gate(BigInt(voiceId), value);
     }
 
+    scheduleNote(voiceId, durationSecs) {
+        if (!this.wasm) return;
+        // Schedule gate-on at current sample, gate-off after duration
+        const onSample = BigInt(this.frameCount) * 128n;
+        const offSample = onSample + BigInt(Math.round(durationSecs * sampleRate));
+        this.wasm.ms_schedule_note(BigInt(voiceId), onSample, offSample);
+    }
+
     voiceParam(voiceId, param, value) {
         if (!this.wasm) return;
         const { ptr, len } = this.writeString(param);
@@ -213,11 +224,18 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
         }
     }
 
-    spawnVoiceNamed(requestId, name) {
+    spawnVoiceNamed(requestId, name, initialAmp) {
         if (!this.wasm) return;
         const { ptr: namePtr, len: nameLen } = this.writeString(name);
         const voiceId = Number(this.wasm.ms_spawn_voice_named(namePtr, nameLen));
         this.wasm.ms_free(namePtr, nameLen);
+        // Set amp immediately before first process() so percussion envelopes
+        // fire at the correct volume
+        if (initialAmp != null && voiceId !== 0) {
+            const { ptr: pPtr, len: pLen } = this.writeString('amp');
+            this.wasm.ms_voice_param(BigInt(voiceId), pPtr, pLen, initialAmp);
+            this.wasm.ms_free(pPtr, pLen);
+        }
         this.port.postMessage({ type: 'voiceSpawned', id: requestId, voiceId });
     }
 
