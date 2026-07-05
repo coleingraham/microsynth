@@ -49,6 +49,22 @@ pub struct Engine {
     synths: Vec<Synth>,
     voices: Vec<Voice>,
     scheduler: Scheduler,
+    /// Monotonic count of synthdef instantiations, used to derive a distinct
+    /// deterministic seed for each spawned voice's noise UGens (so repeated
+    /// kick/snare/hat hits vary but stay reproducible run-to-run).
+    noise_spawn_seq: u32,
+}
+
+/// Derive a deterministic noise seed from the voice spawn order and the UGen's
+/// index within its synthdef. Folding in `node_idx` gives two noise nodes in one
+/// synthdef distinct seeds; the multiply-scramble decorrelates consecutive hits
+/// so a steady drum pattern doesn't expose the underlying LCG. The exact
+/// constants are part of the reproducible-output contract: changing them changes
+/// the rendered noise for a given spawn order.
+fn derive_noise_seed(spawn_seq: u32, node_idx: usize) -> u32 {
+    0xDEAD_BEEF
+        ^ spawn_seq.wrapping_mul(0x9E37_79B9)
+        ^ (node_idx as u32).wrapping_mul(0x85EB_CA77)
 }
 
 impl Engine {
@@ -60,6 +76,7 @@ impl Engine {
             synths: Vec::new(),
             voices: Vec::new(),
             scheduler: Scheduler::new(),
+            noise_spawn_seq: 0,
         }
     }
 
@@ -98,12 +115,17 @@ impl Engine {
     pub fn instantiate_synthdef(&mut self, def: &SynthDef) -> Synth {
         let ugens = def.instantiate();
 
-        // Add all nodes to the graph, collecting their live NodeIds
+        // Reseed this voice's noise UGens deterministically from the spawn order
+        // (a no-op for non-noise UGens), then add all nodes to the graph,
+        // collecting their live NodeIds.
+        let spawn_seq = self.noise_spawn_seq;
         let mut node_ids: Vec<NodeId> = Vec::with_capacity(ugens.len());
-        for ugen in ugens {
+        for (i, mut ugen) in ugens.into_iter().enumerate() {
+            ugen.reseed_noise(derive_noise_seed(spawn_seq, i));
             let id = self.graph.add_node(ugen);
             node_ids.push(id);
         }
+        self.noise_spawn_seq = self.noise_spawn_seq.wrapping_add(1);
 
         // Wire up edges using the live NodeIds
         for edge in def.edges() {
