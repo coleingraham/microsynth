@@ -93,6 +93,12 @@ pub trait UGen: Send {
         false
     }
 
+    /// Reseed any internal PRNG deterministically. Called once per spawned
+    /// voice at instantiation so that repeated noise-based hits (kick/snare/
+    /// hat) are distinct-but-reproducible. Default: no-op, so non-noise UGens
+    /// are unaffected. Only noise UGens override this.
+    fn reseed_noise(&mut self, _seed: u32) {}
+
     /// Query whether this node has finished producing useful output
     /// (e.g. an envelope that reached its end). Used by the engine to
     /// implement done actions (auto-freeing voices).

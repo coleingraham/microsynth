@@ -40,6 +40,10 @@ impl UGen for WhiteNoise {
         self.rng = Rng::new(0xDEAD_BEEF);
     }
 
+    fn reseed_noise(&mut self, seed: u32) {
+        self.rng = Rng::new(seed);
+    }
+
     fn process(
         &mut self,
         _context: &ProcessContext,
@@ -93,6 +97,13 @@ impl UGen for PinkNoise {
         self.running_sum = 0.0;
         self.counter = 0;
         self.rng = Rng::new(0xCAFE_BABE);
+    }
+
+    fn reseed_noise(&mut self, seed: u32) {
+        self.rows = [0.0; 16];
+        self.running_sum = 0.0;
+        self.counter = 0;
+        self.rng = Rng::new(seed);
     }
 
     fn process(
