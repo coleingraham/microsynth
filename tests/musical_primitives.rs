@@ -1,5 +1,5 @@
-use microsynth::tuning::*;
 use microsynth::musical_time::*;
+use microsynth::tuning::*;
 
 // ============================================================================
 // Tuning tests
@@ -14,7 +14,10 @@ fn test_midi_to_hz_12tet_a4() {
 #[test]
 fn test_midi_to_hz_12tet_middle_c() {
     let hz = midi_to_hz_12tet(60.0, 440.0);
-    assert!((hz - 261.626).abs() < 0.01, "C4 should be ~261.63 Hz, got {hz}");
+    assert!(
+        (hz - 261.626).abs() < 0.01,
+        "C4 should be ~261.63 Hz, got {hz}"
+    );
 }
 
 #[test]
@@ -27,7 +30,10 @@ fn test_midi_to_hz_12tet_a5() {
 fn test_midi_to_hz_12tet_custom_a4() {
     // A4 = 432 Hz tuning
     let hz = midi_to_hz_12tet(69.0, 432.0);
-    assert!((hz - 432.0).abs() < 0.01, "A4 at 432 should be 432 Hz, got {hz}");
+    assert!(
+        (hz - 432.0).abs() < 0.01,
+        "A4 at 432 should be 432 Hz, got {hz}"
+    );
 }
 
 #[test]
@@ -35,7 +41,10 @@ fn test_hz_to_midi_roundtrip() {
     for note in [48.0, 60.0, 69.0, 72.0, 84.0] {
         let hz = midi_to_hz_12tet(note, 440.0);
         let back = hz_to_midi_12tet(hz, 440.0);
-        assert!((back - note).abs() < 0.01, "roundtrip failed for note {note}: got {back}");
+        assert!(
+            (back - note).abs() < 0.01,
+            "roundtrip failed for note {note}: got {back}"
+        );
     }
 }
 
@@ -43,27 +52,39 @@ fn test_hz_to_midi_roundtrip() {
 fn test_apply_cents_semitone_up() {
     let hz = apply_cents(440.0, 100.0);
     let expected = midi_to_hz_12tet(70.0, 440.0);
-    assert!((hz - expected).abs() < 0.1, "100 cents up from 440 should be ~{expected}, got {hz}");
+    assert!(
+        (hz - expected).abs() < 0.1,
+        "100 cents up from 440 should be ~{expected}, got {hz}"
+    );
 }
 
 #[test]
 fn test_apply_cents_semitone_down() {
     let hz = apply_cents(440.0, -100.0);
     let expected = midi_to_hz_12tet(68.0, 440.0);
-    assert!((hz - expected).abs() < 0.1, "100 cents down from 440 should be ~{expected}, got {hz}");
+    assert!(
+        (hz - expected).abs() < 0.1,
+        "100 cents down from 440 should be ~{expected}, got {hz}"
+    );
 }
 
 #[test]
 fn test_apply_cents_quarter_tone() {
     let hz = apply_cents(440.0, -50.0);
     // Quarter-tone flat: between A4 and Ab4
-    assert!(hz > 415.0 && hz < 440.0, "quarter-tone flat should be between Ab4 and A4, got {hz}");
+    assert!(
+        hz > 415.0 && hz < 440.0,
+        "quarter-tone flat should be between Ab4 and A4, got {hz}"
+    );
 }
 
 #[test]
 fn test_apply_cents_zero() {
     let hz = apply_cents(440.0, 0.0);
-    assert!((hz - 440.0).abs() < 0.01, "0 cents should not change frequency, got {hz}");
+    assert!(
+        (hz - 440.0).abs() < 0.01,
+        "0 cents should not change frequency, got {hz}"
+    );
 }
 
 // -- TuningTable tests -------------------------------------------------------
@@ -87,7 +108,10 @@ fn test_tuning_table_24tet() {
     assert_eq!(table.divisions(), 24);
     // Anchor should produce 440
     let hz = table.note_to_hz(138.0); // A4 in 24-TET space
-    assert!((hz - 440.0).abs() < 0.01, "anchor should be 440 Hz, got {hz}");
+    assert!(
+        (hz - 440.0).abs() < 0.01,
+        "anchor should be 440 Hz, got {hz}"
+    );
 }
 
 #[test]
@@ -123,10 +147,16 @@ fn test_tuning_table_from_cents_slendro() {
     assert_eq!(table.divisions(), 5);
     // Anchor should produce 261.63
     let hz = table.note_to_hz(60.0);
-    assert!((hz - 261.63).abs() < 0.1, "anchor should be 261.63, got {hz}");
+    assert!(
+        (hz - 261.63).abs() < 0.1,
+        "anchor should be 261.63, got {hz}"
+    );
     // One octave up
     let hz_oct = table.note_to_hz(65.0); // 60 + 5 divisions
-    assert!((hz_oct - 523.26).abs() < 0.5, "octave should be ~523.26, got {hz_oct}");
+    assert!(
+        (hz_oct - 523.26).abs() < 0.5,
+        "octave should be ~523.26, got {hz_oct}"
+    );
 }
 
 #[test]
@@ -158,7 +188,10 @@ fn test_tuning_table_below_anchor() {
 fn test_bar_duration_4_4_120bpm() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let bar_secs = tc.bar_duration_secs();
-    assert!((bar_secs - 2.0).abs() < 1e-9, "4/4 at 120 BPM bar should be 2.0s, got {bar_secs}");
+    assert!(
+        (bar_secs - 2.0).abs() < 1e-9,
+        "4/4 at 120 BPM bar should be 2.0s, got {bar_secs}"
+    );
 }
 
 #[test]
@@ -166,7 +199,10 @@ fn test_step_duration_16th_at_120bpm() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let step_secs = tc.step_duration_secs();
     // 16 steps per 2-second bar = 0.125s per step
-    assert!((step_secs - 0.125).abs() < 1e-9, "16th note at 120 BPM should be 0.125s, got {step_secs}");
+    assert!(
+        (step_secs - 0.125).abs() < 1e-9,
+        "16th note at 120 BPM should be 0.125s, got {step_secs}"
+    );
 }
 
 #[test]
@@ -181,7 +217,10 @@ fn test_bar_duration_3_4() {
     };
     let bar_secs = tc.bar_duration_secs();
     // 3/4 at 120 BPM: 3 quarter notes * 0.5s = 1.5s
-    assert!((bar_secs - 1.5).abs() < 1e-9, "3/4 at 120 BPM bar should be 1.5s, got {bar_secs}");
+    assert!(
+        (bar_secs - 1.5).abs() < 1e-9,
+        "3/4 at 120 BPM bar should be 1.5s, got {bar_secs}"
+    );
 }
 
 #[test]
@@ -196,7 +235,10 @@ fn test_bar_duration_7_8() {
     };
     let bar_secs = tc.bar_duration_secs();
     // 7/8 at 120 BPM: 7 eighth notes, each 0.25s = 1.75s
-    assert!((bar_secs - 1.75).abs() < 1e-9, "7/8 at 120 BPM bar should be 1.75s, got {bar_secs}");
+    assert!(
+        (bar_secs - 1.75).abs() < 1e-9,
+        "7/8 at 120 BPM bar should be 1.75s, got {bar_secs}"
+    );
 }
 
 #[test]
@@ -237,7 +279,10 @@ fn test_position_with_positive_tick_offset() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let base = tc.position_to_samples(MusicalPosition::new(0, 0, 0));
     let offset = tc.position_to_samples(MusicalPosition::new(0, 0, 15));
-    assert!(offset > base, "positive tick offset should produce later time");
+    assert!(
+        offset > base,
+        "positive tick offset should produce later time"
+    );
 }
 
 #[test]
@@ -245,7 +290,10 @@ fn test_position_with_negative_tick_offset() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let base = tc.position_to_samples(MusicalPosition::new(0, 4, 0));
     let early = tc.position_to_samples(MusicalPosition::new(0, 4, -10));
-    assert!(early < base, "negative tick offset should produce earlier time");
+    assert!(
+        early < base,
+        "negative tick offset should produce earlier time"
+    );
 }
 
 #[test]
@@ -268,7 +316,10 @@ fn test_steps_to_samples() {
 fn test_steps_to_secs() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let secs = tc.steps_to_secs(4.0);
-    assert!((secs - 0.5).abs() < 1e-9, "4 steps should be 0.5s, got {secs}");
+    assert!(
+        (secs - 0.5).abs() < 1e-9,
+        "4 steps should be 0.5s, got {secs}"
+    );
 }
 
 #[test]
@@ -276,7 +327,10 @@ fn test_step_duration_samples() {
     let tc = TimeConfig::new_4_4(120.0, 44100.0);
     let step_samples = tc.step_duration_samples();
     // 0.125s * 44100 = 5512.5
-    assert!((step_samples - 5512.5).abs() < 0.01, "step should be 5512.5 samples, got {step_samples}");
+    assert!(
+        (step_samples - 5512.5).abs() < 0.01,
+        "step should be 5512.5 samples, got {step_samples}"
+    );
 }
 
 // ============================================================================
@@ -354,8 +408,14 @@ fn test_schedule_note_aligned_pre_trigger() {
     // Drain all events
     let events = engine.scheduler_mut().drain_before(100000);
     assert_eq!(events.len(), 2, "should have gate-on and gate-off");
-    assert_eq!(events[0].time, expected_on, "gate-on should be pre-triggered");
-    assert_eq!(events[1].time, expected_off, "gate-off should be at grid_time + duration");
+    assert_eq!(
+        events[0].time, expected_on,
+        "gate-on should be pre-triggered"
+    );
+    assert_eq!(
+        events[1].time, expected_off,
+        "gate-off should be at grid_time + duration"
+    );
 }
 
 extern crate alloc;

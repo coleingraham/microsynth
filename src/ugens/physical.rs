@@ -3,10 +3,10 @@
 //! - [`Pluck`]: Karplus-Strong plucked string synthesis
 //! - [`Bowed`]: Digital waveguide bowed string model
 
+use super::rng::Rng;
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
-use super::rng::Rng;
 use alloc::vec::Vec;
 
 /// Minimum supported frequency (determines max buffer size).
@@ -31,6 +31,12 @@ pub struct Pluck {
     rng: Rng,
     initialized: bool,
     prev_trig: f32,
+}
+
+impl Default for Pluck {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pluck {
@@ -63,15 +69,31 @@ impl Pluck {
 }
 
 static PLUCK_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "decay", rate: Rate::Audio },
-    InputSpec { name: "trig", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "decay",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "trig",
+        rate: Rate::Audio,
+    },
 ];
-static PLUCK_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PLUCK_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Pluck {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Pluck", inputs: &PLUCK_INPUTS, outputs: &PLUCK_OUTPUTS }
+        UGenSpec {
+            name: "Pluck",
+            inputs: &PLUCK_INPUTS,
+            outputs: &PLUCK_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -111,7 +133,7 @@ impl UGen for Pluck {
             let mut prev_trig = self.prev_trig;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -133,7 +155,7 @@ impl UGen for Pluck {
                 prev_trig = trig;
 
                 if self.buf_len < 2 {
-                    out[i] = 0.0;
+                    *out_sample = 0.0;
                     continue;
                 }
 
@@ -149,7 +171,7 @@ impl UGen for Pluck {
 
                 // Write back with decay
                 self.buffer[write_pos] = filter_state * decay;
-                out[i] = filter_state;
+                *out_sample = filter_state;
 
                 write_pos = (write_pos + 1) % self.buf_len;
 
@@ -187,6 +209,12 @@ pub struct Bowed {
     sample_rate: f32,
 }
 
+impl Default for Bowed {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Bowed {
     pub fn new() -> Self {
         Bowed {
@@ -211,15 +239,31 @@ fn bow_table(delta_v: f32, pressure: f32) -> f32 {
 }
 
 static BOWED_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "pressure", rate: Rate::Audio },
-    InputSpec { name: "position", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "pressure",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "position",
+        rate: Rate::Audio,
+    },
 ];
-static BOWED_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static BOWED_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Bowed {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Bowed", inputs: &BOWED_INPUTS, outputs: &BOWED_OUTPUTS }
+        UGenSpec {
+            name: "Bowed",
+            inputs: &BOWED_INPUTS,
+            outputs: &BOWED_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -259,7 +303,7 @@ impl UGen for Bowed {
             let mut bridge_filter = self.bridge_filter;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(220.0)
@@ -302,7 +346,7 @@ impl UGen for Bowed {
                 self.bridge_delay[bridge_write] = nut_filter + force;
 
                 // Output from bridge side (pickup position)
-                out[i] = bridge_out.clamp(-1.0, 1.0);
+                *out_sample = bridge_out.clamp(-1.0, 1.0);
 
                 nut_write = (nut_write + 1) % max_len;
                 bridge_write = (bridge_write + 1) % max_len;

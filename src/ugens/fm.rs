@@ -44,6 +44,12 @@ pub struct FmOsc {
     sample_rate: f32,
 }
 
+impl Default for FmOsc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FmOsc {
     pub fn new() -> Self {
         FmOsc {
@@ -56,16 +62,35 @@ impl FmOsc {
 }
 
 static FMOSC_INPUTS: [InputSpec; 4] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "ratio", rate: Rate::Audio },
-    InputSpec { name: "index", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "ratio",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "index",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
 ];
-static FMOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static FMOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for FmOsc {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "FmOsc", inputs: &FMOSC_INPUTS, outputs: &FMOSC_OUTPUTS }
+        UGenSpec {
+            name: "FmOsc",
+            inputs: &FMOSC_INPUTS,
+            outputs: &FMOSC_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -96,7 +121,7 @@ impl UGen for FmOsc {
             let mut prev_mod_out = self.prev_mod_out;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -120,7 +145,7 @@ impl UGen for FmOsc {
                 prev_mod_out = modulator;
 
                 // Carrier with phase modulation
-                out[i] = (carrier_phase * TAU + index * modulator).sin();
+                *out_sample = (carrier_phase * TAU + index * modulator).sin();
 
                 // Advance phases
                 carrier_phase += freq * inv_sr;

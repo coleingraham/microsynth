@@ -29,6 +29,12 @@ pub struct Lfo {
     sample_rate: f32,
 }
 
+impl Default for Lfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lfo {
     pub fn new() -> Self {
         Lfo {
@@ -39,10 +45,19 @@ impl Lfo {
 }
 
 static LFO_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "shape", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "shape",
+        rate: Rate::Audio,
+    },
 ];
-static LFO_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static LFO_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 /// Compute each waveform shape from phase [0, 1).
 /// All return values in [0, 1].
@@ -97,7 +112,11 @@ fn lfo_eval(phase: f32, shape: f32) -> f32 {
 
 impl UGen for Lfo {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Lfo", inputs: &LFO_INPUTS, outputs: &LFO_OUTPUTS }
+        UGenSpec {
+            name: "Lfo",
+            inputs: &LFO_INPUTS,
+            outputs: &LFO_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -122,7 +141,7 @@ impl UGen for Lfo {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(1.0)
@@ -131,7 +150,7 @@ impl UGen for Lfo {
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(0.0);
 
-                out[i] = lfo_eval(phase, shape);
+                *out_sample = lfo_eval(phase, shape);
 
                 phase += freq * inv_sr;
                 if phase >= 1.0 {

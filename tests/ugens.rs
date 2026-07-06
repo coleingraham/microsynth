@@ -1,7 +1,7 @@
 //! Integration tests for the built-in audio UGens.
 
-use microsynth::*;
 use microsynth::ugens::*;
+use microsynth::*;
 
 /// Helper: build a simple graph with a single source UGen as the sink.
 fn render_source(ugen: Box<dyn UGen>, num_blocks: usize) -> Vec<Vec<f32>> {
@@ -37,7 +37,11 @@ fn test_sinosc_produces_output() {
     let samples = output.channel(0).samples();
 
     // First sample at phase=0 should be sin(0) = 0
-    assert!(samples[0].abs() < 0.01, "first sample should be near 0, got {}", samples[0]);
+    assert!(
+        samples[0].abs() < 0.01,
+        "first sample should be near 0, got {}",
+        samples[0]
+    );
 
     // Should have non-zero samples (it's oscillating)
     let max = samples.iter().copied().fold(0.0f32, f32::max);
@@ -48,7 +52,10 @@ fn test_sinosc_produces_output() {
 fn test_sinosc_frequency_accuracy() {
     // At 44100 Hz sample rate with freq=44100/64 = 689.0625 Hz,
     // one block of 64 samples = exactly one full cycle.
-    let config = EngineConfig { sample_rate: 44100.0, block_size: 64 };
+    let config = EngineConfig {
+        sample_rate: 44100.0,
+        block_size: 64,
+    };
     let freq_val = 44100.0 / 64.0; // exactly 1 cycle per block
 
     let mut engine = Engine::new(config);
@@ -83,7 +90,10 @@ fn test_saw_range() {
 
     let output = engine.render_offline(10);
     for &s in &output[0] {
-        assert!(s >= -1.0 && s < 1.0, "saw sample {s} out of range [-1, 1)");
+        assert!(
+            (-1.0..1.0).contains(&s),
+            "saw sample {s} out of range [-1, 1)"
+        );
     }
 }
 
@@ -136,7 +146,10 @@ fn test_tri_range() {
 
     let output = engine.render_offline(10);
     for &s in &output[0] {
-        assert!(s >= -1.0 && s <= 1.0, "tri sample {s} out of range [-1, 1]");
+        assert!(
+            (-1.0..=1.0).contains(&s),
+            "tri sample {s} out of range [-1, 1]"
+        );
     }
 }
 
@@ -151,7 +164,10 @@ fn test_phasor_range() {
 
     let output = engine.render_offline(10);
     for &s in &output[0] {
-        assert!(s >= 0.0 && s < 1.0, "phasor sample {s} out of range [0, 1)");
+        assert!(
+            (0.0..1.0).contains(&s),
+            "phasor sample {s} out of range [0, 1)"
+        );
     }
 }
 
@@ -163,7 +179,10 @@ fn test_phasor_range() {
 fn test_white_noise_range() {
     let output = render_source(Box::new(WhiteNoise::new()), 10);
     for &s in &output[0] {
-        assert!(s >= -1.0 && s <= 1.0, "white noise sample {s} out of range");
+        assert!(
+            (-1.0..=1.0).contains(&s),
+            "white noise sample {s} out of range"
+        );
     }
 }
 
@@ -171,7 +190,10 @@ fn test_white_noise_range() {
 fn test_white_noise_not_silence() {
     let output = render_source(Box::new(WhiteNoise::new()), 1);
     let nonzero = output[0].iter().filter(|&&s| s.abs() > 0.001).count();
-    assert!(nonzero > 10, "white noise should have many non-zero samples");
+    assert!(
+        nonzero > 10,
+        "white noise should have many non-zero samples"
+    );
 }
 
 #[test]
@@ -185,7 +207,10 @@ fn test_white_noise_deterministic_with_seed() {
 fn test_pink_noise_range() {
     let output = render_source(Box::new(PinkNoise::new()), 10);
     for &s in &output[0] {
-        assert!(s >= -2.0 && s <= 2.0, "pink noise sample {s} unexpectedly large");
+        assert!(
+            (-2.0..=2.0).contains(&s),
+            "pink noise sample {s} unexpectedly large"
+        );
     }
 }
 
@@ -244,10 +269,7 @@ fn test_biquad_lpf_passes_dc() {
 
     let output = engine.render_offline(100);
     let last = *output[0].last().unwrap();
-    assert!(
-        (last - 1.0).abs() < 0.01,
-        "LPF should pass DC, got {last}"
-    );
+    assert!((last - 1.0).abs() < 0.01, "LPF should pass DC, got {last}");
 }
 
 #[test]
@@ -266,10 +288,7 @@ fn test_biquad_hpf_blocks_dc() {
 
     let output = engine.render_offline(100);
     let last = *output[0].last().unwrap();
-    assert!(
-        last.abs() < 0.01,
-        "HPF should block DC, got {last}"
-    );
+    assert!(last.abs() < 0.01, "HPF should block DC, got {last}");
 }
 
 // ============================================================================
@@ -304,7 +323,10 @@ fn test_line_envelope() {
 #[test]
 fn test_line_holds_at_target() {
     // Line from 0.0 to 0.5 over very short time.
-    let mut engine = Engine::new(EngineConfig { sample_rate: 44100.0, block_size: 64 });
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: 44100.0,
+        block_size: 64,
+    });
     let start = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
     let end = engine.graph_mut().add_node(Box::new(Const::new(0.5)));
     let dur = engine.graph_mut().add_node(Box::new(Const::new(0.001))); // 1ms
@@ -328,7 +350,10 @@ fn test_line_holds_at_target() {
 fn test_asr_attack_sustain_release() {
     let sr = 44100.0;
     let block_size = 64;
-    let mut engine = Engine::new(EngineConfig { sample_rate: sr, block_size });
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size,
+    });
 
     // gate: 1.0 for attack+sustain, then 0.0 for release
     // We'll render in two phases: gate on, then gate off
@@ -482,12 +507,17 @@ fn test_mix_sums_channels() {
             UGenSpec {
                 name: "ThreeChannel",
                 inputs: &[],
-                outputs: &[OutputSpec { name: "out", rate: Rate::Audio }],
+                outputs: &[OutputSpec {
+                    name: "out",
+                    rate: Rate::Audio,
+                }],
             }
         }
         fn init(&mut self, _: &ProcessContext) {}
         fn reset(&mut self) {}
-        fn output_channels(&self, _: &[usize]) -> usize { 3 }
+        fn output_channels(&self, _: &[usize]) -> usize {
+            3
+        }
         fn process(&mut self, _: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
             output.channel_mut(0).fill(1.0);
             output.channel_mut(1).fill(2.0);
@@ -515,16 +545,23 @@ fn test_mix_sums_channels() {
 fn test_sample_and_hold() {
     // SampleAndHold: when trigger goes high, captures the input.
     // We test by setting up a constant input and toggling trigger.
-    struct Ramp { sample_rate: f32 }
+    struct Ramp {
+        sample_rate: f32,
+    }
     impl UGen for Ramp {
         fn spec(&self) -> UGenSpec {
             UGenSpec {
                 name: "Ramp",
                 inputs: &[],
-                outputs: &[OutputSpec { name: "out", rate: Rate::Audio }],
+                outputs: &[OutputSpec {
+                    name: "out",
+                    rate: Rate::Audio,
+                }],
             }
         }
-        fn init(&mut self, ctx: &ProcessContext) { self.sample_rate = ctx.sample_rate; }
+        fn init(&mut self, ctx: &ProcessContext) {
+            self.sample_rate = ctx.sample_rate;
+        }
         fn reset(&mut self) {}
         fn process(&mut self, ctx: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
             let out = output.channel_mut(0).samples_mut();
@@ -537,7 +574,9 @@ fn test_sample_and_hold() {
     // Use a constant trigger of 1.0 — SH will capture on the first sample
     // (positive-going crossing from 0 initial state) and hold forever.
     let mut engine = Engine::new(EngineConfig::default());
-    let src = engine.graph_mut().add_node(Box::new(Ramp { sample_rate: 44100.0 }));
+    let src = engine.graph_mut().add_node(Box::new(Ramp {
+        sample_rate: 44100.0,
+    }));
     let trig = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
     let sh = engine.graph_mut().add_node(Box::new(SampleAndHold::new()));
     engine.graph_mut().connect(src, sh, 0);
@@ -549,10 +588,7 @@ fn test_sample_and_hold() {
     // All samples should be the same (held value from first trigger)
     let held = output[0][0];
     for &s in &output[0] {
-        assert!(
-            (s - held).abs() < 1e-6,
-            "SH should hold at {held}, got {s}"
-        );
+        assert!((s - held).abs() < 1e-6, "SH should hold at {held}, got {s}");
     }
 }
 
@@ -634,8 +670,14 @@ fn test_dsl_complex_patch() {
     assert_eq!(output[0].len(), 640);
 
     // Should have non-trivial output (not all zeros)
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.01, "complex patch should produce non-zero output, max={max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.01,
+        "complex patch should produce non-zero output, max={max}"
+    );
 }
 
 // ============================================================================
@@ -651,12 +693,17 @@ fn test_oscillator_multichannel_expansion() {
             UGenSpec {
                 name: "TwoFreq",
                 inputs: &[],
-                outputs: &[OutputSpec { name: "out", rate: Rate::Audio }],
+                outputs: &[OutputSpec {
+                    name: "out",
+                    rate: Rate::Audio,
+                }],
             }
         }
         fn init(&mut self, _: &ProcessContext) {}
         fn reset(&mut self) {}
-        fn output_channels(&self, _: &[usize]) -> usize { 2 }
+        fn output_channels(&self, _: &[usize]) -> usize {
+            2
+        }
         fn process(&mut self, _: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
             output.channel_mut(0).fill(440.0);
             output.channel_mut(1).fill(880.0);
@@ -759,12 +806,12 @@ fn test_compressor_reduces_loud_signal() {
     // A loud signal above threshold should be attenuated.
     let mut engine = Engine::new(EngineConfig::default());
     let src = engine.graph_mut().add_node(Box::new(Const::new(1.0))); // 0 dB
-    let sc = engine.graph_mut().add_node(Box::new(Const::new(1.0)));  // sidechain = same
+    let sc = engine.graph_mut().add_node(Box::new(Const::new(1.0))); // sidechain = same
     let thresh = engine.graph_mut().add_node(Box::new(Const::new(-20.0))); // -20 dB threshold
-    let ratio = engine.graph_mut().add_node(Box::new(Const::new(4.0)));    // 4:1
+    let ratio = engine.graph_mut().add_node(Box::new(Const::new(4.0))); // 4:1
     let attack = engine.graph_mut().add_node(Box::new(Const::new(0.001))); // 1ms attack
     let release = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
-    let makeup = engine.graph_mut().add_node(Box::new(Const::new(0.0)));   // no makeup
+    let makeup = engine.graph_mut().add_node(Box::new(Const::new(0.0))); // no makeup
     let comp = engine.graph_mut().add_node(Box::new(Compressor::new()));
 
     engine.graph_mut().connect(src, comp, 0);
@@ -831,11 +878,11 @@ fn test_compressor_makeup_gain() {
     let mut engine = Engine::new(EngineConfig::default());
     let src = engine.graph_mut().add_node(Box::new(Const::new(0.1))); // -20 dB
     let sc = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
-    let thresh = engine.graph_mut().add_node(Box::new(Const::new(-6.0)));  // above signal
+    let thresh = engine.graph_mut().add_node(Box::new(Const::new(-6.0))); // above signal
     let ratio = engine.graph_mut().add_node(Box::new(Const::new(4.0)));
     let attack = engine.graph_mut().add_node(Box::new(Const::new(0.001)));
     let release = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
-    let makeup = engine.graph_mut().add_node(Box::new(Const::new(12.0)));  // +12 dB makeup
+    let makeup = engine.graph_mut().add_node(Box::new(Const::new(12.0))); // +12 dB makeup
     let comp = engine.graph_mut().add_node(Box::new(Compressor::new()));
 
     engine.graph_mut().connect(src, comp, 0);
@@ -852,10 +899,7 @@ fn test_compressor_makeup_gain() {
     let last = *output[0].last().unwrap();
     // Signal is below threshold, so no compression.
     // Makeup of +12 dB ≈ 4x gain. 0.1 * 4 ≈ 0.4
-    assert!(
-        last > 0.3,
-        "makeup gain should boost output, got {last}"
-    );
+    assert!(last > 0.3, "makeup gain should boost output, got {last}");
 }
 
 #[test]
@@ -879,7 +923,10 @@ fn test_dsl_compressor_compiles() {
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "compressed synth should produce output");
 }
 
@@ -902,10 +949,17 @@ fn test_softclip_bounds() {
     let output = engine.render().unwrap();
     let samples = output.channel(0).samples();
     for &s in samples {
-        assert!(s >= -1.0 && s <= 1.0, "softclip output should be in [-1,1], got {s}");
+        assert!(
+            (-1.0..=1.0).contains(&s),
+            "softclip output should be in [-1,1], got {s}"
+        );
     }
     // tanh(10) should be very close to 1
-    assert!(samples[0] > 0.99, "tanh(10) should be near 1.0, got {}", samples[0]);
+    assert!(
+        samples[0] > 0.99,
+        "tanh(10) should be near 1.0, got {}",
+        samples[0]
+    );
 }
 
 #[test]
@@ -922,7 +976,10 @@ fn test_softclip_passes_small_signals() {
 
     let output = engine.render().unwrap();
     let s = output.channel(0).samples()[0];
-    assert!((s - 0.1).abs() < 0.01, "small signal should pass nearly unchanged, got {s}");
+    assert!(
+        (s - 0.1).abs() < 0.01,
+        "small signal should pass nearly unchanged, got {s}"
+    );
 }
 
 #[test]
@@ -953,7 +1010,10 @@ fn test_softclip_drive_increases_saturation() {
         out_high > out_low,
         "higher drive should produce more saturation: low={out_low}, high={out_high}"
     );
-    assert!(out_high > 0.99, "drive=10 on 0.5 should be near 1.0, got {out_high}");
+    assert!(
+        out_high > 0.99,
+        "drive=10 on 0.5 should be near 1.0, got {out_high}"
+    );
 }
 
 #[test]
@@ -1126,7 +1186,10 @@ fn test_softclip_negative_input_bounds() {
 
     let output = engine.render().unwrap();
     let s = output.channel(0).samples()[0];
-    assert!(s >= -1.0 && s <= 0.0, "tanh(-10) should be in [-1, 0], got {s}");
+    assert!(
+        (-1.0..=0.0).contains(&s),
+        "tanh(-10) should be in [-1, 0], got {s}"
+    );
     assert!(s < -0.99, "tanh(-10) should be near -1.0, got {s}");
 }
 
@@ -1149,11 +1212,17 @@ fn test_softclip_with_oscillator() {
 
     let output = engine.render_offline(10);
     for &s in &output[0] {
-        assert!(s >= -1.0 && s <= 1.0, "softclip on oscillator should be bounded, got {s}");
+        assert!(
+            (-1.0..=1.0).contains(&s),
+            "softclip on oscillator should be bounded, got {s}"
+        );
     }
     // Should have non-trivial output
     let max = output[0].iter().copied().fold(0.0f32, f32::max);
-    assert!(max > 0.3, "softclip on sine should produce output, max={max}");
+    assert!(
+        max > 0.3,
+        "softclip on sine should produce output, max={max}"
+    );
 }
 
 #[test]
@@ -1174,7 +1243,10 @@ fn test_overdrive_zero_drive() {
 
     let output = engine.render_offline(5);
     let last = *output[0].last().unwrap();
-    assert!(last.abs() < 0.01, "drive=0, mix=1 should produce near silence, got {last}");
+    assert!(
+        last.abs() < 0.01,
+        "drive=0, mix=1 should produce near silence, got {last}"
+    );
 }
 
 #[test]
@@ -1237,9 +1309,15 @@ fn test_overdrive_half_mix() {
     // At mix=0.5: out = 0.5 * 0.4 + 0.5 * wet
     // wet is tanh(5*0.4) = tanh(2.0) ≈ 0.964 (positive side)
     // So output ≈ 0.2 + 0.5 * ~0.964 ≈ 0.682
-    assert!(s > 0.2 && s < 0.95, "half mix should blend dry and wet, got {s}");
+    assert!(
+        s > 0.2 && s < 0.95,
+        "half mix should blend dry and wet, got {s}"
+    );
     // Should differ from both pure dry (0.4) and pure wet
-    assert!((s - 0.4).abs() > 0.05, "half mix should differ from dry, got {s}");
+    assert!(
+        (s - 0.4).abs() > 0.05,
+        "half mix should differ from dry, got {s}"
+    );
 }
 
 #[test]
@@ -1263,7 +1341,10 @@ fn test_overdrive_negative_clipping_bounded() {
     let last = *output[0].last().unwrap();
     // Cubic soft clip of -1.5: -1.5 - (-1.5)^3/3.375 = -1.5 - (-3.375/3.375) = -1.5 + 1.0 = -0.5
     // After tone filter settles to this constant, output should be near -1.0
-    assert!(last >= -1.5 && last <= 0.0, "negative clipping should be bounded, got {last}");
+    assert!(
+        (-1.5..=0.0).contains(&last),
+        "negative clipping should be bounded, got {last}"
+    );
 }
 
 #[test]
@@ -1288,8 +1369,14 @@ fn test_overdrive_with_oscillator() {
     engine.prepare();
 
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.1, "overdrive on sine should produce output, max={max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.1,
+        "overdrive on sine should produce output, max={max}"
+    );
     assert!(max <= 1.5, "overdrive output should be bounded, max={max}");
 }
 
@@ -1314,7 +1401,10 @@ fn test_dsl_softclip_compiles() {
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "softClip DSL synth should produce output");
 }
 
@@ -1339,7 +1429,10 @@ fn test_dsl_overdrive_compiles() {
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "overdrive DSL synth should produce output");
 }
 
@@ -1358,10 +1451,16 @@ fn test_blsaw_range() {
 
     let output = engine.render_offline(10);
     for &s in &output[0] {
-        assert!(s >= -1.01 && s <= 1.01, "BlSaw sample {s} out of range");
+        assert!((-1.01..=1.01).contains(&s), "BlSaw sample {s} out of range");
     }
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.5, "BlSaw should produce significant output, max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.5,
+        "BlSaw should produce significant output, max was {max}"
+    );
 }
 
 #[test]
@@ -1398,10 +1497,16 @@ fn test_bltri_range() {
 
     let output = engine.render_offline(20);
     for &s in &output[0] {
-        assert!(s >= -1.5 && s <= 1.5, "BlTri sample {s} out of range");
+        assert!((-1.5..=1.5).contains(&s), "BlTri sample {s} out of range");
     }
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.3, "BlTri should produce significant output, max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.3,
+        "BlTri should produce significant output, max was {max}"
+    );
 }
 
 // ============================================================================
@@ -1422,13 +1527,22 @@ fn test_pluck_trigger_produces_output() {
     engine.prepare();
 
     let output = engine.render_offline(4);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.01, "Pluck should produce output after trigger, max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.01,
+        "Pluck should produce output after trigger, max was {max}"
+    );
 }
 
 #[test]
 fn test_pluck_decays_to_silence() {
-    let config = EngineConfig { sample_rate: 44100.0, block_size: 64 };
+    let config = EngineConfig {
+        sample_rate: 44100.0,
+        block_size: 64,
+    };
     let mut engine = Engine::new(config);
     // Use Impulse at very low freq to trigger once at the start
     let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
@@ -1469,8 +1583,14 @@ fn test_bowed_produces_output() {
 
     // Bowed model needs some blocks to start oscillating
     let output = engine.render_offline(50);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.001, "Bowed should produce output with pressure=0.5, max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.001,
+        "Bowed should produce output with pressure=0.5, max was {max}"
+    );
 }
 
 #[test]
@@ -1487,8 +1607,14 @@ fn test_bowed_silence_at_zero_pressure() {
     engine.prepare();
 
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max < 0.01, "Bowed should be near-silent with pressure=0, max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max < 0.01,
+        "Bowed should be near-silent with pressure=0, max was {max}"
+    );
 }
 
 // ============================================================================
@@ -1511,9 +1637,18 @@ fn test_fmosc_produces_output() {
     engine.prepare();
 
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
-    assert!(max > 0.1, "FmOsc should produce audible output, max was {max}");
-    assert!(max <= 1.0, "FmOsc output should be in [-1, 1], max was {max}");
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(
+        max > 0.1,
+        "FmOsc should produce audible output, max was {max}"
+    );
+    assert!(
+        max <= 1.0,
+        "FmOsc output should be in [-1, 1], max was {max}"
+    );
 }
 
 #[test]
@@ -1578,13 +1713,17 @@ fn test_notch_attenuates_at_center() {
     // Feed a sine at the notch frequency — it should be heavily attenuated.
     let notch_freq = 1000.0;
     let mut engine = Engine::new(EngineConfig::default());
-    let freq = engine.graph_mut().add_node(Box::new(Const::new(notch_freq)));
+    let freq = engine
+        .graph_mut()
+        .add_node(Box::new(Const::new(notch_freq)));
     let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
     let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
     engine.graph_mut().connect(freq, osc, 0);
     engine.graph_mut().connect(phase, osc, 1);
 
-    let filt_freq = engine.graph_mut().add_node(Box::new(Const::new(notch_freq)));
+    let filt_freq = engine
+        .graph_mut()
+        .add_node(Box::new(Const::new(notch_freq)));
     let q = engine.graph_mut().add_node(Box::new(Const::new(10.0))); // narrow notch
     let filt = engine.graph_mut().add_node(Box::new(BiquadNotch::new()));
     engine.graph_mut().connect(osc, filt, 0);
@@ -1642,7 +1781,8 @@ fn test_allpass_preserves_rms() {
     engine_dry.graph_mut().set_sink(osc);
     engine_dry.prepare();
     let dry_output = engine_dry.render_offline(100);
-    let dry_rms: f32 = (dry_output[0].iter().map(|s| s * s).sum::<f32>() / dry_output[0].len() as f32).sqrt();
+    let dry_rms: f32 =
+        (dry_output[0].iter().map(|s| s * s).sum::<f32>() / dry_output[0].len() as f32).sqrt();
 
     let mut engine_wet = Engine::new(EngineConfig::default());
     let freq2 = engine_wet.graph_mut().add_node(Box::new(Const::new(440.0)));
@@ -1651,16 +1791,21 @@ fn test_allpass_preserves_rms() {
     engine_wet.graph_mut().connect(freq2, osc2, 0);
     engine_wet.graph_mut().connect(phase2, osc2, 1);
 
-    let filt_freq = engine_wet.graph_mut().add_node(Box::new(Const::new(1000.0)));
+    let filt_freq = engine_wet
+        .graph_mut()
+        .add_node(Box::new(Const::new(1000.0)));
     let q = engine_wet.graph_mut().add_node(Box::new(Const::new(0.707)));
-    let filt = engine_wet.graph_mut().add_node(Box::new(AllpassFilter::new()));
+    let filt = engine_wet
+        .graph_mut()
+        .add_node(Box::new(AllpassFilter::new()));
     engine_wet.graph_mut().connect(osc2, filt, 0);
     engine_wet.graph_mut().connect(filt_freq, filt, 1);
     engine_wet.graph_mut().connect(q, filt, 2);
     engine_wet.graph_mut().set_sink(filt);
     engine_wet.prepare();
     let wet_output = engine_wet.render_offline(100);
-    let wet_rms: f32 = (wet_output[0].iter().map(|s| s * s).sum::<f32>() / wet_output[0].len() as f32).sqrt();
+    let wet_rms: f32 =
+        (wet_output[0].iter().map(|s| s * s).sum::<f32>() / wet_output[0].len() as f32).sqrt();
 
     let ratio = wet_rms / dry_rms;
     assert!(
@@ -1716,7 +1861,10 @@ fn test_freqshift_produces_output() {
     engine.prepare();
 
     let output = engine.render_offline(50);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(
         max > 0.1,
         "FreqShift should produce audible output with shift=100, max was {max}"
@@ -1814,19 +1962,19 @@ fn test_wavefolder_symmetry_changes_output() {
         engine.graph_mut().set_sink(fold);
         engine.prepare();
 
-        engine.render_offline(5)
-            .into_iter()
-            .flatten()
-            .collect()
+        engine.render_offline(5).into_iter().flatten().collect()
     };
 
     let sym_0 = render_with_sym(0.0);
     let sym_05 = render_with_sym(0.5);
 
     // Outputs should differ
-    let diff: f32 = sym_0.iter().zip(sym_05.iter())
+    let diff: f32 = sym_0
+        .iter()
+        .zip(sym_05.iter())
         .map(|(a, b)| (a - b).abs())
-        .sum::<f32>() / sym_0.len() as f32;
+        .sum::<f32>()
+        / sym_0.len() as f32;
     assert!(
         diff > 0.01,
         "Different symmetry values should produce different output, avg diff was {diff}"
@@ -1920,10 +2068,7 @@ fn test_lfo_shapes_differ() {
         engine.graph_mut().set_sink(lfo_node);
         engine.prepare();
 
-        engine.render_offline(200)
-            .into_iter()
-            .flatten()
-            .collect()
+        engine.render_offline(200).into_iter().flatten().collect()
     };
 
     let sine = render_shape(0.0);
@@ -1932,12 +2077,24 @@ fn test_lfo_shapes_differ() {
     let square = render_shape(3.0);
 
     // Each pair should differ
-    let diff_sine_tri: f32 = sine.iter().zip(tri.iter())
-        .map(|(a, b)| (a - b).abs()).sum::<f32>() / sine.len() as f32;
-    let diff_tri_saw: f32 = tri.iter().zip(saw.iter())
-        .map(|(a, b)| (a - b).abs()).sum::<f32>() / tri.len() as f32;
-    let diff_saw_square: f32 = saw.iter().zip(square.iter())
-        .map(|(a, b)| (a - b).abs()).sum::<f32>() / saw.len() as f32;
+    let diff_sine_tri: f32 = sine
+        .iter()
+        .zip(tri.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / sine.len() as f32;
+    let diff_tri_saw: f32 = tri
+        .iter()
+        .zip(saw.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / tri.len() as f32;
+    let diff_saw_square: f32 = saw
+        .iter()
+        .zip(square.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / saw.len() as f32;
 
     assert!(diff_sine_tri > 0.01, "Sine and triangle should differ");
     assert!(diff_tri_saw > 0.01, "Triangle and saw should differ");
@@ -1964,7 +2121,10 @@ fn test_dsl_wavefolder_compiles() {
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "waveFolder DSL synth should produce output");
 }
 
@@ -1990,6 +2150,9 @@ fn test_dsl_lfo_compiles() {
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
     let output = engine.render_offline(10);
-    let max = output[0].iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "lfo DSL synth should produce output");
 }

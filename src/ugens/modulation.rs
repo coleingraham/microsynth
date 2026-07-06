@@ -33,6 +33,12 @@ pub struct Chorus {
     sample_rate: f32,
 }
 
+impl Default for Chorus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Chorus {
     pub fn new() -> Self {
         Chorus {
@@ -50,16 +56,35 @@ const CHORUS_CENTER_DELAY: f32 = 0.007;
 const CHORUS_MAX_DELAY: f32 = 0.040;
 
 static CHORUS_INPUTS: [InputSpec; 4] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "rate", rate: Rate::Audio },
-    InputSpec { name: "depth", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "rate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "depth",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static CHORUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static CHORUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Chorus {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Chorus", inputs: &CHORUS_INPUTS, outputs: &CHORUS_OUTPUTS }
+        UGenSpec {
+            name: "Chorus",
+            inputs: &CHORUS_INPUTS,
+            outputs: &CHORUS_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -177,6 +202,12 @@ pub struct Flanger {
     sample_rate: f32,
 }
 
+impl Default for Flanger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Flanger {
     pub fn new() -> Self {
         Flanger {
@@ -191,17 +222,39 @@ impl Flanger {
 const FLANGER_MAX_DELAY: f32 = 0.020;
 
 static FLANGER_INPUTS: [InputSpec; 5] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "rate", rate: Rate::Audio },
-    InputSpec { name: "depth", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "rate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "depth",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static FLANGER_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static FLANGER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Flanger {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Flanger", inputs: &FLANGER_INPUTS, outputs: &FLANGER_OUTPUTS }
+        UGenSpec {
+            name: "Flanger",
+            inputs: &FLANGER_INPUTS,
+            outputs: &FLANGER_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -264,8 +317,7 @@ impl UGen for Flanger {
                 // LFO-modulated delay time (unipolar: 0 to depth)
                 let lfo = (lfo_phase * TAU).sin() * 0.5 + 0.5;
                 let delay_secs = 0.0005 + depth * lfo; // min 0.5ms
-                let delay_samples = (delay_secs * self.sample_rate)
-                    .clamp(1.0, max_delay_samples);
+                let delay_samples = (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
 
                 // Read with linear interpolation
                 let d_int = delay_samples as usize;
@@ -314,6 +366,12 @@ pub struct Phaser {
     feedback_sample: f32,
 }
 
+impl Default for Phaser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Phaser {
     pub fn new() -> Self {
         Phaser {
@@ -326,17 +384,39 @@ impl Phaser {
 }
 
 static PHASER_INPUTS: [InputSpec; 5] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "rate", rate: Rate::Audio },
-    InputSpec { name: "depth", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "rate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "depth",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static PHASER_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PHASER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Phaser {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Phaser", inputs: &PHASER_INPUTS, outputs: &PHASER_OUTPUTS }
+        UGenSpec {
+            name: "Phaser",
+            inputs: &PHASER_INPUTS,
+            outputs: &PHASER_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -404,9 +484,9 @@ impl UGen for Phaser {
                 let mut signal = x + feedback * fb_sample;
 
                 // Cascade 4 allpass stages
-                for stage in 0..4 {
-                    let y = coeff * signal + ap_state[stage];
-                    ap_state[stage] = signal - coeff * y;
+                for ap in ap_state.iter_mut() {
+                    let y = coeff * signal + *ap;
+                    *ap = signal - coeff * y;
                     signal = y;
                 }
 

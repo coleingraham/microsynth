@@ -23,6 +23,12 @@ pub struct OnePole {
     y1: f32,
 }
 
+impl Default for OnePole {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OnePole {
     pub fn new() -> Self {
         OnePole { y1: 0.0 }
@@ -30,14 +36,27 @@ impl OnePole {
 }
 
 static ONEPOLE_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "coeff", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "coeff",
+        rate: Rate::Audio,
+    },
 ];
-static ONEPOLE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static ONEPOLE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for OnePole {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "OnePole", inputs: &ONEPOLE_INPUTS, outputs: &ONEPOLE_OUTPUTS }
+        UGenSpec {
+            name: "OnePole",
+            inputs: &ONEPOLE_INPUTS,
+            outputs: &ONEPOLE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -116,7 +135,13 @@ fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
     let a2 = 1.0 - alpha;
 
     let inv_a0 = 1.0 / a0;
-    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+    (
+        b0 * inv_a0,
+        b1 * inv_a0,
+        b2 * inv_a0,
+        a1 * inv_a0,
+        a2 * inv_a0,
+    )
 }
 
 /// Compute biquad highpass coefficients.
@@ -134,7 +159,13 @@ fn biquad_hpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
     let a2 = 1.0 - alpha;
 
     let inv_a0 = 1.0 / a0;
-    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+    (
+        b0 * inv_a0,
+        b1 * inv_a0,
+        b2 * inv_a0,
+        a1 * inv_a0,
+        a2 * inv_a0,
+    )
 }
 
 /// Compute biquad bandpass coefficients (constant-peak-gain).
@@ -152,7 +183,13 @@ fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
     let a2 = 1.0 - alpha;
 
     let inv_a0 = 1.0 / a0;
-    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+    (
+        b0 * inv_a0,
+        b1 * inv_a0,
+        b2 * inv_a0,
+        a1 * inv_a0,
+        a2 * inv_a0,
+    )
 }
 
 /// Compute biquad notch (band-reject) coefficients.
@@ -170,7 +207,13 @@ fn biquad_notch_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f
     let a2 = 1.0 - alpha;
 
     let inv_a0 = 1.0 / a0;
-    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+    (
+        b0 * inv_a0,
+        b1 * inv_a0,
+        b2 * inv_a0,
+        a1 * inv_a0,
+        a2 * inv_a0,
+    )
 }
 
 /// Compute biquad allpass coefficients.
@@ -188,7 +231,13 @@ fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32,
     let a2 = 1.0 - alpha;
 
     let inv_a0 = 1.0 / a0;
-    (b0 * inv_a0, b1 * inv_a0, b2 * inv_a0, a1 * inv_a0, a2 * inv_a0)
+    (
+        b0 * inv_a0,
+        b1 * inv_a0,
+        b2 * inv_a0,
+        a1 * inv_a0,
+        a2 * inv_a0,
+    )
 }
 
 // --- BiquadLPF ---
@@ -201,22 +250,47 @@ pub struct BiquadLPF {
     sample_rate: f32,
 }
 
+impl Default for BiquadLPF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BiquadLPF {
     pub fn new() -> Self {
-        BiquadLPF { state: BiquadState::new(), sample_rate: 44100.0 }
+        BiquadLPF {
+            state: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
     }
 }
 
 static BIQUAD_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "q", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "q",
+        rate: Rate::Audio,
+    },
 ];
-static BIQUAD_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static BIQUAD_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for BiquadLPF {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BiquadLPF", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+        UGenSpec {
+            name: "BiquadLPF",
+            inputs: &BIQUAD_INPUTS,
+            outputs: &BIQUAD_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -275,15 +349,28 @@ pub struct BiquadHPF {
     sample_rate: f32,
 }
 
+impl Default for BiquadHPF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BiquadHPF {
     pub fn new() -> Self {
-        BiquadHPF { state: BiquadState::new(), sample_rate: 44100.0 }
+        BiquadHPF {
+            state: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
     }
 }
 
 impl UGen for BiquadHPF {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BiquadHPF", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+        UGenSpec {
+            name: "BiquadHPF",
+            inputs: &BIQUAD_INPUTS,
+            outputs: &BIQUAD_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -342,15 +429,28 @@ pub struct BiquadBPF {
     sample_rate: f32,
 }
 
+impl Default for BiquadBPF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BiquadBPF {
     pub fn new() -> Self {
-        BiquadBPF { state: BiquadState::new(), sample_rate: 44100.0 }
+        BiquadBPF {
+            state: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
     }
 }
 
 impl UGen for BiquadBPF {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BiquadBPF", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+        UGenSpec {
+            name: "BiquadBPF",
+            inputs: &BIQUAD_INPUTS,
+            outputs: &BIQUAD_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -412,15 +512,28 @@ pub struct BiquadNotch {
     sample_rate: f32,
 }
 
+impl Default for BiquadNotch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BiquadNotch {
     pub fn new() -> Self {
-        BiquadNotch { state: BiquadState::new(), sample_rate: 44100.0 }
+        BiquadNotch {
+            state: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
     }
 }
 
 impl UGen for BiquadNotch {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BiquadNotch", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+        UGenSpec {
+            name: "BiquadNotch",
+            inputs: &BIQUAD_INPUTS,
+            outputs: &BIQUAD_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -483,15 +596,28 @@ pub struct AllpassFilter {
     sample_rate: f32,
 }
 
+impl Default for AllpassFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AllpassFilter {
     pub fn new() -> Self {
-        AllpassFilter { state: BiquadState::new(), sample_rate: 44100.0 }
+        AllpassFilter {
+            state: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
     }
 }
 
 impl UGen for AllpassFilter {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "AllpassFilter", inputs: &BIQUAD_INPUTS, outputs: &BIQUAD_OUTPUTS }
+        UGenSpec {
+            name: "AllpassFilter",
+            inputs: &BIQUAD_INPUTS,
+            outputs: &BIQUAD_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -557,6 +683,12 @@ pub struct CombFilter {
     sample_rate: f32,
 }
 
+impl Default for CombFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CombFilter {
     pub fn new() -> Self {
         CombFilter {
@@ -568,15 +700,31 @@ impl CombFilter {
 }
 
 static COMB_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "delay", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "delay",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
 ];
-static COMB_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static COMB_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for CombFilter {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "CombFilter", inputs: &COMB_INPUTS, outputs: &COMB_OUTPUTS }
+        UGenSpec {
+            name: "CombFilter",
+            inputs: &COMB_INPUTS,
+            outputs: &COMB_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -621,16 +769,15 @@ impl UGen for CombFilter {
                     .unwrap_or(0.5)
                     .clamp(-0.999, 0.999);
 
-                let delay_samples = (delay_time * self.sample_rate)
-                    .min(max_delay)
-                    .max(1.0);
+                let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 
                 // Read from delay line with linear interpolation
                 let delay_int = delay_samples as usize;
                 let frac = delay_samples - delay_int as f32;
                 let read_a = (write_pos + buf_len - delay_int) % buf_len;
                 let read_b = (write_pos + buf_len - delay_int - 1) % buf_len;
-                let delayed = self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
+                let delayed =
+                    self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
 
                 // IIR comb: output = input + feedback * delayed_output
                 let y = in_ch[i] + feedback * delayed;
@@ -772,38 +919,76 @@ const COMB_DELAYS_L: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 161
 const STEREO_SPREAD: usize = 23;
 const ALLPASS_DELAYS_L: [usize; 4] = [556, 441, 341, 225];
 
+impl Default for GVerb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GVerb {
     pub fn new() -> Self {
         GVerb {
             combs_l: core::array::from_fn(|i| ReverbComb::new(COMB_DELAYS_L[i])),
             combs_r: core::array::from_fn(|i| ReverbComb::new(COMB_DELAYS_L[i] + STEREO_SPREAD)),
             allpasses_l: core::array::from_fn(|i| ReverbAllpass::new(ALLPASS_DELAYS_L[i])),
-            allpasses_r: core::array::from_fn(|i| ReverbAllpass::new(ALLPASS_DELAYS_L[i] + STEREO_SPREAD)),
+            allpasses_r: core::array::from_fn(|i| {
+                ReverbAllpass::new(ALLPASS_DELAYS_L[i] + STEREO_SPREAD)
+            }),
         }
     }
 }
 
 static GVERB_INPUTS: [InputSpec; 5] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "roomsize", rate: Rate::Audio },
-    InputSpec { name: "damping", rate: Rate::Audio },
-    InputSpec { name: "wet", rate: Rate::Audio },
-    InputSpec { name: "dry", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "roomsize",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "damping",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "wet",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "dry",
+        rate: Rate::Audio,
+    },
 ];
-static GVERB_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static GVERB_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for GVerb {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "GVerb", inputs: &GVERB_INPUTS, outputs: &GVERB_OUTPUTS }
+        UGenSpec {
+            name: "GVerb",
+            inputs: &GVERB_INPUTS,
+            outputs: &GVERB_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
 
     fn reset(&mut self) {
-        for c in &mut self.combs_l { c.clear(); }
-        for c in &mut self.combs_r { c.clear(); }
-        for a in &mut self.allpasses_l { a.clear(); }
-        for a in &mut self.allpasses_r { a.clear(); }
+        for c in &mut self.combs_l {
+            c.clear();
+        }
+        for c in &mut self.combs_r {
+            c.clear();
+        }
+        for a in &mut self.allpasses_l {
+            a.clear();
+        }
+        for a in &mut self.allpasses_r {
+            a.clear();
+        }
     }
 
     fn output_channels(&self, _input_channels: &[usize]) -> usize {
@@ -929,6 +1114,12 @@ pub struct Compressor {
     sample_rate: f32,
 }
 
+impl Default for Compressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Compressor {
     pub fn new() -> Self {
         Compressor {
@@ -939,15 +1130,39 @@ impl Compressor {
 }
 
 static COMP_INPUTS: [InputSpec; 7] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "sidechain", rate: Rate::Audio },
-    InputSpec { name: "threshold", rate: Rate::Audio },
-    InputSpec { name: "ratio", rate: Rate::Audio },
-    InputSpec { name: "attack", rate: Rate::Audio },
-    InputSpec { name: "release", rate: Rate::Audio },
-    InputSpec { name: "makeup", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "sidechain",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "threshold",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "ratio",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "attack",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "release",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "makeup",
+        rate: Rate::Audio,
+    },
 ];
-static COMP_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static COMP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 /// Fast log2 approximation using IEEE 754 float bit tricks (no_std compatible).
 /// Accurate to ~0.09 dB for audio signals.
@@ -977,7 +1192,11 @@ fn fast_db_to_lin(db: f32) -> f32 {
 
 impl UGen for Compressor {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Compressor", inputs: &COMP_INPUTS, outputs: &COMP_OUTPUTS }
+        UGenSpec {
+            name: "Compressor",
+            inputs: &COMP_INPUTS,
+            outputs: &COMP_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {

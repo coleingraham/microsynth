@@ -1,6 +1,6 @@
-use microsynth::*;
 use microsynth::dsl::{self, UGenRegistry};
 use microsynth::ugens;
+use microsynth::*;
 
 // -- Test UGens for routing tests -------------------------------------------
 
@@ -129,7 +129,8 @@ fn test_single_effect_chain() {
     engine.build_routing(&mut routing, &[effect_def]);
 
     // Spawn a voice on the source bus
-    let _voice_id = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source_bus)
+    let _voice_id = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source_bus)
         .expect("should spawn voice");
 
     engine.prepare();
@@ -137,10 +138,7 @@ fn test_single_effect_chain() {
     let output = engine.render().expect("should render");
     assert_eq!(output.num_channels(), 2, "main bus should be stereo");
     for &s in output.channel(0).samples() {
-        assert!(
-            (s - 0.5).abs() < 1e-6,
-            "expected 0.5 (0.25 * 2.0), got {s}"
-        );
+        assert!((s - 0.5).abs() < 1e-6, "expected 0.5 (0.25 * 2.0), got {s}");
     }
 }
 
@@ -187,7 +185,8 @@ fn test_multi_effect_chain() {
 
     engine.build_routing(&mut routing, &[fx1_def, fx2_def]);
 
-    let _voice = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source)
+    let _voice = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
         .expect("should spawn voice");
     engine.prepare();
 
@@ -244,16 +243,14 @@ fn test_fan_out_parallel_effects() {
 
     engine.build_routing(&mut routing, &[fx_double, fx_triple]);
 
-    let _voice = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source)
+    let _voice = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
         .expect("should spawn voice");
     engine.prepare();
 
     let output = engine.render().expect("should render");
     for &s in output.channel(0).samples() {
-        assert!(
-            (s - 5.0).abs() < 1e-6,
-            "expected 5.0 (2.0 + 3.0), got {s}"
-        );
+        assert!((s - 5.0).abs() < 1e-6, "expected 5.0 (2.0 + 3.0), got {s}");
     }
 }
 
@@ -418,7 +415,8 @@ fn test_end_to_end_dsl_routing() {
     // Spawn a voice outputting 1.0
     let voice_def = defs.iter().find(|d| d.name() == "voice").unwrap();
     let voices_bus = routing.bus_by_name("voices").unwrap();
-    let _v = engine.spawn_voice_on_routing_bus(voice_def, &routing, voices_bus)
+    let _v = engine
+        .spawn_voice_on_routing_bus(voice_def, &routing, voices_bus)
         .expect("should spawn voice");
 
     engine.prepare();
@@ -426,10 +424,7 @@ fn test_end_to_end_dsl_routing() {
 
     // Voice outputs 1.0, halfGain multiplies by 0.5
     for &s in output.channel(0).samples() {
-        assert!(
-            (s - 0.5).abs() < 1e-6,
-            "expected 0.5, got {s}"
-        );
+        assert!((s - 0.5).abs() < 1e-6, "expected 0.5, got {s}");
     }
 }
 
@@ -461,7 +456,9 @@ fn test_effect_param_control() {
     let effect_id = routing.add_effect(source, &effect_def, routing.main_bus());
 
     engine.build_routing(&mut routing, &[effect_def]);
-    let _v = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source).unwrap();
+    let _v = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
+        .unwrap();
     engine.prepare();
 
     // Render with amp=1.0 (default)
@@ -485,7 +482,7 @@ fn test_effect_param_control() {
 
 #[test]
 fn test_lexer_fat_arrow() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     let tokens = tokenize("a => b").unwrap();
     let kinds: Vec<_> = tokens.iter().map(|t| &t.token).collect();
     assert!(matches!(kinds[0], Token::Ident(s) if s == "a"));
@@ -495,7 +492,7 @@ fn test_lexer_fat_arrow() {
 
 #[test]
 fn test_lexer_bus_route_keywords() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     let tokens = tokenize("bus drums 2").unwrap();
     assert!(matches!(tokens[0].token, Token::Bus));
 
@@ -505,7 +502,7 @@ fn test_lexer_bus_route_keywords() {
 
 #[test]
 fn test_lexer_eq_vs_fat_arrow() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     // Ensure = and => are distinguished correctly
     let tokens = tokenize("x = 1.0 a => b").unwrap();
     let kinds: Vec<_> = tokens.iter().map(|t| &t.token).collect();
@@ -542,9 +539,15 @@ fn test_multiple_voices_on_routing_bus() {
     engine.build_routing(&mut routing, &[effect_def]);
 
     // Spawn 3 voices with different values
-    let v1 = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source).unwrap();
-    let v2 = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source).unwrap();
-    let v3 = engine.spawn_voice_on_routing_bus(&voice_def, &routing, source).unwrap();
+    let v1 = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
+        .unwrap();
+    let v2 = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
+        .unwrap();
+    let v3 = engine
+        .spawn_voice_on_routing_bus(&voice_def, &routing, source)
+        .unwrap();
 
     engine.set_voice_param(v1, "amp", 1.0);
     engine.set_voice_param(v2, "amp", 2.0);

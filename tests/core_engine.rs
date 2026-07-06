@@ -349,15 +349,9 @@ fn test_multichannel_expansion() {
     assert_eq!(output.num_channels(), 3, "should expand to 3 channels");
 
     let expected = [0.5, 1.0, 1.5];
-    for ch in 0..3 {
+    for (ch, &exp) in expected.iter().enumerate() {
         for &s in output.channel(ch).samples() {
-            assert!(
-                (s - expected[ch]).abs() < 1e-6,
-                "ch {}: expected {}, got {}",
-                ch,
-                expected[ch],
-                s
-            );
+            assert!((s - exp).abs() < 1e-6, "ch {ch}: expected {exp}, got {s}");
         }
     }
 }
@@ -386,15 +380,9 @@ fn test_multichannel_wrapping() {
     assert_eq!(output.num_channels(), 3);
 
     let expected = [11.0, 22.0, 31.0];
-    for ch in 0..3 {
+    for (ch, &exp) in expected.iter().enumerate() {
         for &s in output.channel(ch).samples() {
-            assert!(
-                (s - expected[ch]).abs() < 1e-6,
-                "ch {}: expected {}, got {}",
-                ch,
-                expected[ch],
-                s
-            );
+            assert!((s - exp).abs() < 1e-6, "ch {ch}: expected {exp}, got {s}");
         }
     }
 }

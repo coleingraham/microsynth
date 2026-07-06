@@ -36,14 +36,9 @@ pub enum EventAction {
     },
     /// Set the gate parameter (convenience for note-on/note-off).
     /// gate > 0 = note on, gate = 0 = note off.
-    SetGate {
-        voice: VoiceId,
-        value: f32,
-    },
+    SetGate { voice: VoiceId, value: f32 },
     /// Remove a voice from the graph.
-    FreeSynth {
-        voice: VoiceId,
-    },
+    FreeSynth { voice: VoiceId },
 }
 
 /// A scheduled event: an action to perform at a specific sample time.
@@ -147,8 +142,8 @@ impl Scheduler {
             return Vec::new();
         }
         let remaining = self.events.split_off(split_pos);
-        let drained = core::mem::replace(&mut self.events, remaining);
-        drained
+
+        core::mem::replace(&mut self.events, remaining)
     }
 
     /// Check if there are any pending events.

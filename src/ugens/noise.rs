@@ -2,10 +2,10 @@
 //!
 //! Uses a simple LCG PRNG (no_std compatible, deterministic, fast).
 
+use super::rng::Rng;
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
 use crate::node::{OutputSpec, UGen, UGenSpec};
-use super::rng::Rng;
 
 // --- WhiteNoise ---
 
@@ -16,22 +16,39 @@ pub struct WhiteNoise {
     rng: Rng,
 }
 
+impl Default for WhiteNoise {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WhiteNoise {
     pub fn new() -> Self {
-        WhiteNoise { rng: Rng::new(0xDEAD_BEEF) }
+        WhiteNoise {
+            rng: Rng::new(0xDEAD_BEEF),
+        }
     }
 
     /// Create with a specific seed for deterministic output.
     pub fn with_seed(seed: u32) -> Self {
-        WhiteNoise { rng: Rng::new(seed) }
+        WhiteNoise {
+            rng: Rng::new(seed),
+        }
     }
 }
 
-static NOISE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static NOISE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for WhiteNoise {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "WhiteNoise", inputs: &[], outputs: &NOISE_OUTPUTS }
+        UGenSpec {
+            name: "WhiteNoise",
+            inputs: &[],
+            outputs: &NOISE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -74,6 +91,12 @@ pub struct PinkNoise {
     counter: u32,
 }
 
+impl Default for PinkNoise {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PinkNoise {
     pub fn new() -> Self {
         PinkNoise {
@@ -87,7 +110,11 @@ impl PinkNoise {
 
 impl UGen for PinkNoise {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "PinkNoise", inputs: &[], outputs: &NOISE_OUTPUTS }
+        UGenSpec {
+            name: "PinkNoise",
+            inputs: &[],
+            outputs: &NOISE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}

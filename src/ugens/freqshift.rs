@@ -17,18 +17,8 @@ use core::f32::consts::TAU;
 /// outputs across the audio band (~20 Hz to ~20 kHz).
 ///
 /// Coefficients from Hilbert transformer design (Anssi Klapuri / Olli Niemitalo).
-const HILBERT_COEFFS_I: [f32; 4] = [
-    0.6923878,
-    0.9360654322959,
-    0.9882295226860,
-    0.9987488452737,
-];
-const HILBERT_COEFFS_Q: [f32; 4] = [
-    0.4021921162426,
-    0.8561710882420,
-    0.9722909545651,
-    0.9952884791278,
-];
+const HILBERT_COEFFS_I: [f32; 4] = [0.6923878, 0.936_065_44, 0.988_229_5, 0.998_748_84];
+const HILBERT_COEFFS_Q: [f32; 4] = [0.402_192_12, 0.856_171_1, 0.972_290_93, 0.995_288_5];
 
 /// State for one allpass chain (4 first-order stages).
 #[derive(Clone, Copy)]
@@ -49,8 +39,7 @@ impl HilbertChain {
     #[inline]
     fn tick(&mut self, input: f32, coeffs: &[f32; 4]) -> f32 {
         let mut x = input;
-        for i in 0..4 {
-            let c = coeffs[i];
+        for (i, &c) in coeffs.iter().enumerate() {
             // First-order allpass: y = c * x + state, new_state = x - c * y
             let y = c * x + self.state[i];
             self.state[i] = x - c * y;
@@ -84,6 +73,12 @@ pub struct FreqShift {
     sample_rate: f32,
 }
 
+impl Default for FreqShift {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FreqShift {
     pub fn new() -> Self {
         FreqShift {
@@ -96,14 +91,27 @@ impl FreqShift {
 }
 
 static FREQSHIFT_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "shift", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "shift",
+        rate: Rate::Audio,
+    },
 ];
-static FREQSHIFT_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static FREQSHIFT_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for FreqShift {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "FreqShift", inputs: &FREQSHIFT_INPUTS, outputs: &FREQSHIFT_OUTPUTS }
+        UGenSpec {
+            name: "FreqShift",
+            inputs: &FREQSHIFT_INPUTS,
+            outputs: &FREQSHIFT_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {

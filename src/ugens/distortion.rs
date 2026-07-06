@@ -24,6 +24,12 @@ use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 /// Output is always bounded to (-1, 1).
 pub struct SoftClip;
 
+impl Default for SoftClip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SoftClip {
     pub fn new() -> Self {
         SoftClip
@@ -31,14 +37,27 @@ impl SoftClip {
 }
 
 static SOFTCLIP_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "drive", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "drive",
+        rate: Rate::Audio,
+    },
 ];
-static SOFTCLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SOFTCLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SoftClip {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SoftClip", inputs: &SOFTCLIP_INPUTS, outputs: &SOFTCLIP_OUTPUTS }
+        UGenSpec {
+            name: "SoftClip",
+            inputs: &SOFTCLIP_INPUTS,
+            outputs: &SOFTCLIP_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -94,6 +113,12 @@ pub struct Overdrive {
     y1: f32,
 }
 
+impl Default for Overdrive {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Overdrive {
     pub fn new() -> Self {
         Overdrive { y1: 0.0 }
@@ -101,16 +126,35 @@ impl Overdrive {
 }
 
 static OVERDRIVE_INPUTS: [InputSpec; 4] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "drive", rate: Rate::Audio },
-    InputSpec { name: "tone", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "drive",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "tone",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static OVERDRIVE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static OVERDRIVE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Overdrive {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Overdrive", inputs: &OVERDRIVE_INPUTS, outputs: &OVERDRIVE_OUTPUTS }
+        UGenSpec {
+            name: "Overdrive",
+            inputs: &OVERDRIVE_INPUTS,
+            outputs: &OVERDRIVE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -200,6 +244,12 @@ impl UGen for Overdrive {
 ///   Non-zero values break odd-harmonic symmetry, introducing even harmonics.
 pub struct WaveFolder;
 
+impl Default for WaveFolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaveFolder {
     pub fn new() -> Self {
         WaveFolder
@@ -207,15 +257,31 @@ impl WaveFolder {
 }
 
 static WAVEFOLDER_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "drive", rate: Rate::Audio },
-    InputSpec { name: "symmetry", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "drive",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "symmetry",
+        rate: Rate::Audio,
+    },
 ];
-static WAVEFOLDER_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static WAVEFOLDER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for WaveFolder {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "WaveFolder", inputs: &WAVEFOLDER_INPUTS, outputs: &WAVEFOLDER_OUTPUTS }
+        UGenSpec {
+            name: "WaveFolder",
+            inputs: &WAVEFOLDER_INPUTS,
+            outputs: &WAVEFOLDER_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}

@@ -154,10 +154,10 @@ impl SampleBank {
 
     /// Remove a sample by ID.
     pub fn remove(&mut self, id: SampleId) {
-        if let Some(sample) = self.samples.remove(&id) {
-            if !sample.name.is_empty() {
-                self.name_index.remove(&sample.name);
-            }
+        if let Some(sample) = self.samples.remove(&id)
+            && !sample.name.is_empty()
+        {
+            self.name_index.remove(&sample.name);
         }
     }
 

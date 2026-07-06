@@ -15,6 +15,12 @@ use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 /// where theta = (pos + 1) * pi/4.
 pub struct Pan2;
 
+impl Default for Pan2 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pan2 {
     pub fn new() -> Self {
         Pan2
@@ -22,14 +28,27 @@ impl Pan2 {
 }
 
 static PAN2_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "pos", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "pos",
+        rate: Rate::Audio,
+    },
 ];
-static PAN2_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PAN2_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Pan2 {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Pan2", inputs: &PAN2_INPUTS, outputs: &PAN2_OUTPUTS }
+        UGenSpec {
+            name: "Pan2",
+            inputs: &PAN2_INPUTS,
+            outputs: &PAN2_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -77,18 +96,34 @@ impl UGen for Pan2 {
 /// Outputs: 1-channel mono mix (sum of all input channels).
 pub struct Mix;
 
+impl Default for Mix {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Mix {
     pub fn new() -> Self {
         Mix
     }
 }
 
-static MIX_INPUTS: [InputSpec; 1] = [InputSpec { name: "in", rate: Rate::Audio }];
-static MIX_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static MIX_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "in",
+    rate: Rate::Audio,
+}];
+static MIX_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Mix {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Mix", inputs: &MIX_INPUTS, outputs: &MIX_OUTPUTS }
+        UGenSpec {
+            name: "Mix",
+            inputs: &MIX_INPUTS,
+            outputs: &MIX_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -131,6 +166,12 @@ pub struct SampleAndHold {
     prev_trig: f32,
 }
 
+impl Default for SampleAndHold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SampleAndHold {
     pub fn new() -> Self {
         SampleAndHold {
@@ -141,14 +182,27 @@ impl SampleAndHold {
 }
 
 static SH_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "trig", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "trig",
+        rate: Rate::Audio,
+    },
 ];
-static SH_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SampleAndHold {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SampleAndHold", inputs: &SH_INPUTS, outputs: &SH_OUTPUTS }
+        UGenSpec {
+            name: "SampleAndHold",
+            inputs: &SH_INPUTS,
+            outputs: &SH_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}
@@ -204,6 +258,12 @@ pub struct Impulse {
     first: bool,
 }
 
+impl Default for Impulse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Impulse {
     pub fn new() -> Self {
         Impulse {
@@ -214,12 +274,22 @@ impl Impulse {
     }
 }
 
-static IMPULSE_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static IMPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static IMPULSE_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static IMPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Impulse {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Impulse", inputs: &IMPULSE_INPUTS, outputs: &IMPULSE_OUTPUTS }
+        UGenSpec {
+            name: "Impulse",
+            inputs: &IMPULSE_INPUTS,
+            outputs: &IMPULSE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -247,22 +317,22 @@ impl UGen for Impulse {
             let mut first = self.first;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(1.0);
 
                 if first {
-                    out[i] = 1.0;
+                    *out_sample = 1.0;
                     first = false;
                     phase += freq * inv_sr;
                 } else {
                     phase += freq * inv_sr;
                     if phase >= 1.0 {
                         phase -= phase.floor();
-                        out[i] = 1.0;
+                        *out_sample = 1.0;
                     } else {
-                        out[i] = 0.0;
+                        *out_sample = 0.0;
                     }
                 }
             }
@@ -287,6 +357,12 @@ pub struct Lag {
     sample_rate: f32,
 }
 
+impl Default for Lag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lag {
     pub fn new() -> Self {
         Lag {
@@ -297,14 +373,27 @@ impl Lag {
 }
 
 static LAG_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "time", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "time",
+        rate: Rate::Audio,
+    },
 ];
-static LAG_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static LAG_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Lag {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Lag", inputs: &LAG_INPUTS, outputs: &LAG_OUTPUTS }
+        UGenSpec {
+            name: "Lag",
+            inputs: &LAG_INPUTS,
+            outputs: &LAG_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -360,6 +449,12 @@ impl UGen for Lag {
 /// Inputs: in (signal), lo (minimum), hi (maximum).
 pub struct Clip;
 
+impl Default for Clip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clip {
     pub fn new() -> Self {
         Clip
@@ -367,15 +462,31 @@ impl Clip {
 }
 
 static CLIP_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "lo", rate: Rate::Audio },
-    InputSpec { name: "hi", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "lo",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "hi",
+        rate: Rate::Audio,
+    },
 ];
-static CLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static CLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Clip {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Clip", inputs: &CLIP_INPUTS, outputs: &CLIP_OUTPUTS }
+        UGenSpec {
+            name: "Clip",
+            inputs: &CLIP_INPUTS,
+            outputs: &CLIP_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}

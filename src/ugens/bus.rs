@@ -38,7 +38,10 @@ impl Bus {
         }
         // Leak once — Bus nodes are infrastructure and live for the engine's lifetime
         let input_specs: &'static [InputSpec] = Box::leak(specs.into_boxed_slice());
-        Bus { input_specs, channels: channels.max(1) }
+        Bus {
+            input_specs,
+            channels: channels.max(1),
+        }
     }
 
     /// Create a default stereo bus.
@@ -64,8 +67,14 @@ impl Bus {
 /// node's input when instantiating an effect.
 pub struct AudioIn;
 
-static AUDIO_IN_INPUTS: [InputSpec; 1] = [InputSpec { name: "in", rate: Rate::Audio }];
-static AUDIO_IN_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static AUDIO_IN_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "in",
+    rate: Rate::Audio,
+}];
+static AUDIO_IN_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for AudioIn {
     fn spec(&self) -> UGenSpec {
@@ -104,7 +113,10 @@ impl UGen for AudioIn {
     }
 }
 
-static BUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static BUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Bus {
     fn spec(&self) -> UGenSpec {

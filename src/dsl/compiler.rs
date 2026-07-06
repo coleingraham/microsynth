@@ -93,7 +93,9 @@ impl<'a> Compiler<'a> {
         // control of parameters like freq, amp, filter cutoff, etc.
         for param in &decl.params {
             let value = param.default;
-            let idx = self.builder.add_node(move || Box::new(ugens::Param::new(value)));
+            let idx = self
+                .builder
+                .add_node(move || Box::new(ugens::Param::new(value)));
             self.builder.param(param.name.clone(), idx, 0);
             self.scope.insert(param.name.clone(), idx);
         }
@@ -110,7 +112,9 @@ impl<'a> Compiler<'a> {
         match expr {
             Expr::Lit(value) => {
                 let v = *value;
-                Ok(self.builder.add_node(move || Box::new(ugens::Const::new(v))))
+                Ok(self
+                    .builder
+                    .add_node(move || Box::new(ugens::Const::new(v))))
             }
 
             Expr::Var(name) => {
@@ -259,23 +263,24 @@ pub fn compile_routing(
             let effect_name = &chain[i + 1];
             let target_name = &chain[i + 2];
 
-            let source_bus = routing.bus_by_name(source_name).ok_or_else(|| {
-                CompileError {
+            let source_bus = routing
+                .bus_by_name(source_name)
+                .ok_or_else(|| CompileError {
                     message: alloc::format!("unknown bus in route: {source_name}"),
-                }
-            })?;
+                })?;
 
-            let target_bus = routing.bus_by_name(target_name).ok_or_else(|| {
-                CompileError {
+            let target_bus = routing
+                .bus_by_name(target_name)
+                .ok_or_else(|| CompileError {
                     message: alloc::format!("unknown bus in route: {target_name}"),
-                }
-            })?;
+                })?;
 
-            let def = defs.iter().find(|d| d.name() == effect_name).ok_or_else(|| {
-                CompileError {
+            let def = defs
+                .iter()
+                .find(|d| d.name() == effect_name)
+                .ok_or_else(|| CompileError {
                     message: alloc::format!("unknown effect synthdef in route: {effect_name}"),
-                }
-            })?;
+                })?;
 
             routing.add_effect(source_bus, def, target_bus);
             i += 2;

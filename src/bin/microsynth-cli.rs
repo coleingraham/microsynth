@@ -6,7 +6,10 @@ use microsynth::engine::{Engine, EngineConfig};
 use microsynth::ugens::register_builtins;
 
 #[derive(Parser)]
-#[command(name = "microsynth-cli", about = "Offline rendering for microsynth DSL")]
+#[command(
+    name = "microsynth-cli",
+    about = "Offline rendering for microsynth DSL"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -95,13 +98,13 @@ fn main() {
 
             // Select synthdef
             let def = if let Some(ref name) = synthdef {
-                defs.iter()
-                    .find(|d| d.name() == name)
-                    .unwrap_or_else(|| {
-                        eprintln!("SynthDef '{name}' not found. Available: {:?}",
-                            defs.iter().map(|d| d.name()).collect::<Vec<_>>());
-                        std::process::exit(1);
-                    })
+                defs.iter().find(|d| d.name() == name).unwrap_or_else(|| {
+                    eprintln!(
+                        "SynthDef '{name}' not found. Available: {:?}",
+                        defs.iter().map(|d| d.name()).collect::<Vec<_>>()
+                    );
+                    std::process::exit(1);
+                })
             } else {
                 &defs[0]
             };
@@ -117,10 +120,7 @@ fn main() {
             engine.graph_mut().set_sink(synth.output_node());
 
             // Auto-set gate=1.0 for sustaining synths unless overridden
-            let has_gate_param = def
-                .param_names()
-                .iter()
-                .any(|(name, _, _)| name == "gate");
+            let has_gate_param = def.param_names().iter().any(|(name, _, _)| name == "gate");
             let gate_overridden = params.iter().any(|(name, _)| name == "gate");
             if has_gate_param && !gate_overridden {
                 engine.set_param(&synth, "gate", 1.0);
@@ -129,7 +129,10 @@ fn main() {
             // Apply param overrides
             for (name, value) in &params {
                 if !engine.set_param(&synth, name, *value) {
-                    eprintln!("Warning: parameter '{name}' not found on synthdef '{}'", def.name());
+                    eprintln!(
+                        "Warning: parameter '{name}' not found on synthdef '{}'",
+                        def.name()
+                    );
                 }
             }
 

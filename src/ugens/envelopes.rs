@@ -22,6 +22,12 @@ pub struct Line {
     sample_rate: f32,
 }
 
+impl Default for Line {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Line {
     pub fn new() -> Self {
         Line {
@@ -37,15 +43,31 @@ impl Line {
 }
 
 static LINE_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "start", rate: Rate::Audio },
-    InputSpec { name: "end", rate: Rate::Audio },
-    InputSpec { name: "dur", rate: Rate::Audio },
+    InputSpec {
+        name: "start",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "end",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "dur",
+        rate: Rate::Audio,
+    },
 ];
-static LINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static LINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Line {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Line", inputs: &LINE_INPUTS, outputs: &LINE_OUTPUTS }
+        UGenSpec {
+            name: "Line",
+            inputs: &LINE_INPUTS,
+            outputs: &LINE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -71,13 +93,16 @@ impl UGen for Line {
     ) {
         // On first block, read start/end/dur from first sample of inputs
         if !self.initialized {
-            let start = inputs.first()
+            let start = inputs
+                .first()
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(0.0);
-            let end = inputs.get(1)
+            let end = inputs
+                .get(1)
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(1.0);
-            let dur = inputs.get(2)
+            let dur = inputs
+                .get(2)
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(1.0)
                 .max(0.0);
@@ -145,6 +170,12 @@ pub struct XLine {
     sample_rate: f32,
 }
 
+impl Default for XLine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl XLine {
     pub fn new() -> Self {
         XLine {
@@ -171,15 +202,31 @@ impl XLine {
 }
 
 static XLINE_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "start", rate: Rate::Audio },
-    InputSpec { name: "end", rate: Rate::Audio },
-    InputSpec { name: "dur", rate: Rate::Audio },
+    InputSpec {
+        name: "start",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "end",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "dur",
+        rate: Rate::Audio,
+    },
 ];
-static XLINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static XLINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for XLine {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "XLine", inputs: &XLINE_INPUTS, outputs: &XLINE_OUTPUTS }
+        UGenSpec {
+            name: "XLine",
+            inputs: &XLINE_INPUTS,
+            outputs: &XLINE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -204,13 +251,16 @@ impl UGen for XLine {
         output: &mut AudioBuffer,
     ) {
         if !self.initialized {
-            let raw_start = inputs.first()
+            let raw_start = inputs
+                .first()
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(1.0);
-            let raw_end = inputs.get(1)
+            let raw_end = inputs
+                .get(1)
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(0.001);
-            let dur = inputs.get(2)
+            let dur = inputs
+                .get(2)
                 .map(|b| b.channel(0).samples()[0])
                 .unwrap_or(1.0)
                 .max(0.0);
@@ -290,6 +340,12 @@ enum PercStage {
     Done,
 }
 
+impl Default for Perc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Perc {
     pub fn new() -> Self {
         Perc {
@@ -302,14 +358,27 @@ impl Perc {
 }
 
 static PERC_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "attack", rate: Rate::Audio },
-    InputSpec { name: "release", rate: Rate::Audio },
+    InputSpec {
+        name: "attack",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "release",
+        rate: Rate::Audio,
+    },
 ];
-static PERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Perc {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Perc", inputs: &PERC_INPUTS, outputs: &PERC_OUTPUTS }
+        UGenSpec {
+            name: "Perc",
+            inputs: &PERC_INPUTS,
+            outputs: &PERC_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -339,7 +408,7 @@ impl UGen for Perc {
             let mut stage = self.stage;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let attack_time = attack_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(0.001)
@@ -371,7 +440,7 @@ impl UGen for Perc {
                     }
                 }
 
-                out[i] = level;
+                *out_sample = level;
             }
 
             if ch == 0 {
@@ -412,6 +481,12 @@ enum ExpPercStage {
     Done,
 }
 
+impl Default for ExpPerc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpPerc {
     pub fn new() -> Self {
         ExpPerc {
@@ -424,14 +499,27 @@ impl ExpPerc {
 }
 
 static EXPPERC_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "attack", rate: Rate::Audio },
-    InputSpec { name: "release", rate: Rate::Audio },
+    InputSpec {
+        name: "attack",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "release",
+        rate: Rate::Audio,
+    },
 ];
-static EXPPERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static EXPPERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for ExpPerc {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "ExpPerc", inputs: &EXPPERC_INPUTS, outputs: &EXPPERC_OUTPUTS }
+        UGenSpec {
+            name: "ExpPerc",
+            inputs: &EXPPERC_INPUTS,
+            outputs: &EXPPERC_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -461,7 +549,7 @@ impl UGen for ExpPerc {
             let mut stage = self.stage;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let attack_time = attack_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(0.001)
@@ -493,7 +581,7 @@ impl UGen for ExpPerc {
                     }
                 }
 
-                out[i] = level;
+                *out_sample = level;
             }
 
             if ch == 0 {
@@ -537,6 +625,12 @@ enum AsrStage {
     Release,
 }
 
+impl Default for ASR {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ASR {
     pub fn new() -> Self {
         ASR {
@@ -549,15 +643,31 @@ impl ASR {
 }
 
 static ASR_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "gate", rate: Rate::Audio },
-    InputSpec { name: "attack", rate: Rate::Audio },
-    InputSpec { name: "release", rate: Rate::Audio },
+    InputSpec {
+        name: "gate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "attack",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "release",
+        rate: Rate::Audio,
+    },
 ];
-static ASR_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static ASR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for ASR {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "ASR", inputs: &ASR_INPUTS, outputs: &ASR_OUTPUTS }
+        UGenSpec {
+            name: "ASR",
+            inputs: &ASR_INPUTS,
+            outputs: &ASR_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -682,6 +792,12 @@ enum AdsrStage {
     Release,
 }
 
+impl Default for ADSR {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ADSR {
     pub fn new() -> Self {
         ADSR {
@@ -694,17 +810,39 @@ impl ADSR {
 }
 
 static ADSR_INPUTS: [InputSpec; 5] = [
-    InputSpec { name: "gate", rate: Rate::Audio },
-    InputSpec { name: "attack", rate: Rate::Audio },
-    InputSpec { name: "decay", rate: Rate::Audio },
-    InputSpec { name: "sustain", rate: Rate::Audio },
-    InputSpec { name: "release", rate: Rate::Audio },
+    InputSpec {
+        name: "gate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "attack",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "decay",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "sustain",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "release",
+        rate: Rate::Audio,
+    },
 ];
-static ADSR_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static ADSR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for ADSR {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "ADSR", inputs: &ADSR_INPUTS, outputs: &ADSR_OUTPUTS }
+        UGenSpec {
+            name: "ADSR",
+            inputs: &ADSR_INPUTS,
+            outputs: &ADSR_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {

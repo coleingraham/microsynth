@@ -66,7 +66,7 @@ pub use utility::*;
 pub use wavetable::*;
 
 use crate::context::Rate;
-use crate::dsl::compiler::{UGenRegistry};
+use crate::dsl::compiler::UGenRegistry;
 use crate::node::{InputSpec, OutputSpec};
 use alloc::boxed::Box;
 
@@ -82,60 +82,117 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "sinOsc",
         || Box::new(SinOsc::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "phase", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "phase",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "saw",
         || Box::new(Saw::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "pulse",
         || Box::new(Pulse::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "width", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "width",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "tri",
         || Box::new(Tri::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "phasor",
         || Box::new(Phasor::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Band-limited Oscillators (polyBLEP) --
     reg.register(
         "blSaw",
         || Box::new(BlSaw::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "blPulse",
         || Box::new(BlPulse::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "width", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "width",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "blTri",
         || Box::new(BlTri::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Physical Models --
@@ -143,21 +200,45 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "pluck",
         || Box::new(Pluck::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "decay", rate: Rate::Audio },
-            InputSpec { name: "trig", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "decay",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "trig",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "bowed",
         || Box::new(Bowed::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "pressure", rate: Rate::Audio },
-            InputSpec { name: "position", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "pressure",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "position",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Noise --
@@ -165,13 +246,19 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "whiteNoise",
         || Box::new(WhiteNoise::new()),
         &[],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "pinkNoise",
         || Box::new(PinkNoise::new()),
         &[],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Filters --
@@ -179,61 +266,130 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "onePole",
         || Box::new(OnePole::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "coeff", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "coeff",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "lpf",
         || Box::new(BiquadLPF::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "q", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "q",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "hpf",
         || Box::new(BiquadHPF::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "q", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "q",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "bpf",
         || Box::new(BiquadBPF::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "q", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "q",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     reg.register(
         "notch",
         || Box::new(BiquadNotch::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "q", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "q",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "allpass",
         || Box::new(AllpassFilter::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "q", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "q",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Comb filter --
@@ -241,11 +397,23 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "combFilter",
         || Box::new(CombFilter::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "delay", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "delay",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- GVerb (Schroeder reverb) --
@@ -253,13 +421,31 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "gverb",
         || Box::new(GVerb::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "roomsize", rate: Rate::Audio },
-            InputSpec { name: "damping", rate: Rate::Audio },
-            InputSpec { name: "wet", rate: Rate::Audio },
-            InputSpec { name: "dry", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "roomsize",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "damping",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "wet",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "dry",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Envelopes --
@@ -267,61 +453,133 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "line",
         || Box::new(Line::new()),
         &[
-            InputSpec { name: "start", rate: Rate::Audio },
-            InputSpec { name: "end", rate: Rate::Audio },
-            InputSpec { name: "dur", rate: Rate::Audio },
+            InputSpec {
+                name: "start",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "end",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "dur",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "xLine",
         || Box::new(XLine::new()),
         &[
-            InputSpec { name: "start", rate: Rate::Audio },
-            InputSpec { name: "end", rate: Rate::Audio },
-            InputSpec { name: "dur", rate: Rate::Audio },
+            InputSpec {
+                name: "start",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "end",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "dur",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "perc",
         || Box::new(Perc::new()),
         &[
-            InputSpec { name: "attack", rate: Rate::Audio },
-            InputSpec { name: "release", rate: Rate::Audio },
+            InputSpec {
+                name: "attack",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "release",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "expPerc",
         || Box::new(ExpPerc::new()),
         &[
-            InputSpec { name: "attack", rate: Rate::Audio },
-            InputSpec { name: "release", rate: Rate::Audio },
+            InputSpec {
+                name: "attack",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "release",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "asr",
         || Box::new(ASR::new()),
         &[
-            InputSpec { name: "gate", rate: Rate::Audio },
-            InputSpec { name: "attack", rate: Rate::Audio },
-            InputSpec { name: "release", rate: Rate::Audio },
+            InputSpec {
+                name: "gate",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "attack",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "release",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "adsr",
         || Box::new(ADSR::new()),
         &[
-            InputSpec { name: "gate", rate: Rate::Audio },
-            InputSpec { name: "attack", rate: Rate::Audio },
-            InputSpec { name: "decay", rate: Rate::Audio },
-            InputSpec { name: "sustain", rate: Rate::Audio },
-            InputSpec { name: "release", rate: Rate::Audio },
+            InputSpec {
+                name: "gate",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "attack",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "decay",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "sustain",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "release",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Delay --
@@ -329,20 +587,41 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "delay",
         || Box::new(Delay::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "time", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "time",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "feedbackDelay",
         || Box::new(FeedbackDelay::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "time", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "time",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Utility --
@@ -350,52 +629,101 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "pan2",
         || Box::new(Pan2::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "pos", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "pos",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "left", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "left",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "mix",
         || Box::new(Mix::new()),
-        &[
-            InputSpec { name: "in", rate: Rate::Audio },
-        ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "in",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "sampleAndHold",
         || Box::new(SampleAndHold::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "trig", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "trig",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "impulse",
         || Box::new(Impulse::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "lag",
         || Box::new(Lag::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "time", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "time",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "clip",
         || Box::new(Clip::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "lo", rate: Rate::Audio },
-            InputSpec { name: "hi", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "lo",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "hi",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Compressor --
@@ -403,15 +731,39 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "compressor",
         || Box::new(Compressor::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "sidechain", rate: Rate::Audio },
-            InputSpec { name: "threshold", rate: Rate::Audio },
-            InputSpec { name: "ratio", rate: Rate::Audio },
-            InputSpec { name: "attack", rate: Rate::Audio },
-            InputSpec { name: "release", rate: Rate::Audio },
-            InputSpec { name: "makeup", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "sidechain",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "threshold",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "ratio",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "attack",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "release",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "makeup",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- FM Synthesis --
@@ -419,12 +771,27 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "fmOsc",
         || Box::new(FmOsc::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "ratio", rate: Rate::Audio },
-            InputSpec { name: "index", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "ratio",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "index",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Frequency Shifter --
@@ -432,10 +799,19 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "freqShift",
         || Box::new(FreqShift::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "shift", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "shift",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Modulation (Chorus, Flanger, Phaser) --
@@ -443,36 +819,87 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "chorus",
         || Box::new(Chorus::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "rate", rate: Rate::Audio },
-            InputSpec { name: "depth", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "rate",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "depth",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "flanger",
         || Box::new(Flanger::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "rate", rate: Rate::Audio },
-            InputSpec { name: "depth", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "rate",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "depth",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "phaser",
         || Box::new(Phaser::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "rate", rate: Rate::Audio },
-            InputSpec { name: "depth", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "rate",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "depth",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Stereo Effects --
@@ -480,21 +907,45 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "stereoWidth",
         || Box::new(StereoWidth::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "width", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "width",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "pingPongDelay",
         || Box::new(PingPongDelay::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "time", rate: Rate::Audio },
-            InputSpec { name: "feedback", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "time",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "feedback",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Bitcrusher --
@@ -502,11 +953,23 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "bitcrusher",
         || Box::new(Bitcrusher::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "bits", rate: Rate::Audio },
-            InputSpec { name: "downsample", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "bits",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "downsample",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Distortion --
@@ -514,31 +977,67 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "softClip",
         || Box::new(SoftClip::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "drive", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "drive",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "overdrive",
         || Box::new(Overdrive::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "drive", rate: Rate::Audio },
-            InputSpec { name: "tone", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "drive",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "tone",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "waveFolder",
         || Box::new(WaveFolder::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "drive", rate: Rate::Audio },
-            InputSpec { name: "symmetry", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "drive",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "symmetry",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- LFO --
@@ -546,26 +1045,47 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "lfo",
         || Box::new(Lfo::new()),
         &[
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "shape", rate: Rate::Audio },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "shape",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Bus / Routing --
     reg.register(
         "audioIn",
         || Box::new(AudioIn),
-        &[InputSpec { name: "in", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "in",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Wavetable --
     reg.register(
         "waveTable",
         || Box::new(WaveTable::new()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Spectral Processing --
@@ -573,82 +1093,166 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
         "spectralFreeze",
         || Box::new(SpectralFreeze::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "trig", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "trig",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "pitchShift",
         || Box::new(PitchShift::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "shift", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "shift",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "spectralFilter",
         || Box::new(SpectralFilter::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "freq", rate: Rate::Audio },
-            InputSpec { name: "bandwidth", rate: Rate::Audio },
-            InputSpec { name: "gain", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "freq",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "bandwidth",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "gain",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "spectralGate",
         || Box::new(SpectralGate::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "threshold", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "threshold",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "spectralBlur",
         || Box::new(SpectralBlur::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "blur", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "blur",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "convolution",
         || Box::new(Convolution::new()),
         &[
-            InputSpec { name: "in", rate: Rate::Audio },
-            InputSpec { name: "mix", rate: Rate::Audio },
+            InputSpec {
+                name: "in",
+                rate: Rate::Audio,
+            },
+            InputSpec {
+                name: "mix",
+                rate: Rate::Audio,
+            },
         ],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 
     // -- Pre-built wavetable oscillators --
     reg.register(
         "sinTable",
         || Box::new(sine_table()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "sawTable",
         || Box::new(saw_table()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "triTable",
         || Box::new(tri_table()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
     reg.register(
         "squareTable",
         || Box::new(square_table()),
-        &[InputSpec { name: "freq", rate: Rate::Audio }],
-        &[OutputSpec { name: "out", rate: Rate::Audio }],
+        &[InputSpec {
+            name: "freq",
+            rate: Rate::Audio,
+        }],
+        &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }],
     );
 }

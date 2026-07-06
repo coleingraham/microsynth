@@ -22,7 +22,12 @@ fn run_render(dsl: &str, args: &[&str]) -> (String, String, i32) {
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(dsl.as_bytes()).unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(dsl.as_bytes())
+                .unwrap();
             child.wait_with_output()
         })
         .expect("failed to run microsynth-cli");
@@ -44,7 +49,11 @@ fn test_cli_json_output_structure() {
     assert_eq!(code, 0, "CLI failed: {stderr}");
 
     // Parse as JSON-like structure (manual since we don't have serde in tests)
-    assert!(stdout.starts_with("{\"sample_rate\":"), "unexpected JSON start: {}", &stdout[..80.min(stdout.len())]);
+    assert!(
+        stdout.starts_with("{\"sample_rate\":"),
+        "unexpected JSON start: {}",
+        &stdout[..80.min(stdout.len())]
+    );
     assert!(stdout.contains("\"block_size\":64"));
     assert!(stdout.contains("\"num_samples\":"));
     assert!(stdout.contains("\"channels\":[["));
@@ -59,25 +68,38 @@ fn test_cli_sine_produces_nonzero_samples() {
     // Extract first few samples from the JSON channels array
     let channels_start = stdout.find("\"channels\":[[").unwrap() + "\"channels\":[[".len();
     let first_comma = stdout[channels_start..].find(',').unwrap();
-    let first_sample: f32 = stdout[channels_start..channels_start + first_comma].parse().unwrap();
+    let first_sample: f32 = stdout[channels_start..channels_start + first_comma]
+        .parse()
+        .unwrap();
     // First sample of sinOsc at phase 0 should be 0 (or very close)
-    assert!(first_sample.abs() < 0.01, "first sample should be near 0, got {first_sample}");
+    assert!(
+        first_sample.abs() < 0.01,
+        "first sample should be near 0, got {first_sample}"
+    );
 
     // But there should be non-zero samples (the sine is oscillating)
     // Check that the output contains values above 0.5
-    assert!(stdout.contains("0.9") || stdout.contains("1.0") || stdout.contains("0.8"),
-        "sine wave with amp=1.0 should have samples near 1.0");
+    assert!(
+        stdout.contains("0.9") || stdout.contains("1.0") || stdout.contains("0.8"),
+        "sine wave with amp=1.0 should have samples near 1.0"
+    );
 }
 
 #[test]
 fn test_cli_param_override() {
     // Render with amp=0 — should produce silence
     let dsl = "synthdef test freq=440.0 amp=0.5 = sinOsc freq 0.0 * amp";
-    let (stdout, _stderr, code) = run_render(dsl, &[
-        "--duration", "0.01",
-        "--format", "json",
-        "--param", "amp=0.0",
-    ]);
+    let (stdout, _stderr, code) = run_render(
+        dsl,
+        &[
+            "--duration",
+            "0.01",
+            "--format",
+            "json",
+            "--param",
+            "amp=0.0",
+        ],
+    );
     assert_eq!(code, 0);
 
     // All samples should be 0
@@ -94,13 +116,16 @@ fn test_cli_param_override() {
 #[test]
 fn test_cli_gate_auto_set() {
     // A sustaining synth with gate param should auto-set gate=1.0
-    let dsl = "synthdef pad freq=440.0 gate=1.0 amp=0.5 = sinOsc freq 0.0 * asr gate 0.01 0.1 * amp";
+    let dsl =
+        "synthdef pad freq=440.0 gate=1.0 amp=0.5 = sinOsc freq 0.0 * asr gate 0.01 0.1 * amp";
     let (stdout, _stderr, code) = run_render(dsl, &["--duration", "0.05", "--format", "json"]);
     assert_eq!(code, 0);
 
     // Should have non-zero samples (gate is auto-opened)
-    assert!(!stdout.contains("\"channels\":[[0,0,0,0,0,0,0,0,0,0"),
-        "sustaining synth should produce output with auto gate=1.0");
+    assert!(
+        !stdout.contains("\"channels\":[[0,0,0,0,0,0,0,0,0,0"),
+        "sustaining synth should produce output with auto gate=1.0"
+    );
 }
 
 #[test]
@@ -109,11 +134,10 @@ fn test_cli_wav_output() {
     let tmp = std::env::temp_dir().join("microsynth_test_output.wav");
     let tmp_str = tmp.to_string_lossy().to_string();
 
-    let (_stdout, stderr, code) = run_render(dsl, &[
-        "--duration", "0.1",
-        "--format", "wav",
-        "--output", &tmp_str,
-    ]);
+    let (_stdout, stderr, code) = run_render(
+        dsl,
+        &["--duration", "0.1", "--format", "wav", "--output", &tmp_str],
+    );
     assert_eq!(code, 0, "CLI failed: {stderr}");
 
     // Verify WAV file exists and has correct header
@@ -143,11 +167,17 @@ fn test_cli_wav_output() {
 #[test]
 fn test_cli_custom_sample_rate() {
     let dsl = "synthdef test freq=440.0 amp=0.5 = sinOsc freq 0.0 * amp";
-    let (stdout, _stderr, code) = run_render(dsl, &[
-        "--duration", "0.01",
-        "--format", "json",
-        "--sample-rate", "22050",
-    ]);
+    let (stdout, _stderr, code) = run_render(
+        dsl,
+        &[
+            "--duration",
+            "0.01",
+            "--format",
+            "json",
+            "--sample-rate",
+            "22050",
+        ],
+    );
     assert_eq!(code, 0);
     assert!(stdout.contains("\"sample_rate\":22050"));
 }
@@ -158,11 +188,17 @@ fn test_cli_multiple_synthdefs_select() {
 synthdef first freq=440.0 amp=0.5 = sinOsc freq 0.0 * amp
 synthdef second freq=880.0 amp=0.3 = saw freq * amp";
     // Select the second synthdef by name
-    let (stdout, _stderr, code) = run_render(dsl, &[
-        "--duration", "0.01",
-        "--format", "json",
-        "--synthdef", "second",
-    ]);
+    let (stdout, _stderr, code) = run_render(
+        dsl,
+        &[
+            "--duration",
+            "0.01",
+            "--format",
+            "json",
+            "--synthdef",
+            "second",
+        ],
+    );
     assert_eq!(code, 0);
     // Should have rendered successfully
     assert!(stdout.contains("\"channels\":[["));
@@ -177,8 +213,10 @@ fn test_cli_compile_error() {
     let dsl = "synthdef test = unknownUGen 440.0";
     let (_stdout, stderr, code) = run_render(dsl, &["--duration", "0.01"]);
     assert_ne!(code, 0, "should fail on unknown UGen");
-    assert!(stderr.contains("Compile error") || stderr.contains("error"),
-        "stderr should contain error info: {stderr}");
+    assert!(
+        stderr.contains("Compile error") || stderr.contains("error"),
+        "stderr should contain error info: {stderr}"
+    );
 }
 
 #[test]
@@ -191,23 +229,23 @@ fn test_cli_empty_input() {
 #[test]
 fn test_cli_unknown_synthdef_name() {
     let dsl = "synthdef test freq=440.0 = sinOsc freq 0.0";
-    let (_stdout, stderr, code) = run_render(dsl, &[
-        "--duration", "0.01",
-        "--synthdef", "nonexistent",
-    ]);
+    let (_stdout, stderr, code) =
+        run_render(dsl, &["--duration", "0.01", "--synthdef", "nonexistent"]);
     assert_ne!(code, 0, "should fail when named synthdef not found");
-    assert!(stderr.contains("not found"), "stderr should mention not found: {stderr}");
+    assert!(
+        stderr.contains("not found"),
+        "stderr should mention not found: {stderr}"
+    );
 }
 
 #[test]
 fn test_cli_unknown_param_warning() {
     let dsl = "synthdef test freq=440.0 = sinOsc freq 0.0";
-    let (_stdout, stderr, code) = run_render(dsl, &[
-        "--duration", "0.01",
-        "--param", "bogus=1.0",
-    ]);
+    let (_stdout, stderr, code) = run_render(dsl, &["--duration", "0.01", "--param", "bogus=1.0"]);
     // Should succeed but warn about unknown param
     assert_eq!(code, 0);
-    assert!(stderr.contains("Warning") && stderr.contains("bogus"),
-        "should warn about unknown param: {stderr}");
+    assert!(
+        stderr.contains("Warning") && stderr.contains("bogus"),
+        "should warn about unknown param: {stderr}"
+    );
 }

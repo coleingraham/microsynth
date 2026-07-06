@@ -97,10 +97,7 @@ impl RoutingGraph {
 
     /// Look up a bus by name. Returns None if not found.
     pub fn bus_by_name(&self, name: &str) -> Option<BusId> {
-        self.buses
-            .iter()
-            .position(|b| b.name == name)
-            .map(BusId)
+        self.buses.iter().position(|b| b.name == name).map(BusId)
     }
 
     /// Get the live NodeId of a bus (available after building).
@@ -121,12 +118,7 @@ impl RoutingGraph {
     ///
     /// A single bus can be the source for multiple effects (fan-out),
     /// enabling sidechain compression, parallel processing, and send effects.
-    pub fn add_effect(
-        &mut self,
-        source_bus: BusId,
-        def: &SynthDef,
-        target_bus: BusId,
-    ) -> EffectId {
+    pub fn add_effect(&mut self, source_bus: BusId, def: &SynthDef, target_bus: BusId) -> EffectId {
         let id = EffectId(self.effects.len());
         self.effects.push(EffectSlot {
             def_name: String::from(def.name()),
@@ -162,8 +154,10 @@ impl RoutingGraph {
     }
 
     /// Get bus info by index (for iteration during build).
-    pub(crate) fn bus_info(&self, bus_id: BusId) -> Option<(& str, usize)> {
-        self.buses.get(bus_id.0).map(|b| (b.name.as_str(), b.channels))
+    pub(crate) fn bus_info(&self, bus_id: BusId) -> Option<(&str, usize)> {
+        self.buses
+            .get(bus_id.0)
+            .map(|b| (b.name.as_str(), b.channels))
     }
 
     /// Get mutable access to effects (for setting synth handles during build).

@@ -27,6 +27,12 @@ pub struct Bitcrusher {
     hold_counter: f32,
 }
 
+impl Default for Bitcrusher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Bitcrusher {
     pub fn new() -> Self {
         Bitcrusher {
@@ -37,15 +43,31 @@ impl Bitcrusher {
 }
 
 static BITCRUSH_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "bits", rate: Rate::Audio },
-    InputSpec { name: "downsample", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "bits",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "downsample",
+        rate: Rate::Audio,
+    },
 ];
-static BITCRUSH_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static BITCRUSH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Bitcrusher {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Bitcrusher", inputs: &BITCRUSH_INPUTS, outputs: &BITCRUSH_OUTPUTS }
+        UGenSpec {
+            name: "Bitcrusher",
+            inputs: &BITCRUSH_INPUTS,
+            outputs: &BITCRUSH_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {}

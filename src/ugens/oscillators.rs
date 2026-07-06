@@ -24,6 +24,12 @@ pub struct SinOsc {
     sample_rate: f32,
 }
 
+impl Default for SinOsc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SinOsc {
     pub fn new() -> Self {
         SinOsc {
@@ -34,14 +40,27 @@ impl SinOsc {
 }
 
 static SINOSC_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "phase", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "phase",
+        rate: Rate::Audio,
+    },
 ];
-static SINOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SINOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SinOsc {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SinOsc", inputs: &SINOSC_INPUTS, outputs: &SINOSC_OUTPUTS }
+        UGenSpec {
+            name: "SinOsc",
+            inputs: &SINOSC_INPUTS,
+            outputs: &SINOSC_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -68,7 +87,7 @@ impl UGen for SinOsc {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -76,7 +95,7 @@ impl UGen for SinOsc {
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(0.0);
 
-                out[i] = (phase * TAU + phase_offset).sin();
+                *out_sample = (phase * TAU + phase_offset).sin();
                 phase += freq * inv_sr;
                 // Keep phase in [0, 1) to prevent precision loss over time
                 phase -= phase.floor();
@@ -101,18 +120,37 @@ pub struct Phasor {
     sample_rate: f32,
 }
 
-impl Phasor {
-    pub fn new() -> Self {
-        Phasor { phase: 0.0, sample_rate: 44100.0 }
+impl Default for Phasor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-static PHASOR_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static PHASOR_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+impl Phasor {
+    pub fn new() -> Self {
+        Phasor {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static PHASOR_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static PHASOR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Phasor {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Phasor", inputs: &PHASOR_INPUTS, outputs: &PHASOR_OUTPUTS }
+        UGenSpec {
+            name: "Phasor",
+            inputs: &PHASOR_INPUTS,
+            outputs: &PHASOR_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -136,12 +174,12 @@ impl UGen for Phasor {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
 
-                out[i] = phase;
+                *out_sample = phase;
                 phase += freq * inv_sr;
                 phase -= phase.floor();
             }
@@ -164,18 +202,37 @@ pub struct Saw {
     sample_rate: f32,
 }
 
-impl Saw {
-    pub fn new() -> Self {
-        Saw { phase: 0.0, sample_rate: 44100.0 }
+impl Default for Saw {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-static SAW_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static SAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+impl Saw {
+    pub fn new() -> Self {
+        Saw {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static SAW_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static SAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Saw {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Saw", inputs: &SAW_INPUTS, outputs: &SAW_OUTPUTS }
+        UGenSpec {
+            name: "Saw",
+            inputs: &SAW_INPUTS,
+            outputs: &SAW_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -199,13 +256,13 @@ impl UGen for Saw {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
 
                 // Map phase [0,1) to [-1,1)
-                out[i] = 2.0 * phase - 1.0;
+                *out_sample = 2.0 * phase - 1.0;
                 phase += freq * inv_sr;
                 phase -= phase.floor();
             }
@@ -228,21 +285,43 @@ pub struct Pulse {
     sample_rate: f32,
 }
 
+impl Default for Pulse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pulse {
     pub fn new() -> Self {
-        Pulse { phase: 0.0, sample_rate: 44100.0 }
+        Pulse {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
     }
 }
 
 static PULSE_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "width", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "width",
+        rate: Rate::Audio,
+    },
 ];
-static PULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Pulse {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Pulse", inputs: &PULSE_INPUTS, outputs: &PULSE_OUTPUTS }
+        UGenSpec {
+            name: "Pulse",
+            inputs: &PULSE_INPUTS,
+            outputs: &PULSE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -267,7 +346,7 @@ impl UGen for Pulse {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -275,7 +354,7 @@ impl UGen for Pulse {
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(0.5);
 
-                out[i] = if phase < width { 1.0 } else { -1.0 };
+                *out_sample = if phase < width { 1.0 } else { -1.0 };
                 phase += freq * inv_sr;
                 phase -= phase.floor();
             }
@@ -298,18 +377,37 @@ pub struct Tri {
     sample_rate: f32,
 }
 
-impl Tri {
-    pub fn new() -> Self {
-        Tri { phase: 0.0, sample_rate: 44100.0 }
+impl Default for Tri {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-static TRI_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static TRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+impl Tri {
+    pub fn new() -> Self {
+        Tri {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static TRI_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static TRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Tri {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Tri", inputs: &TRI_INPUTS, outputs: &TRI_OUTPUTS }
+        UGenSpec {
+            name: "Tri",
+            inputs: &TRI_INPUTS,
+            outputs: &TRI_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -333,13 +431,13 @@ impl UGen for Tri {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
 
                 // Triangle: rise from -1 to +1 in first half, fall +1 to -1 in second
-                out[i] = if phase < 0.5 {
+                *out_sample = if phase < 0.5 {
                     4.0 * phase - 1.0
                 } else {
                     3.0 - 4.0 * phase
