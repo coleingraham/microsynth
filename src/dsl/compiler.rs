@@ -258,7 +258,7 @@ pub fn compile_routing(
         let chain = &route_decl.chain;
         // Walk the chain in steps of 2: each pair (bus, effect) followed by next bus
         let mut i = 0;
-        while i + 2 <= chain.len() - 1 {
+        while i + 2 < chain.len() {
             let source_name = &chain[i];
             let effect_name = &chain[i + 1];
             let target_name = &chain[i + 2];
