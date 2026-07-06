@@ -7,9 +7,9 @@
 //! - Sample playback (PlayBuf)
 //! - Bus mixing
 
-use microsynth::*;
 use microsynth::dsl::{self, UGenRegistry};
 use microsynth::ugens;
+use microsynth::*;
 use std::sync::Arc;
 
 fn make_engine(block_size: usize) -> Engine {
@@ -32,10 +32,7 @@ fn make_registry() -> UGenRegistry {
 #[test]
 fn test_set_param_changes_const_value() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef test freq=440.0 = sinOsc freq 0.0",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let synth = engine.instantiate_synthdef(&defs[0]);
@@ -58,10 +55,7 @@ fn test_set_param_changes_const_value() {
 #[test]
 fn test_set_param_returns_false_for_unknown_param() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef test freq=440.0 = sinOsc freq 0.0",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let synth = engine.instantiate_synthdef(&defs[0]);
@@ -77,7 +71,8 @@ fn test_voice_param_control() {
     let defs = dsl::compile(
         "synthdef test freq=440.0 amp=1.0 = sinOsc freq 0.0 * amp",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -105,7 +100,8 @@ fn test_perc_envelope_done_action() {
     let defs = dsl::compile(
         "synthdef hit = sinOsc 440.0 0.0 * perc 0.001 0.01",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -132,7 +128,8 @@ fn test_asr_done_after_release() {
     let defs = dsl::compile(
         "synthdef pad gate=1.0 = sinOsc 440.0 0.0 * asr gate 0.001 0.01",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -202,7 +199,8 @@ fn test_adsr_envelope_shape() {
     let defs = dsl::compile(
         "synthdef test gate=1.0 = adsr gate 0.001 0.005 0.5 0.01",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let synth = engine.instantiate_synthdef(&defs[0]);
@@ -220,7 +218,10 @@ fn test_adsr_envelope_shape() {
     // Should reach sustain level (~0.5)
     let last_samples = &all_samples[all_samples.len() - 64..];
     let avg: f32 = last_samples.iter().sum::<f32>() / last_samples.len() as f32;
-    assert!((avg - 0.5).abs() < 0.05, "Sustain level should be ~0.5, got {avg}");
+    assert!(
+        (avg - 0.5).abs() < 0.05,
+        "Sustain level should be ~0.5, got {avg}"
+    );
 
     // Gate off — release
     engine.set_param(&synth, "gate", 0.0);
@@ -231,7 +232,10 @@ fn test_adsr_envelope_shape() {
     }
 
     let last_val = *all_samples.last().unwrap();
-    assert!(last_val < 0.05, "Should release to near zero, got {last_val}");
+    assert!(
+        last_val < 0.05,
+        "Should release to near zero, got {last_val}"
+    );
 }
 
 // ============================================================================
@@ -264,7 +268,10 @@ fn test_impulse_fires_periodically() {
             }
         }
     }
-    assert!(impulse_count >= 3, "Expected ~4 impulses, got {impulse_count}");
+    assert!(
+        impulse_count >= 3,
+        "Expected ~4 impulses, got {impulse_count}"
+    );
 }
 
 #[test]
@@ -297,7 +304,10 @@ fn test_lag_smooths_step() {
     }
     let buf = engine.render().unwrap();
     let val = buf.channel(0).samples()[0];
-    assert!((val - 1.0).abs() < 0.001, "Should converge to 1.0, got {val}");
+    assert!(
+        (val - 1.0).abs() < 0.001,
+        "Should converge to 1.0, got {val}"
+    );
 }
 
 #[test]
@@ -306,7 +316,8 @@ fn test_clip_clamps_signal() {
     let defs = dsl::compile(
         "synthdef test = clip (sinOsc 440.0 0.0) (-0.5) 0.5",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let synth = engine.instantiate_synthdef(&defs[0]);
@@ -329,7 +340,8 @@ fn test_scheduler_dispatches_events() {
     let defs = dsl::compile(
         "synthdef tone freq=440.0 gate=1.0 = sinOsc freq 0.0 * asr gate 0.01 0.01",
         &registry,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -353,16 +365,16 @@ fn test_scheduler_dispatches_events() {
         engine.render();
     }
     let removed = engine.free_done_synths();
-    assert!(removed > 0, "Voice should be freed after scheduled gate off");
+    assert!(
+        removed > 0,
+        "Voice should be freed after scheduled gate off"
+    );
 }
 
 #[test]
 fn test_scheduler_param_change() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef tone freq=440.0 = sinOsc freq 0.0",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -372,9 +384,9 @@ fn test_scheduler_param_change() {
     engine.prepare();
 
     // Schedule freq change to 880 at sample 64
-    engine.scheduler_mut().schedule_set_param(
-        64, voice, "freq", 880.0,
-    );
+    engine
+        .scheduler_mut()
+        .schedule_set_param(64, voice, "freq", 880.0);
 
     // First block: freq=440
     engine.render();
@@ -406,15 +418,14 @@ fn test_playbuf_plays_sample() {
     let mut engine = make_engine(64);
 
     // Create a 128-sample test tone
-    let data: Vec<f32> = (0..128).map(|i| (i as f32 / 128.0 * 2.0 - 1.0)).collect();
+    let data: Vec<f32> = (0..128).map(|i| i as f32 / 128.0 * 2.0 - 1.0).collect();
     let sample = Arc::new(Sample::from_mono(&data, 44100.0));
 
     let mut builder = SynthDefBuilder::new("player");
     let rate_node = builder.add_node(|| Box::new(ugens::Const::new(1.0)));
     let sample_clone = Arc::clone(&sample);
-    let play = builder.add_node(move || {
-        Box::new(ugens::PlayBuf::new().with_sample(Arc::clone(&sample_clone)))
-    });
+    let play = builder
+        .add_node(move || Box::new(ugens::PlayBuf::new().with_sample(Arc::clone(&sample_clone))));
     builder.connect(rate_node, play, 0);
     builder.set_output(play);
     let def = builder.build();
@@ -428,7 +439,10 @@ fn test_playbuf_plays_sample() {
     let first_sample = buf.channel(0).samples()[0];
     let last_sample = buf.channel(0).samples()[63];
     // Should output the ramp
-    assert!(first_sample < 0.0, "First sample should be negative (start of ramp)");
+    assert!(
+        first_sample < 0.0,
+        "First sample should be negative (start of ramp)"
+    );
     assert!(last_sample > first_sample, "Should be ascending ramp");
 
     // Render second block — should complete
@@ -437,7 +451,10 @@ fn test_playbuf_plays_sample() {
     // Third block — playback should be done, output silence
     let buf = engine.render().unwrap();
     let val = buf.channel(0).samples()[0];
-    assert!(val.abs() < 0.001, "Should be silence after playback, got {val}");
+    assert!(
+        val.abs() < 0.001,
+        "Should be silence after playback, got {val}"
+    );
 }
 
 #[test]
@@ -445,14 +462,18 @@ fn test_playbuf_looping() {
     let mut engine = make_engine(64);
 
     // Short 32-sample buffer
-    let data: Vec<f32> = (0..32).map(|i| (i as f32 / 32.0)).collect();
+    let data: Vec<f32> = (0..32).map(|i| i as f32 / 32.0).collect();
     let sample = Arc::new(Sample::from_mono(&data, 44100.0));
 
     let mut builder = SynthDefBuilder::new("looper");
     let rate_node = builder.add_node(|| Box::new(ugens::Const::new(1.0)));
     let sample_clone = Arc::clone(&sample);
     let play = builder.add_node(move || {
-        Box::new(ugens::PlayBuf::new().with_sample(Arc::clone(&sample_clone)).with_loop(true))
+        Box::new(
+            ugens::PlayBuf::new()
+                .with_sample(Arc::clone(&sample_clone))
+                .with_loop(true),
+        )
     });
     builder.connect(rate_node, play, 0);
     builder.set_output(play);
@@ -479,10 +500,7 @@ fn test_playbuf_looping() {
 #[test]
 fn test_bus_sums_multiple_voices() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef tone freq=440.0 = sinOsc freq 0.0",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -506,10 +524,7 @@ fn test_bus_sums_multiple_voices() {
 #[test]
 fn test_bus_voice_removal() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef tone freq=440.0 = sinOsc freq 0.0",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
@@ -536,10 +551,7 @@ fn test_bus_voice_removal() {
 #[test]
 fn test_dsl_perc_compiles() {
     let registry = make_registry();
-    let result = dsl::compile(
-        "synthdef hit = sinOsc 440.0 0.0 * perc 0.01 0.1",
-        &registry,
-    );
+    let result = dsl::compile("synthdef hit = sinOsc 440.0 0.0 * perc 0.01 0.1", &registry);
     assert!(result.is_ok());
 }
 
@@ -556,10 +568,7 @@ fn test_dsl_adsr_compiles() {
 #[test]
 fn test_dsl_impulse_compiles() {
     let registry = make_registry();
-    let result = dsl::compile(
-        "synthdef clock = impulse 4.0",
-        &registry,
-    );
+    let result = dsl::compile("synthdef clock = impulse 4.0", &registry);
     assert!(result.is_ok());
 }
 
@@ -589,7 +598,7 @@ fn test_dsl_clip_compiles() {
 
 #[test]
 fn test_wavetable_produces_output() {
-    use microsynth::ugens::{WaveTable, Param};
+    use microsynth::ugens::{Param, WaveTable};
 
     let mut engine = make_engine(64);
 
@@ -620,13 +629,21 @@ fn test_wavetable_produces_output() {
     assert!(output.is_some());
     let buf = output.unwrap();
     // Should produce non-silent output
-    let max_val = buf.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
-    assert!(max_val > 0.01, "WaveTable should produce non-silent output, got max {}", max_val);
+    let max_val = buf
+        .channel(0)
+        .samples()
+        .iter()
+        .fold(0.0f32, |a, &b| a.max(b.abs()));
+    assert!(
+        max_val > 0.01,
+        "WaveTable should produce non-silent output, got max {}",
+        max_val
+    );
 }
 
 #[test]
 fn test_wavetable_frequency_affects_pitch() {
-    use microsynth::ugens::{WaveTable, Param};
+    use microsynth::ugens::{Param, WaveTable};
 
     // Create wavetable
     let table_len = 256;
@@ -671,18 +688,25 @@ fn test_wavetable_frequency_affects_pitch() {
     // The two outputs should be different (different frequencies)
     let samples1 = out1.channel(0).samples();
     let samples2 = out2.channel(0).samples();
-    let differs = samples1.iter().zip(samples2.iter()).any(|(a, b)| (a - b).abs() > 0.001);
-    assert!(differs, "Different frequencies should produce different waveforms");
+    let differs = samples1
+        .iter()
+        .zip(samples2.iter())
+        .any(|(a, b)| (a - b).abs() > 0.001);
+    assert!(
+        differs,
+        "Different frequencies should produce different waveforms"
+    );
 }
 
 #[test]
 fn test_dsl_wavetable_compiles() {
     let registry = make_registry();
-    let result = dsl::compile(
-        "synthdef wt freq=440.0 = waveTable freq",
-        &registry,
+    let result = dsl::compile("synthdef wt freq=440.0 = waveTable freq", &registry);
+    assert!(
+        result.is_ok(),
+        "WaveTable should be available in DSL: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "WaveTable should be available in DSL: {:?}", result.err());
 }
 
 // ============================================================================
@@ -692,10 +716,7 @@ fn test_dsl_wavetable_compiles() {
 #[test]
 fn test_param_glide_ramps_value() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let synth = engine.instantiate_synthdef(&defs[0]);
@@ -704,7 +725,11 @@ fn test_param_glide_ramps_value() {
 
     // Start with amp=0, should be silent
     let out1 = engine.render().unwrap();
-    let max1 = out1.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+    let max1 = out1
+        .channel(0)
+        .samples()
+        .iter()
+        .fold(0.0f32, |a, &b| a.max(b.abs()));
     assert!(max1 < 0.001, "Should be silent at amp=0, got {}", max1);
 
     // Set glide to amp=1.0 over ~0.01s (441 samples ≈ 7 blocks at 64)
@@ -714,23 +739,29 @@ fn test_param_glide_ramps_value() {
     let mut max_values: Vec<f32> = Vec::new();
     for _ in 0..10 {
         let out = engine.render().unwrap();
-        let max = out.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        let max = out
+            .channel(0)
+            .samples()
+            .iter()
+            .fold(0.0f32, |a, &b| a.max(b.abs()));
         max_values.push(max);
     }
 
     // Later blocks should be louder than earlier blocks
     let early_max = max_values[0];
     let late_max = *max_values.last().unwrap();
-    assert!(late_max > early_max, "Glide should increase amplitude: early={}, late={}", early_max, late_max);
+    assert!(
+        late_max > early_max,
+        "Glide should increase amplitude: early={}, late={}",
+        early_max,
+        late_max
+    );
 }
 
 #[test]
 fn test_voice_param_glide() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef test amp=0.5 = sinOsc 440.0 0.0 * amp",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef test amp=0.5 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let voice_id = engine.spawn_voice(&defs[0]);
@@ -748,10 +779,7 @@ fn test_voice_param_glide() {
 #[test]
 fn test_scheduled_param_glide() {
     let registry = make_registry();
-    let defs = dsl::compile(
-        "synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp",
-        &registry,
-    ).unwrap();
+    let defs = dsl::compile("synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
     let voice_id = engine.spawn_voice(&defs[0]);
@@ -760,7 +788,9 @@ fn test_scheduled_param_glide() {
     engine.prepare();
 
     // Schedule a glide starting at sample 0
-    engine.scheduler_mut().schedule_param_glide(0, voice_id, "amp", 1.0, 0.01);
+    engine
+        .scheduler_mut()
+        .schedule_param_glide(0, voice_id, "amp", 1.0, 0.01);
 
     // Render — the event should fire and start the glide
     let out1 = engine.render();
@@ -770,14 +800,21 @@ fn test_scheduled_param_glide() {
     let mut found_nonzero = false;
     for _ in 0..10 {
         if let Some(out) = engine.render() {
-            let max = out.channel(0).samples().iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+            let max = out
+                .channel(0)
+                .samples()
+                .iter()
+                .fold(0.0f32, |a, &b| a.max(b.abs()));
             if max > 0.01 {
                 found_nonzero = true;
                 break;
             }
         }
     }
-    assert!(found_nonzero, "Scheduled glide should produce non-zero output after ramping");
+    assert!(
+        found_nonzero,
+        "Scheduled glide should produce non-zero output after ramping"
+    );
 }
 
 #[test]
@@ -790,7 +827,12 @@ fn test_scheduler_param_glide_convenience() {
     let events = scheduler.drain_before(200);
     assert_eq!(events.len(), 1);
     match &events[0].action {
-        EventAction::SetParamGlide { voice: v, param, target, glide_secs } => {
+        EventAction::SetParamGlide {
+            voice: v,
+            param,
+            target,
+            glide_secs,
+        } => {
             assert_eq!(*v, voice);
             assert_eq!(param, "freq");
             assert!((target - 880.0).abs() < f32::EPSILON);

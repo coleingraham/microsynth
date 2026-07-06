@@ -20,6 +20,12 @@ pub struct Delay {
     sample_rate: f32,
 }
 
+impl Default for Delay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Delay {
     pub fn new() -> Self {
         Delay {
@@ -31,14 +37,27 @@ impl Delay {
 }
 
 static DELAY_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "time", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "time",
+        rate: Rate::Audio,
+    },
 ];
-static DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Delay {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Delay", inputs: &DELAY_INPUTS, outputs: &DELAY_OUTPUTS }
+        UGenSpec {
+            name: "Delay",
+            inputs: &DELAY_INPUTS,
+            outputs: &DELAY_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -121,6 +140,12 @@ pub struct FeedbackDelay {
     sample_rate: f32,
 }
 
+impl Default for FeedbackDelay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FeedbackDelay {
     pub fn new() -> Self {
         FeedbackDelay {
@@ -132,15 +157,31 @@ impl FeedbackDelay {
 }
 
 static FB_DELAY_INPUTS: [InputSpec; 3] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "time", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "time",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
 ];
-static FB_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static FB_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for FeedbackDelay {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "FeedbackDelay", inputs: &FB_DELAY_INPUTS, outputs: &FB_DELAY_OUTPUTS }
+        UGenSpec {
+            name: "FeedbackDelay",
+            inputs: &FB_DELAY_INPUTS,
+            outputs: &FB_DELAY_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -185,17 +226,15 @@ impl UGen for FeedbackDelay {
                     .unwrap_or(0.5)
                     .clamp(-0.999, 0.999);
 
-                let delay_samples = (delay_time * self.sample_rate)
-                    .min(max_delay)
-                    .max(1.0);
+                let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 
                 // Read from delay line with linear interpolation
                 let delay_int = delay_samples as usize;
                 let frac = delay_samples - delay_int as f32;
                 let read_a = (write_pos + buf_len - delay_int) % buf_len;
                 let read_b = (write_pos + buf_len - delay_int - 1) % buf_len;
-                let delayed = self.buffer[read_a]
-                    + frac * (self.buffer[read_b] - self.buffer[read_a]);
+                let delayed =
+                    self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
 
                 // Output = input + feedback * delayed output
                 let y = in_ch[i] + feedback * delayed;

@@ -23,6 +23,12 @@ pub struct WaveTable {
     sample_rate: f32,
 }
 
+impl Default for WaveTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaveTable {
     pub fn new() -> Self {
         WaveTable {
@@ -39,8 +45,14 @@ impl WaveTable {
     }
 }
 
-static WT_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static WT_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static WT_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static WT_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for WaveTable {
     fn spec(&self) -> UGenSpec {
@@ -91,14 +103,14 @@ impl UGen for WaveTable {
             let out = output.channel_mut(ch).samples_mut();
             let wt_ch = ch % waveform.num_channels();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0) as f64;
 
                 // Read with wrapping interpolation
                 let read_pos = phase * table_len;
-                out[i] = read_interpolated_wrap(waveform.channel(wt_ch), read_pos, table_len);
+                *out_sample = read_interpolated_wrap(waveform.channel(wt_ch), read_pos, table_len);
 
                 // Advance phase
                 phase += freq * inv_sr;

@@ -61,7 +61,11 @@ impl Parser {
         if defs.is_empty() && buses.is_empty() && routes.is_empty() {
             return Err(self.error("expected at least one declaration"));
         }
-        Ok(Program { defs, buses, routes })
+        Ok(Program {
+            defs,
+            buses,
+            routes,
+        })
     }
 
     /// Parse a single synthdef declaration.
@@ -81,36 +85,34 @@ impl Parser {
                 break;
             }
             // Peek: IDENT '=' NUMBER ?
-            if self.pos + 2 < self.tokens.len() {
-                if let Token::Ident(_) = &self.tokens[self.pos].token {
-                    if self.tokens[self.pos + 1].token == Token::Eq {
-                        if let Token::Number(_) = &self.tokens[self.pos + 2].token {
-                            let pname = self.expect_ident()?;
-                            self.expect(Token::Eq)?;
-                            let default = self.expect_number()?;
-                            params.push(Param {
-                                name: pname,
-                                default,
-                            });
-                            continue;
-                        }
-                        // IDENT '=' but not NUMBER — might be negative default
-                        if self.tokens[self.pos + 2].token == Token::Minus {
-                            if let Some(spanned) = self.tokens.get(self.pos + 3) {
-                                if let Token::Number(_) = &spanned.token {
-                                    let pname = self.expect_ident()?;
-                                    self.expect(Token::Eq)?;
-                                    self.expect(Token::Minus)?;
-                                    let default = -self.expect_number()?;
-                                    params.push(Param {
-                                        name: pname,
-                                        default,
-                                    });
-                                    continue;
-                                }
-                            }
-                        }
-                    }
+            if self.pos + 2 < self.tokens.len()
+                && let Token::Ident(_) = &self.tokens[self.pos].token
+                && self.tokens[self.pos + 1].token == Token::Eq
+            {
+                if let Token::Number(_) = &self.tokens[self.pos + 2].token {
+                    let pname = self.expect_ident()?;
+                    self.expect(Token::Eq)?;
+                    let default = self.expect_number()?;
+                    params.push(Param {
+                        name: pname,
+                        default,
+                    });
+                    continue;
+                }
+                // IDENT '=' but not NUMBER — might be negative default
+                if self.tokens[self.pos + 2].token == Token::Minus
+                    && let Some(spanned) = self.tokens.get(self.pos + 3)
+                    && let Token::Number(_) = &spanned.token
+                {
+                    let pname = self.expect_ident()?;
+                    self.expect(Token::Eq)?;
+                    self.expect(Token::Minus)?;
+                    let default = -self.expect_number()?;
+                    params.push(Param {
+                        name: pname,
+                        default,
+                    });
+                    continue;
                 }
             }
             break;
@@ -152,9 +154,9 @@ impl Parser {
         }
 
         if chain.len() < 3 {
-            return Err(self.error(
-                "route must have at least 3 elements: source => effect => target",
-            ));
+            return Err(
+                self.error("route must have at least 3 elements: source => effect => target")
+            );
         }
 
         Ok(RouteDecl { chain })

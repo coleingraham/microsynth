@@ -1,5 +1,5 @@
-use microsynth::*;
 use microsynth::dsl::{self, UGenRegistry};
+use microsynth::*;
 
 // -- Test UGens for DSL tests ------------------------------------------------
 
@@ -146,7 +146,7 @@ fn render_synthdef(def: &SynthDef) -> f32 {
 
 #[test]
 fn test_lexer_basic() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     let tokens = tokenize("synthdef test x=1.0 = x * 2.0").unwrap();
     let kinds: Vec<_> = tokens.iter().map(|t| &t.token).collect();
     assert!(matches!(kinds[0], Token::SynthDef));
@@ -163,7 +163,7 @@ fn test_lexer_basic() {
 
 #[test]
 fn test_lexer_comments() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     let tokens = tokenize("synthdef test = 1.0 -- this is ignored").unwrap();
     // Should have: SynthDef, Ident(test), Eq, Number(1.0), Eof
     let non_newline: Vec<_> = tokens
@@ -176,7 +176,7 @@ fn test_lexer_comments() {
 
 #[test]
 fn test_lexer_newlines() {
-    use microsynth::dsl::lexer::{tokenize, Token};
+    use microsynth::dsl::lexer::{Token, tokenize};
     let tokens = tokenize("a\n\n\nb").unwrap();
     // Multiple newlines collapse to one
     let kinds: Vec<_> = tokens.iter().map(|t| &t.token).collect();
@@ -268,7 +268,9 @@ fn test_parse_app_with_operator() {
     let program = parser.parse_program().unwrap();
     match &program.defs[0].body {
         Expr::BinOp(BinOp::Mul, lhs, rhs) => {
-            assert!(matches!(lhs.as_ref(), Expr::App(name, args) if name == "sinOsc" && args.len() == 1));
+            assert!(
+                matches!(lhs.as_ref(), Expr::App(name, args) if name == "sinOsc" && args.len() == 1)
+            );
             assert!(matches!(rhs.as_ref(), Expr::Lit(v) if (*v - 0.5).abs() < 1e-6));
         }
         other => panic!("expected Mul(App, Lit), got {:?}", other),
@@ -558,13 +560,19 @@ fn test_xline_compiles_and_decreasing() {
     let defs = dsl::compile(source, &reg).unwrap();
     let samples = render_synthdef_samples(&defs[0], 8);
     // First sample should be near start value
-    assert!(samples[0] > 500.0, "first sample should be near 1000, got {}", samples[0]);
+    assert!(
+        samples[0] > 500.0,
+        "first sample should be near 1000, got {}",
+        samples[0]
+    );
     // Should be monotonically decreasing
     for i in 1..samples.len() {
         assert!(
             samples[i] <= samples[i - 1] + 1e-3,
             "xLine should be monotonically decreasing at sample {}: {} > {}",
-            i, samples[i], samples[i - 1]
+            i,
+            samples[i],
+            samples[i - 1]
         );
     }
     // Last samples should be near end value
@@ -582,11 +590,17 @@ fn test_expperc_compiles_and_concave() {
     let samples = render_synthdef_samples(&defs[0], 40);
 
     // Find peak (should be ~1.0 after attack)
-    let peak_idx = samples.iter()
+    let peak_idx = samples
+        .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-        .unwrap().0;
-    assert!((samples[peak_idx] - 1.0).abs() < 0.05, "peak should be ~1.0, got {}", samples[peak_idx]);
+        .unwrap()
+        .0;
+    assert!(
+        (samples[peak_idx] - 1.0).abs() < 0.05,
+        "peak should be ~1.0, got {}",
+        samples[peak_idx]
+    );
 
     // Check concavity: at midpoint of decay, level should be above 0.5 (exponential stays higher)
     let decay_samples = &samples[peak_idx..];

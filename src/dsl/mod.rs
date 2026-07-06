@@ -609,7 +609,9 @@ pub mod compiler;
 pub mod lexer;
 pub mod parser;
 
-pub use compiler::{compile_program, compile_routing, compile_synthdef, CompileError, UGenEntry, UGenRegistry};
+pub use compiler::{
+    CompileError, UGenEntry, UGenRegistry, compile_program, compile_routing, compile_synthdef,
+};
 pub use lexer::LexError;
 pub use parser::ParseError;
 

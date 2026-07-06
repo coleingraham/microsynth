@@ -115,16 +115,13 @@ impl SynthDefBuilder {
 
     /// Connect one node's output to another node's input port.
     pub fn connect(&mut self, from: usize, to: usize, to_input: usize) {
-        self.edges.push(SynthDefEdge {
-            from,
-            to,
-            to_input,
-        });
+        self.edges.push(SynthDefEdge { from, to, to_input });
     }
 
     /// Name a parameter: associates a name with a specific node's input port.
     pub fn param(&mut self, name: impl Into<String>, node_index: usize, input_index: usize) {
-        self.param_names.push((name.into(), node_index, input_index));
+        self.param_names
+            .push((name.into(), node_index, input_index));
     }
 
     /// Mark a node as an audio input (e.g. an AudioIn UGen that receives
@@ -223,7 +220,10 @@ impl Synth {
 
     /// Find the NodeId for a named parameter. Returns None if not found.
     pub fn param_node(&self, name: &str) -> Option<NodeId> {
-        self.params.iter().find(|p| p.name == name).map(|p| p.node_id)
+        self.params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.node_id)
     }
 
     /// Get the audio input nodes (name, live NodeId).

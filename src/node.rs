@@ -78,7 +78,12 @@ pub trait UGen: Send {
     /// - `inputs`: one `AudioBuffer` per input port, read-only
     /// - `output`: the output buffer to write into; channel count has been
     ///   pre-set by the graph according to `output_channels`.
-    fn process(&mut self, context: &ProcessContext, inputs: &[&AudioBuffer], output: &mut AudioBuffer);
+    fn process(
+        &mut self,
+        context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    );
 
     /// Set an internal scalar value (e.g. the value of a Const or Param node).
     /// Returns true if the node accepted the value.

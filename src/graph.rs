@@ -63,6 +63,12 @@ impl TopoScratch {
     }
 }
 
+impl Default for AudioGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioGraph {
     /// Create an empty graph.
     pub fn new() -> Self {
@@ -223,9 +229,7 @@ impl AudioGraph {
 
         // Compute in-degrees
         for edge in &self.edges {
-            if self.nodes[edge.to.index()].is_some()
-                && self.nodes[edge.from.index()].is_some()
-            {
+            if self.nodes[edge.to.index()].is_some() && self.nodes[edge.from.index()].is_some() {
                 scratch.in_degree[edge.to.index()] += 1;
             }
         }
@@ -294,10 +298,12 @@ impl AudioGraph {
             slot.output_channels = out_ch;
 
             // Determine the rate of the first output to set block size
-            let rate = slot.ugen.spec().outputs.first().map_or(
-                crate::context::Rate::Audio,
-                |o| o.rate,
-            );
+            let rate = slot
+                .ugen
+                .spec()
+                .outputs
+                .first()
+                .map_or(crate::context::Rate::Audio, |o| o.rate);
             let block_size = context.block_size_for_rate(rate);
 
             slot.output.set_num_channels(out_ch, block_size);

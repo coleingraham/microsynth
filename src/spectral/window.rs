@@ -24,17 +24,16 @@ pub fn make_window(window_type: WindowType, size: usize) -> Vec<f32> {
         return w;
     }
     let n = size as f32;
-    for i in 0..size {
+    for (i, w_i) in w.iter_mut().enumerate() {
         let x = i as f32;
-        w[i] = match window_type {
+        *w_i = match window_type {
             WindowType::Hann => 0.5 * (1.0 - (2.0 * PI * x / n).cos()),
             WindowType::Hamming => 0.54 - 0.46 * (2.0 * PI * x / n).cos(),
             WindowType::Blackman => {
                 0.42 - 0.5 * (2.0 * PI * x / n).cos() + 0.08 * (4.0 * PI * x / n).cos()
             }
             WindowType::BlackmanHarris => {
-                0.35875 - 0.48829 * (2.0 * PI * x / n).cos()
-                    + 0.14128 * (4.0 * PI * x / n).cos()
+                0.35875 - 0.48829 * (2.0 * PI * x / n).cos() + 0.14128 * (4.0 * PI * x / n).cos()
                     - 0.01168 * (6.0 * PI * x / n).cos()
             }
         };
@@ -52,7 +51,7 @@ pub fn cola_norm(window_type: WindowType, fft_size: usize, hop_size: usize) -> f
     // Sum the squared window values at each hop offset.
     // For COLA, the sum of overlapping windows should be constant.
     // We compute the average overlap sum at position 0.
-    let num_overlaps = (fft_size + hop_size - 1) / hop_size;
+    let num_overlaps = fft_size.div_ceil(hop_size);
     let mut sum = 0.0f32;
     for k in 0..num_overlaps {
         let offset = k * hop_size;

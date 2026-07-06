@@ -35,6 +35,12 @@ pub struct SpectralFreeze {
     prev_trig: f32,
 }
 
+impl Default for SpectralFreeze {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectralFreeze {
     pub fn new() -> Self {
         Self {
@@ -47,14 +53,27 @@ impl SpectralFreeze {
 }
 
 static FREEZE_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "trig", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "trig",
+        rate: Rate::Audio,
+    },
 ];
-static FREEZE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static FREEZE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SpectralFreeze {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SpectralFreeze", inputs: &FREEZE_INPUTS, outputs: &FREEZE_OUTPUTS }
+        UGenSpec {
+            name: "SpectralFreeze",
+            inputs: &FREEZE_INPUTS,
+            outputs: &FREEZE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {
@@ -112,12 +131,10 @@ impl UGen for SpectralFreeze {
                     if self.is_frozen {
                         if self.frozen_spectrum.iter().all(|c| c.norm_sq() < 1e-20) {
                             // First capture — store current spectrum.
-                            self.frozen_spectrum[..fft_size]
-                                .copy_from_slice(&spectrum[..fft_size]);
+                            self.frozen_spectrum[..fft_size].copy_from_slice(&spectrum[..fft_size]);
                         } else {
                             // Subsequent frames — use frozen spectrum.
-                            spectrum[..fft_size]
-                                .copy_from_slice(&self.frozen_spectrum[..fft_size]);
+                            spectrum[..fft_size].copy_from_slice(&self.frozen_spectrum[..fft_size]);
                         }
                     } else {
                         // Not frozen — pass through, clear frozen for next trigger.
@@ -146,6 +163,12 @@ pub struct PitchShift {
     sample_rate: f32,
 }
 
+impl Default for PitchShift {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PitchShift {
     pub fn new() -> Self {
         Self {
@@ -158,14 +181,27 @@ impl PitchShift {
 }
 
 static PITCH_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "shift", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "shift",
+        rate: Rate::Audio,
+    },
 ];
-static PITCH_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PITCH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for PitchShift {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "PitchShift", inputs: &PITCH_INPUTS, outputs: &PITCH_OUTPUTS }
+        UGenSpec {
+            name: "PitchShift",
+            inputs: &PITCH_INPUTS,
+            outputs: &PITCH_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -206,8 +242,7 @@ impl UGen for PitchShift {
             let shift = shift_buf
                 .map(|b| b.channel(ch % b.num_channels()).samples()[0])
                 .unwrap_or(1.0)
-                .max(0.125)
-                .min(8.0);
+                .clamp(0.125, 8.0);
 
             for i in 0..out.len() {
                 if stft.push_sample(in_ch[i]) {
@@ -221,6 +256,10 @@ impl UGen for PitchShift {
                     let mut new_mags = vec![0.0f32; fft_size];
                     let mut new_freqs = vec![0.0f32; fft_size];
 
+                    // Index used to address several parallel per-bin arrays
+                    // (spectrum, prev_phase, new_mags/new_freqs) and arithmetically
+                    // as the bin number, so an iterator rewrite would obscure it.
+                    #[allow(clippy::needless_range_loop)]
                     for k in 0..half {
                         let mag = spectrum[k].mag();
                         let phase = spectrum[k].phase();
@@ -248,8 +287,7 @@ impl UGen for PitchShift {
 
                     // Reconstruct spectrum with accumulated synthesis phases.
                     for k in 0..half {
-                        let phase_inc =
-                            new_freqs[k] * expected_phase_advance;
+                        let phase_inc = new_freqs[k] * expected_phase_advance;
                         self.synth_phase[k] += phase_inc;
                         spectrum[k] = Complex::from_polar(new_mags[k], self.synth_phase[k]);
                         // Mirror for conjugate symmetry.
@@ -278,6 +316,12 @@ pub struct SpectralFilter {
     sample_rate: f32,
 }
 
+impl Default for SpectralFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectralFilter {
     pub fn new() -> Self {
         Self {
@@ -288,12 +332,27 @@ impl SpectralFilter {
 }
 
 static SFILTER_INPUTS: [InputSpec; 4] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "bandwidth", rate: Rate::Audio },
-    InputSpec { name: "gain", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "bandwidth",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "gain",
+        rate: Rate::Audio,
+    },
 ];
-static SFILTER_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SFILTER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SpectralFilter {
     fn spec(&self) -> UGenSpec {
@@ -390,6 +449,12 @@ pub struct SpectralGate {
     stft: Option<StftProcessor>,
 }
 
+impl Default for SpectralGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectralGate {
     pub fn new() -> Self {
         Self { stft: None }
@@ -397,14 +462,27 @@ impl SpectralGate {
 }
 
 static SGATE_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "threshold", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "threshold",
+        rate: Rate::Audio,
+    },
 ];
-static SGATE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SGATE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SpectralGate {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SpectralGate", inputs: &SGATE_INPUTS, outputs: &SGATE_OUTPUTS }
+        UGenSpec {
+            name: "SpectralGate",
+            inputs: &SGATE_INPUTS,
+            outputs: &SGATE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {
@@ -445,13 +523,10 @@ impl UGen for SpectralGate {
                     let half = fft_size / 2 + 1;
 
                     // Find max magnitude.
-                    let mut max_mag = 0.0f32;
-                    for k in 0..half {
-                        let m = spectrum[k].mag();
-                        if m > max_mag {
-                            max_mag = m;
-                        }
-                    }
+                    let max_mag = spectrum[..half]
+                        .iter()
+                        .map(|c| c.mag())
+                        .fold(0.0f32, f32::max);
 
                     let gate_level = threshold * max_mag;
 
@@ -485,6 +560,12 @@ pub struct SpectralBlur {
     prev_magnitudes: Vec<f32>,
 }
 
+impl Default for SpectralBlur {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectralBlur {
     pub fn new() -> Self {
         Self {
@@ -495,14 +576,27 @@ impl SpectralBlur {
 }
 
 static SBLUR_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "blur", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "blur",
+        rate: Rate::Audio,
+    },
 ];
-static SBLUR_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static SBLUR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for SpectralBlur {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "SpectralBlur", inputs: &SBLUR_INPUTS, outputs: &SBLUR_OUTPUTS }
+        UGenSpec {
+            name: "SpectralBlur",
+            inputs: &SBLUR_INPUTS,
+            outputs: &SBLUR_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {
@@ -549,8 +643,7 @@ impl UGen for SpectralBlur {
                         let phase = spectrum[k].phase();
 
                         // Interpolate magnitude with previous frame.
-                        let smoothed =
-                            blur * self.prev_magnitudes[k] + (1.0 - blur) * current_mag;
+                        let smoothed = blur * self.prev_magnitudes[k] + (1.0 - blur) * current_mag;
                         self.prev_magnitudes[k] = smoothed;
 
                         // Reconstruct with current phase but smoothed magnitude.
@@ -598,6 +691,12 @@ pub struct Convolution {
     ir_loaded: bool,
 }
 
+impl Default for Convolution {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Convolution {
     pub fn new() -> Self {
         Self {
@@ -636,14 +735,27 @@ impl Convolution {
 }
 
 static CONV_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static CONV_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static CONV_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for Convolution {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "Convolution", inputs: &CONV_INPUTS, outputs: &CONV_OUTPUTS }
+        UGenSpec {
+            name: "Convolution",
+            inputs: &CONV_INPUTS,
+            outputs: &CONV_OUTPUTS,
+        }
     }
 
     fn init(&mut self, _context: &ProcessContext) {

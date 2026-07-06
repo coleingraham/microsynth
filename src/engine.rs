@@ -62,9 +62,7 @@ pub struct Engine {
 /// constants are part of the reproducible-output contract: changing them changes
 /// the rendered noise for a given spawn order.
 fn derive_noise_seed(spawn_seq: u32, node_idx: usize) -> u32 {
-    0xDEAD_BEEF
-        ^ spawn_seq.wrapping_mul(0x9E37_79B9)
-        ^ (node_idx as u32).wrapping_mul(0x85EB_CA77)
+    0xDEAD_BEEF ^ spawn_seq.wrapping_mul(0x9E37_79B9) ^ (node_idx as u32).wrapping_mul(0x85EB_CA77)
 }
 
 impl Engine {
@@ -188,7 +186,9 @@ impl Engine {
         };
 
         // Find which slots are already used by checking existing edges
-        let used_slots: Vec<usize> = self.voices.iter()
+        let used_slots: Vec<usize> = self
+            .voices
+            .iter()
             .filter_map(|v| {
                 if let Some((bus, slot)) = v.bus_input {
                     if bus == bus_node { Some(slot) } else { None }
@@ -235,7 +235,10 @@ impl Engine {
 
     /// Get the Synth handle for a voice by VoiceId.
     pub fn voice_synth(&self, voice_id: VoiceId) -> Option<&Synth> {
-        self.voices.iter().find(|v| v.id == voice_id).map(|v| &v.synth)
+        self.voices
+            .iter()
+            .find(|v| v.id == voice_id)
+            .map(|v| &v.synth)
     }
 
     /// Connect a voice's output to another node's input.
@@ -251,7 +254,8 @@ impl Engine {
         for &id in synth.node_ids() {
             self.graph.remove_node(id);
         }
-        self.synths.retain(|s| s.output_node() != synth.output_node());
+        self.synths
+            .retain(|s| s.output_node() != synth.output_node());
     }
 
     /// Prepare the graph for rendering. Must be called after any
@@ -276,13 +280,22 @@ impl Engine {
         let mut needs_prepare = false;
         for event in events {
             match event.action {
-                EventAction::SetParam { voice, param, value } => {
+                EventAction::SetParam {
+                    voice,
+                    param,
+                    value,
+                } => {
                     self.set_voice_param(voice, &param, value);
                 }
                 EventAction::SetGate { voice, value } => {
                     self.set_voice_param(voice, "gate", value);
                 }
-                EventAction::SetParamGlide { voice, param, target, glide_secs } => {
+                EventAction::SetParamGlide {
+                    voice,
+                    param,
+                    target,
+                    glide_secs,
+                } => {
                     self.set_voice_param_glide(voice, &param, target, glide_secs);
                 }
                 EventAction::FreeSynth { voice } => {
@@ -322,8 +335,8 @@ impl Engine {
                     }
                 }
                 // Copy block data to output
-                for ch in 0..buf.num_channels() {
-                    output[ch].extend_from_slice(buf.channel(ch).samples());
+                for (ch, out_ch) in output.iter_mut().enumerate() {
+                    out_ch.extend_from_slice(buf.channel(ch).samples());
                 }
             }
         }
@@ -401,7 +414,8 @@ impl Engine {
             if is_done {
                 let synth = self.synths.remove(i);
                 // Also remove from voices list
-                self.voices.retain(|v| v.synth.output_node() != synth.output_node());
+                self.voices
+                    .retain(|v| v.synth.output_node() != synth.output_node());
                 for &id in synth.node_ids() {
                     self.graph.remove_node(id);
                 }
@@ -418,7 +432,8 @@ impl Engine {
     /// Both times are absolute sample offsets. Use `TimeConfig::position_to_samples`
     /// and `TimeConfig::steps_to_samples` to convert from musical time.
     pub fn schedule_note(&mut self, voice: VoiceId, on_time: u64, duration_samples: u64) {
-        self.scheduler.schedule_note(voice, on_time, on_time + duration_samples);
+        self.scheduler
+            .schedule_note(voice, on_time, on_time + duration_samples);
     }
 
     /// Schedule a note with attack-aligned pre-trigger.
@@ -436,7 +451,8 @@ impl Engine {
     ) {
         let attack_samples = (attack_secs * self.context.sample_rate) as u64;
         let on_time = grid_time.saturating_sub(attack_samples);
-        self.scheduler.schedule_note(voice, on_time, grid_time + duration_samples);
+        self.scheduler
+            .schedule_note(voice, on_time, grid_time + duration_samples);
     }
 
     /// Current sample offset (monotonic time counter).
@@ -459,17 +475,13 @@ impl Engine {
     ///
     /// `effect_defs` is a lookup slice: for each effect, the def whose name
     /// matches is used. Call `prepare()` after this method.
-    pub fn build_routing(
-        &mut self,
-        routing: &mut RoutingGraph,
-        effect_defs: &[SynthDef],
-    ) {
+    pub fn build_routing(&mut self, routing: &mut RoutingGraph, effect_defs: &[SynthDef]) {
         // 1. Create Bus UGen nodes for each bus
         for bus_id in routing.bus_ids().collect::<Vec<_>>() {
             let (_, channels) = routing.bus_info(bus_id).unwrap();
-            let bus_node = self.graph.add_node(
-                alloc::boxed::Box::new(ugens::Bus::new(channels)),
-            );
+            let bus_node = self
+                .graph
+                .add_node(alloc::boxed::Box::new(ugens::Bus::new(channels)));
             routing.set_bus_node(bus_id, bus_node);
         }
 
@@ -494,10 +506,10 @@ impl Engine {
             let synth = self.instantiate_synthdef(def);
 
             // Wire source bus output → effect's AudioIn node
-            if let Some(source_node) = routing.bus_node(source_bus) {
-                if let Some(audio_in_node) = synth.audio_input_node("in") {
-                    self.graph.connect(source_node, audio_in_node, 0);
-                }
+            if let Some(source_node) = routing.bus_node(source_bus)
+                && let Some(audio_in_node) = synth.audio_input_node("in")
+            {
+                self.graph.connect(source_node, audio_in_node, 0);
             }
 
             // Wire effect output → target bus input slot
@@ -509,7 +521,8 @@ impl Engine {
                 };
                 let used_slots = self.count_connections_to(target_node);
                 if used_slots < bus_max {
-                    self.graph.connect(synth.output_node(), target_node, used_slots);
+                    self.graph
+                        .connect(synth.output_node(), target_node, used_slots);
                 }
             }
 
@@ -540,10 +553,10 @@ impl Engine {
         name: &str,
         value: f32,
     ) -> bool {
-        if let Some(synth) = routing.effect_synth(effect_id) {
-            if let Some(node_id) = synth.param_node(name) {
-                return self.graph.set_node_value(node_id, value);
-            }
+        if let Some(synth) = routing.effect_synth(effect_id)
+            && let Some(node_id) = synth.param_node(name)
+        {
+            return self.graph.set_node_value(node_id, value);
         }
         false
     }
@@ -558,10 +571,10 @@ impl Engine {
         target: f32,
         glide_secs: f32,
     ) -> bool {
-        if let Some(synth) = routing.effect_synth(effect_id) {
-            if let Some(node_id) = synth.param_node(name) {
-                return self.graph.set_node_target(node_id, target, glide_secs);
-            }
+        if let Some(synth) = routing.effect_synth(effect_id)
+            && let Some(node_id) = synth.param_node(name)
+        {
+            return self.graph.set_node_target(node_id, target, glide_secs);
         }
         false
     }

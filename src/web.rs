@@ -29,9 +29,9 @@
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::string::String as AllocString;
 #[cfg(feature = "web")]
 use alloc::string::{String, ToString};
-use alloc::string::String as AllocString;
 use alloc::vec::Vec;
 
 use crate::dsl::{self, UGenRegistry};
@@ -107,6 +107,10 @@ pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
 /// Register a named SynthDef. Compiles the DSL source and stores the first
 /// resulting SynthDef under the given name.
 /// Returns 0 on success, 1 on error.
+///
+/// # Safety
+/// `name_ptr`/`source_ptr` must each point to an initialized buffer of at
+/// least `name_len`/`source_len` bytes that stays valid for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_register_def(
     name_ptr: *const u8,
@@ -150,11 +154,12 @@ pub unsafe extern "C" fn ms_register_def(
 
 /// Set a named SynthDef as the master effect, wired between the bus and graph output.
 /// Returns 0 on success, 1 on error.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ms_set_bus_master(
-    name_ptr: *const u8,
-    name_len: usize,
-) -> u32 {
+pub unsafe extern "C" fn ms_set_bus_master(name_ptr: *const u8, name_len: usize) -> u32 {
     let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_bytes) {
         Ok(s) => s,
@@ -199,12 +204,12 @@ pub unsafe extern "C" fn ms_set_bus_master(
 }
 
 /// Set a parameter on the master effect synth.
+///
+/// # Safety
+/// `param_ptr` must point to an initialized buffer of at least `param_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ms_master_param(
-    param_ptr: *const u8,
-    param_len: usize,
-    value: f32,
-) {
+pub unsafe extern "C" fn ms_master_param(param_ptr: *const u8, param_len: usize, value: f32) {
     let param_bytes = unsafe { core::slice::from_raw_parts(param_ptr, param_len) };
     let param = match core::str::from_utf8(param_bytes) {
         Ok(s) => s,
@@ -228,11 +233,12 @@ pub unsafe extern "C" fn ms_master_param(
 
 /// Spawn a voice from a named SynthDef onto the bus.
 /// Returns voice_id > 0, or 0 on failure.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ms_spawn_voice_named(
-    name_ptr: *const u8,
-    name_len: usize,
-) -> u64 {
+pub unsafe extern "C" fn ms_spawn_voice_named(name_ptr: *const u8, name_len: usize) -> u64 {
     let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_bytes) {
         Ok(s) => s,
@@ -276,6 +282,10 @@ pub extern "C" fn ms_alloc(size: usize) -> *mut u8 {
 }
 
 /// Free a previously allocated buffer.
+///
+/// # Safety
+/// `ptr`/`capacity` must come from a prior microsynth allocation that has not
+/// already been freed; calling with any other value is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
     unsafe {
@@ -307,6 +317,10 @@ pub extern "C" fn ms_init(sample_rate: f32) {
 /// (previously written via `ms_alloc`).
 ///
 /// Returns 0 on success, 1 on error.
+///
+/// # Safety
+/// `source_ptr` must point to an initialized buffer of at least `source_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_compile(source_ptr: *const u8, source_len: usize) -> u32 {
     let source_bytes = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
@@ -351,6 +365,10 @@ pub unsafe extern "C" fn ms_compile(source_ptr: *const u8, source_len: usize) ->
 /// Render 128 samples of stereo audio.
 ///
 /// `out_left` and `out_right` must each point to 128 f32s of writable memory.
+///
+/// # Safety
+/// `out_left` and `out_right` must each point to a writable buffer of at least
+/// 128 `f32`s that stays valid for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_render(out_left: *mut f32, out_right: *mut f32) {
     let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
@@ -383,6 +401,10 @@ pub unsafe extern "C" fn ms_render(out_left: *mut f32, out_right: *mut f32) {
 /// Compile DSL source and store the SynthDef(s) for voice spawning.
 /// Also sets up a Bus as the graph sink for multi-voice mixing.
 /// Returns 0 on success, 1 on error.
+///
+/// # Safety
+/// `source_ptr` must point to an initialized buffer of at least `source_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_compile_def(source_ptr: *const u8, source_len: usize) -> u32 {
     let source_bytes = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
@@ -472,6 +494,10 @@ pub extern "C" fn ms_voice_gate(voice_id: u64, value: f32) {
 }
 
 /// Set a named parameter on a voice.
+///
+/// # Safety
+/// `param_ptr` must point to an initialized buffer of at least `param_len`
+/// bytes that stays valid for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ms_voice_param(
     voice_id: u64,
@@ -650,7 +676,10 @@ impl WebSynth {
         let mut registry = UGenRegistry::new();
         register_builtins(&mut registry);
 
-        let config = EngineConfig { sample_rate, block_size };
+        let config = EngineConfig {
+            sample_rate,
+            block_size,
+        };
         let engine = Engine::new(config);
 
         WebSynth {
@@ -664,8 +693,8 @@ impl WebSynth {
     /// Returns an error string on failure.
     #[wasm_bindgen(js_name = "compileAndLoad")]
     pub fn compile_and_load(&mut self, source: &str) -> Result<(), JsError> {
-        let defs = dsl::compile(source, &self.registry)
-            .map_err(|e| JsError::new(&e.to_string()))?;
+        let defs =
+            dsl::compile(source, &self.registry).map_err(|e| JsError::new(&e.to_string()))?;
 
         if defs.is_empty() {
             return Err(JsError::new("no synthdef found in source"));
@@ -769,15 +798,33 @@ pub fn validate_dsl(source: &str) -> String {
 #[wasm_bindgen(js_name = "availableUGens")]
 pub fn available_ugens() -> Vec<JsValue> {
     let names = [
-        "sinOsc", "saw", "pulse", "tri", "phasor",
-        "whiteNoise", "pinkNoise",
-        "onePole", "lpf", "hpf", "bpf",
-        "line", "perc", "asr", "adsr",
+        "sinOsc",
+        "saw",
+        "pulse",
+        "tri",
+        "phasor",
+        "whiteNoise",
+        "pinkNoise",
+        "onePole",
+        "lpf",
+        "hpf",
+        "bpf",
+        "line",
+        "perc",
+        "asr",
+        "adsr",
         "delay",
-        "pan2", "mix", "sampleAndHold",
-        "impulse", "lag", "clip",
+        "pan2",
+        "mix",
+        "sampleAndHold",
+        "impulse",
+        "lag",
+        "clip",
         "waveTable",
-        "sinTable", "sawTable", "triTable", "squareTable",
+        "sinTable",
+        "sawTable",
+        "triTable",
+        "squareTable",
     ];
     names.iter().map(|&n| JsValue::from_str(n)).collect()
 }

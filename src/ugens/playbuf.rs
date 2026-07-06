@@ -23,6 +23,12 @@ pub struct PlayBuf {
     sample_rate: f32,
 }
 
+impl Default for PlayBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayBuf {
     pub fn new() -> Self {
         PlayBuf {
@@ -50,10 +56,19 @@ impl PlayBuf {
 }
 
 static PLAYBUF_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "rate", rate: Rate::Audio },
-    InputSpec { name: "trig", rate: Rate::Audio },
+    InputSpec {
+        name: "rate",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "trig",
+        rate: Rate::Audio,
+    },
 ];
-static PLAYBUF_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PLAYBUF_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for PlayBuf {
     fn spec(&self) -> UGenSpec {
@@ -110,7 +125,7 @@ impl UGen for PlayBuf {
             let mut prev_trig = self.prev_trig;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 // Check trigger (restart playback)
                 let trig = trig_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
@@ -127,7 +142,7 @@ impl UGen for PlayBuf {
                     .unwrap_or(1.0);
 
                 if playing && !done {
-                    out[i] = sample.read_interpolated(ch, position);
+                    *out_sample = sample.read_interpolated(ch, position);
                     position += rate as f64 * rate_ratio as f64;
 
                     if position >= num_frames {
@@ -148,7 +163,7 @@ impl UGen for PlayBuf {
                         }
                     }
                 } else {
-                    out[i] = 0.0;
+                    *out_sample = 0.0;
                 }
             }
 

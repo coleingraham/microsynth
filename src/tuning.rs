@@ -67,10 +67,7 @@ impl TuningTable {
             9.0 / 5.0,
             15.0 / 8.0,
         ];
-        let cents: Vec<f32> = ratios
-            .iter()
-            .map(|r| (1200.0 * r.log2()) as f32)
-            .collect();
+        let cents: Vec<f32> = ratios.iter().map(|r| (1200.0 * r.log2()) as f32).collect();
         TuningTable {
             anchor_note: 69,
             anchor_freq: 440.0,

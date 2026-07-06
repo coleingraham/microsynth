@@ -42,7 +42,7 @@ pub fn fft(buf: &mut [Complex]) {
             while j < n {
                 let t = buf[j + half] * twiddle;
                 buf[j + half] = buf[j] - t;
-                buf[j] = buf[j] + t;
+                buf[j] += t;
                 j += size;
             }
         }
@@ -129,12 +129,8 @@ mod tests {
         fft(&mut buf);
         assert!(approx_eq(buf[0].re, n as f32, EPS));
         assert!(approx_eq(buf[0].im, 0.0, EPS));
-        for k in 1..n {
-            assert!(
-                buf[k].mag() < EPS,
-                "Bin {k} should be zero, got {}",
-                buf[k].mag()
-            );
+        for (k, c) in buf.iter().enumerate().skip(1) {
+            assert!(c.mag() < EPS, "Bin {k} should be zero, got {}", c.mag());
         }
     }
 
@@ -164,14 +160,14 @@ mod tests {
             buf[n - k].mag()
         );
         // Other bins should be near zero.
-        for i in 0..n {
+        for (i, c) in buf.iter().enumerate() {
             if i == k || i == n - k {
                 continue;
             }
             assert!(
-                buf[i].mag() < 1.0,
+                c.mag() < 1.0,
                 "Bin {i} should be near zero, got {}",
-                buf[i].mag()
+                c.mag()
             );
         }
     }

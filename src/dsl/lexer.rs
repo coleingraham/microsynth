@@ -108,7 +108,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned>, LexError> {
         match ch {
             '\n' => {
                 // Collapse multiple newlines
-                if tokens.last().map_or(true, |t: &Spanned| t.token != Token::Newline) {
+                if tokens
+                    .last()
+                    .is_none_or(|t: &Spanned| t.token != Token::Newline)
+                {
                     tokens.push(Spanned {
                         token: Token::Newline,
                         span,
@@ -196,7 +199,9 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned>, LexError> {
                 pos += 1;
                 col += 1;
             }
-            c if c.is_ascii_digit() || (c == '.' && pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit()) => {
+            c if c.is_ascii_digit()
+                || (c == '.' && pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit()) =>
+            {
                 let start = pos;
                 while pos < chars.len() && chars[pos].is_ascii_digit() {
                     pos += 1;
@@ -220,8 +225,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned>, LexError> {
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let start = pos;
-                while pos < chars.len()
-                    && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
+                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
                 {
                     pos += 1;
                 }

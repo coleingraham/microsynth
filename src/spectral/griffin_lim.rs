@@ -7,7 +7,7 @@
 
 use super::complex::Complex;
 use super::fft::{fft, ifft};
-use super::window::{make_window, WindowType};
+use super::window::{WindowType, make_window};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -45,7 +45,7 @@ pub fn griffin_lim(
     let window = make_window(window_type, fft_size);
 
     // Compute COLA normalization.
-    let num_overlaps = (fft_size + hop_size - 1) / hop_size;
+    let num_overlaps = fft_size.div_ceil(hop_size);
     let mut cola = 0.0f32;
     for k in 0..num_overlaps {
         let offset = k * hop_size;
@@ -174,13 +174,10 @@ mod tests {
         let start = fft_size * 2;
         let end = num_samples.min(reconstructed.len()) - fft_size;
         if end > start {
-            let orig_energy: f32 = original[start..end].iter().map(|x| x * x).sum::<f32>()
-                / (end - start) as f32;
-            let recon_energy: f32 = reconstructed[start..end]
-                .iter()
-                .map(|x| x * x)
-                .sum::<f32>()
-                / (end - start) as f32;
+            let orig_energy: f32 =
+                original[start..end].iter().map(|x| x * x).sum::<f32>() / (end - start) as f32;
+            let recon_energy: f32 =
+                reconstructed[start..end].iter().map(|x| x * x).sum::<f32>() / (end - start) as f32;
             // Energy should be within ~20% (Griffin-Lim is approximate).
             let ratio = recon_energy / orig_energy.max(1e-10);
             assert!(

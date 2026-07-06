@@ -8,7 +8,9 @@ pub(crate) struct Rng {
 
 impl Rng {
     pub fn new(seed: u32) -> Self {
-        Rng { state: seed.wrapping_add(1) }
+        Rng {
+            state: seed.wrapping_add(1),
+        }
     }
 
     /// Returns a uniform f32 in [-1, 1].

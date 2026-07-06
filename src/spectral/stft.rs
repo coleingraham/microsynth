@@ -6,7 +6,7 @@
 
 use super::complex::Complex;
 use super::fft::{fft, ifft};
-use super::window::{make_window, WindowType};
+use super::window::{WindowType, make_window};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -63,7 +63,7 @@ impl StftProcessor {
         let window = make_window(window_type, fft_size);
 
         // Compute COLA norm: sum of squared window at overlapping positions.
-        let num_overlaps = (fft_size + hop_size - 1) / hop_size;
+        let num_overlaps = fft_size.div_ceil(hop_size);
         let mut cola = 0.0f32;
         for k in 0..num_overlaps {
             let offset = k * hop_size;
@@ -233,10 +233,10 @@ mod tests {
         for offset in 0..=hop_size {
             let mut sum_sq = 0.0f32;
             let mut count = 0;
-            for i in check_start..check_end {
-                let inp_idx = i.wrapping_sub(offset);
+            for (rel, &out_s) in output[check_start..check_end].iter().enumerate() {
+                let inp_idx = (check_start + rel).wrapping_sub(offset);
                 if inp_idx < num_samples {
-                    let err = output[i] - input[inp_idx];
+                    let err = out_s - input[inp_idx];
                     sum_sq += err * err;
                     count += 1;
                 }
@@ -249,10 +249,7 @@ mod tests {
             }
         }
 
-        assert!(
-            min_rms < 0.15,
-            "Round-trip RMS error too large: {min_rms}"
-        );
+        assert!(min_rms < 0.15, "Round-trip RMS error too large: {min_rms}");
     }
 
     #[test]

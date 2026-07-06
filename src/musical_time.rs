@@ -102,8 +102,7 @@ impl TimeConfig {
         // Quarter notes per bar = numerator * (4 / denominator)
         // Steps per quarter note = grid_steps / quarter_notes_per_bar
         // Ticks per step = ppqn / steps_per_quarter_note
-        let quarter_notes_per_bar =
-            self.numerator as f64 * (4.0 / self.denominator as f64);
+        let quarter_notes_per_bar = self.numerator as f64 * (4.0 / self.denominator as f64);
         let steps_per_quarter = self.grid_steps as f64 / quarter_notes_per_bar;
         (self.ppqn as f64 / steps_per_quarter) as u32
     }
@@ -122,11 +121,7 @@ impl TimeConfig {
             + pos.tick_offset as f64 * tick_samples;
 
         // Clamp to 0 (negative total can happen with pre-trigger offsets at bar 0)
-        if total < 0.0 {
-            0
-        } else {
-            total.round() as u64
-        }
+        if total < 0.0 { 0 } else { total.round() as u64 }
     }
 
     /// Convert a duration in grid steps to a duration in samples.

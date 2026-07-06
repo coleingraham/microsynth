@@ -29,6 +29,12 @@ pub struct StereoWidth {
     sample_rate: f32,
 }
 
+impl Default for StereoWidth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StereoWidth {
     pub fn new() -> Self {
         StereoWidth {
@@ -43,10 +49,19 @@ impl StereoWidth {
 const HAAS_MAX_DELAY: f32 = 0.030;
 
 static STEREO_WIDTH_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "width", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "width",
+        rate: Rate::Audio,
+    },
 ];
-static STEREO_WIDTH_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static STEREO_WIDTH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for StereoWidth {
     fn spec(&self) -> UGenSpec {
@@ -101,7 +116,9 @@ impl UGen for StereoWidth {
 
             // Haas delay time scales with width (0ms at width=0, 25ms at width=1)
             let delay_secs = width * 0.025;
-            let delay_samples = (delay_secs * self.sample_rate).min((buf_len - 2) as f32).max(0.0);
+            let delay_samples = (delay_secs * self.sample_rate)
+                .min((buf_len - 2) as f32)
+                .max(0.0);
 
             // Read delayed sample with linear interpolation
             let d_int = delay_samples as usize;
@@ -152,6 +169,12 @@ pub struct PingPongDelay {
     sample_rate: f32,
 }
 
+impl Default for PingPongDelay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PingPongDelay {
     pub fn new() -> Self {
         PingPongDelay {
@@ -168,12 +191,27 @@ impl PingPongDelay {
 const PP_MAX_DELAY: f32 = 5.0;
 
 static PP_DELAY_INPUTS: [InputSpec; 4] = [
-    InputSpec { name: "in", rate: Rate::Audio },
-    InputSpec { name: "time", rate: Rate::Audio },
-    InputSpec { name: "feedback", rate: Rate::Audio },
-    InputSpec { name: "mix", rate: Rate::Audio },
+    InputSpec {
+        name: "in",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "time",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "feedback",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "mix",
+        rate: Rate::Audio,
+    },
 ];
-static PP_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static PP_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for PingPongDelay {
     fn spec(&self) -> UGenSpec {

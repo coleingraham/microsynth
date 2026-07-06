@@ -40,18 +40,37 @@ pub struct BlSaw {
     sample_rate: f32,
 }
 
-impl BlSaw {
-    pub fn new() -> Self {
-        BlSaw { phase: 0.0, sample_rate: 44100.0 }
+impl Default for BlSaw {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-static BLSAW_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static BLSAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+impl BlSaw {
+    pub fn new() -> Self {
+        BlSaw {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+static BLSAW_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static BLSAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for BlSaw {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BlSaw", inputs: &BLSAW_INPUTS, outputs: &BLSAW_OUTPUTS }
+        UGenSpec {
+            name: "BlSaw",
+            inputs: &BLSAW_INPUTS,
+            outputs: &BLSAW_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -75,7 +94,7 @@ impl UGen for BlSaw {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -86,7 +105,7 @@ impl UGen for BlSaw {
                 // polyBLEP correction at the wrap discontinuity
                 sample -= poly_blep(phase, dt);
 
-                out[i] = sample;
+                *out_sample = sample;
                 phase += dt;
                 phase -= phase.floor();
             }
@@ -109,21 +128,43 @@ pub struct BlPulse {
     sample_rate: f32,
 }
 
+impl Default for BlPulse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlPulse {
     pub fn new() -> Self {
-        BlPulse { phase: 0.0, sample_rate: 44100.0 }
+        BlPulse {
+            phase: 0.0,
+            sample_rate: 44100.0,
+        }
     }
 }
 
 static BLPULSE_INPUTS: [InputSpec; 2] = [
-    InputSpec { name: "freq", rate: Rate::Audio },
-    InputSpec { name: "width", rate: Rate::Audio },
+    InputSpec {
+        name: "freq",
+        rate: Rate::Audio,
+    },
+    InputSpec {
+        name: "width",
+        rate: Rate::Audio,
+    },
 ];
-static BLPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+static BLPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for BlPulse {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BlPulse", inputs: &BLPULSE_INPUTS, outputs: &BLPULSE_OUTPUTS }
+        UGenSpec {
+            name: "BlPulse",
+            inputs: &BLPULSE_INPUTS,
+            outputs: &BLPULSE_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -148,7 +189,7 @@ impl UGen for BlPulse {
             let mut phase = self.phase;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -167,7 +208,7 @@ impl UGen for BlPulse {
                 let phase_shifted = (phase - width + 1.0) % 1.0;
                 sample -= poly_blep(phase_shifted, dt);
 
-                out[i] = sample;
+                *out_sample = sample;
                 phase += dt;
                 phase -= phase.floor();
             }
@@ -194,18 +235,38 @@ pub struct BlTri {
     integrator: f32,
 }
 
-impl BlTri {
-    pub fn new() -> Self {
-        BlTri { phase: 0.0, sample_rate: 44100.0, integrator: 0.0 }
+impl Default for BlTri {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-static BLTRI_INPUTS: [InputSpec; 1] = [InputSpec { name: "freq", rate: Rate::Audio }];
-static BLTRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec { name: "out", rate: Rate::Audio }];
+impl BlTri {
+    pub fn new() -> Self {
+        BlTri {
+            phase: 0.0,
+            sample_rate: 44100.0,
+            integrator: 0.0,
+        }
+    }
+}
+
+static BLTRI_INPUTS: [InputSpec; 1] = [InputSpec {
+    name: "freq",
+    rate: Rate::Audio,
+}];
+static BLTRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
+    name: "out",
+    rate: Rate::Audio,
+}];
 
 impl UGen for BlTri {
     fn spec(&self) -> UGenSpec {
-        UGenSpec { name: "BlTri", inputs: &BLTRI_INPUTS, outputs: &BLTRI_OUTPUTS }
+        UGenSpec {
+            name: "BlTri",
+            inputs: &BLTRI_INPUTS,
+            outputs: &BLTRI_OUTPUTS,
+        }
     }
 
     fn init(&mut self, context: &ProcessContext) {
@@ -231,7 +292,7 @@ impl UGen for BlTri {
             let mut integrator = self.integrator;
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = freq_buf
                     .map(|b| b.channel(ch % b.num_channels()).samples()[i])
                     .unwrap_or(440.0);
@@ -247,7 +308,7 @@ impl UGen for BlTri {
                 integrator += square * 4.0 * dt;
                 integrator *= 1.0 - 2.0 * dt;
 
-                out[i] = integrator;
+                *out_sample = integrator;
                 phase += dt;
                 phase -= phase.floor();
             }

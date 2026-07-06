@@ -16,4 +16,4 @@ pub mod window;
 pub use complex::Complex;
 pub use fft::{fft, ifft};
 pub use stft::StftProcessor;
-pub use window::{make_window, WindowType};
+pub use window::{WindowType, make_window};
