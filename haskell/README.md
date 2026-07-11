@@ -63,102 +63,99 @@ cabal run microsynth-cli -- --synthdef pad --param freq=330 -o pad.wav
 ## Performance vs. Rust
 
 Same patch (filtered percussive saw), same sample rate, both rendering offline
-to a mono 16-bit WAV on the same machine. Pure DSP throughput is isolated from
-fixed process-startup + WAV-write overhead by measuring at two durations (6 s
-and 600 s) and taking the slope; "× realtime" is how many seconds of audio each
-renders per wall-clock second of DSP.
+to a mono 16-bit WAV. Pure DSP throughput is isolated from fixed startup +
+WAV-write overhead by measuring at two durations and taking the slope;
+"× realtime" is seconds of audio rendered per wall-clock second of DSP.
 
-| Build | DSP time / audio-second | ≈ realtime factor | vs. Haskell |
+> **Measurement caveat.** This runs on a shared cloud VM. Absolute throughput
+> drifts between sessions — the memory-touching Haskell more than the
+> register-tight Rust — so **only compare numbers captured back-to-back within
+> one run**. Every table here was measured in a single session; the *ratios*
+> are stable, the absolutes are not.
+
+**Single voice** (the least representative case — see the polyphony sweep below):
+
+| Build | DSP / audio-second | ≈ realtime | vs. Haskell |
 |---|---|---|---|
-| Rust, `opt-level=3` + LTO | 0.00157 s | ~638× | **1.75× faster** |
-| Rust, `opt-level="s"` (project default) | 0.00195 s | ~512× | **1.40× faster** |
-| Haskell, `-O2` (optimized) | 0.00274 s | ~365× | 1.0× (baseline) |
-| Haskell, `-O2` (first cut) | 0.00476 s | ~210× | 0.58× |
+| Rust, `opt-level=3` + LTO | 0.00158 s | ~633× | **2.4× faster** |
+| Rust, `opt-level="s"` (project default) | 0.00201 s | ~497× | **1.9× faster** |
+| Haskell, `-O2` | 0.00373 s | ~268× | 1.0× (baseline) |
 
-Takeaways:
+The Haskell render path was optimized in two rounds:
 
-- The optimized Haskell is **~1.4–1.75× slower** than Rust for identical DSP,
-  and renders this patch **~365× faster than real time** — comfortably
-  real-time-capable.
-- Getting there was **~1.74× faster than the first cut** (0.00476 → 0.00274)
-  and closed most of the original 2.4–3.0× gap. The optimizations, all in the
-  render path:
-  - **Bind each node's inputs/output once at instantiation** so the block loop
-    is a bare `ST s ()` per node — no per-block input-list passing, no `drop`
-    per sample.
-  - **`unsafeRead`/`unsafeWrite`** in the inner loops (indices are in-bounds by
-    construction).
-  - **Thread filter/envelope state through the loop** — one `STRef` read/write
-    per block instead of per sample. (Oscillator phase already did this.)
-  - **Constants fill their block once** and then do zero work per block.
-  - **Render into one preallocated buffer** (a per-block `copy`) instead of
-    freezing + concatenating per block.
-  - **Faster phase wrap**: a compare-and-subtract instead of `floor`, which
-    GHC does not lower to a single instruction.
-- The `-fllvm` backend gave no measurable gain here (GHC 9.4 predates the
-  available LLVM 18). Remaining headroom: pack per-UGen state into a single
-  unboxed record and specialize the `sin`/`cos` in the per-sample biquad
-  coefficients (the dominant cost, and equally expensive in both engines).
-- The two Rust bars show the project's size-optimized default profile costs
-  ~20% throughput vs. a speed-optimized build.
+- **Round 1** (~1.7× over the first, naïve cut): bind each node's inputs/output
+  once at instantiation so the block loop is a bare `ST s ()` per node (no
+  per-block input list, no `drop` per sample); `unsafeRead`/`unsafeWrite` inner
+  loops; thread state through the loop; constants fill their block once; render
+  into one preallocated buffer; compare-and-subtract phase wrap instead of
+  `floor`.
+- **Round 2** — the two "remaining levers": return the biquad coefficients in an
+  **unboxed tuple** and keep per-UGen state in **unboxed cells**. Unboxing the
+  state is what matters most: a boxed `STRef Float` write demands a boxed
+  `Float`, which forces GHC to box the loop's threaded accumulators *every
+  sample*; unboxed cells let them stay `Float#`. Net: **4.5× less allocation**
+  (1.8 GB → 401 MB at 64 voices / 30 s). This is a deliberate **trade** — ~5%
+  faster at high polyphony with far lower GC pressure, but ~25% *slower* at a
+  single voice, where the working set is cache-hot and bump-allocation is nearly
+  free. We keep it because real synthesis is polyphonic and a real-time path
+  wants predictable allocation — and single voice is exactly the benchmark that
+  misleads.
 
-Reproduce: `bash bench.sh 60 5` (end-to-end) or the two-duration slope method
-in the commit description. Numbers vary with hardware; ratios are stable.
+`-fllvm` gave no measurable gain (GHC 9.4 predates the box's LLVM 18). The two
+Rust rows show the project's size-optimized default profile costs ~20%
+throughput vs. a speed-optimized build.
+
+Reproduce: `bash bench.sh 60 5` (end-to-end) or the two-duration slope method.
 
 ### Polyphony — the scaling test single-voice benchmarks hide
 
-A single-voice benchmark is easy to over-trust, so here is the same patch
-scaled to *N* independent voices (each its own filtered-saw + envelope at its
-own frequency, all summed). Same slope method; `s/as` is DSP seconds per audio
-second, `per-voice` is that divided by *N*.
+A single-voice benchmark is easy to over-trust, so here is the same patch scaled
+to *N* independent voices (each its own filtered-saw + envelope at its own
+frequency, all summed). `s/as` is DSP seconds per audio second; `per-voice` is
+that divided by *N*.
 
-| voices | rust `opt=s` s/as (per-voice) | rust `opt=3` s/as (per-voice) | haskell s/as (per-voice) |
+| voices | rust `opt=s` (per-voice) | rust `opt=3` (per-voice) | haskell (per-voice) |
 |---:|---|---|---|
-| 1  | 0.00180 (0.001804) | 0.00139 (0.001391) | 0.00267 (0.002671) |
-| 8  | 0.01278 (0.001597) | 0.01032 (0.001289) | 0.01191 (0.001489) |
-| 16 | 0.02684 (0.001677) | 0.02193 (0.001370) | 0.02267 (0.001417) |
-| 32 | 0.05905 (0.001845) | 0.04941 (0.001543) | 0.04379 (**0.001368**) |
-| 64 | 0.13801 (0.002156) | 0.10913 (0.001705) | 0.09155 (**0.001430**) |
+| 1  | 0.00193 (0.001932) | 0.00155 (0.001549) | 0.00339 (0.003389) |
+| 8  | 0.01179 (0.001473) | 0.01003 (0.001254) | 0.01342 (0.001677) |
+| 16 | 0.02310 (0.001443) | 0.01998 (0.001248) | 0.02565 (0.001603) |
+| 32 | 0.04582 (0.001432) | 0.04000 (0.001249) | 0.04971 (0.001553) |
+| 64 | 0.09723 (0.001519) | 0.08320 (0.001299) | 0.10603 (0.001656) |
 
-The single-voice number **undersold** the Haskell version — and it turns out the
-scaling curves point opposite ways:
+All three engines now scale **linearly** — per-voice cost is flat across the
+sweep. Rust leads at every voice count: at 64 voices Haskell is ~1.27× behind
+speed-optimized Rust and ~1.09× behind the project-default build (Haskell still
+renders ~9× faster than real time at 64 voices). Haskell's higher *1-voice*
+figure is fixed per-render cost (topo sort, instantiation, the output-buffer
+freeze) amortising out by ~8 voices.
 
-- **Haskell's per-voice cost is flat** (~0.00143 from 8 voices up; the higher
-  1-voice figure is just fixed per-render cost — topo sort, instantiation, the
-  one output-buffer freeze — amortising out).
-- **Rust's per-voice cost rises** with polyphony (0.00139 → 0.00171 for
-  `opt=3`, +23% from 1 to 64 voices).
-- They **cross over around 24–32 voices**. By 64 voices Haskell renders
-  **~1.2× faster than speed-optimized Rust** and **~1.5× faster than the
-  project-default Rust** (~11× vs ~9× vs ~7× real time).
+**This table is the fixed version of an earlier, more dramatic one.** The first
+measurement showed Rust's per-voice cost *rising* with polyphony (+23% from 1 to
+64 voices) while Haskell's stayed flat, so Haskell *overtook* Rust past ~24
+voices. That was real, and it was verifiable in the source: the Rust render loop
+re-resolved wiring **every block** — for every node, every input port, a linear
+scan of the whole edge list plus two `Vec` allocations per node — which is
+~O(N²) in voice count. It was also a *fixable* engine bug, not a language limit.
+The fix (`src/graph.rs`): resolve each node's input sources **once** in
+`prepare()` into an `input_sources` cache and gather them through a reusable
+scratch buffer, so `render()` is O(nodes) with no per-block allocation. That
+restored Rust's expected constant-factor lead — the honest conclusion being that
+**equally optimized, Rust holds a ~1.1–1.3× edge at high polyphony** (more at one
+voice, where Haskell's fixed setup dominates). The episode is the whole point,
+though: the single-voice number predicted *neither* the buggy nor the fixed
+polyphonic curve.
 
-Why the crossover? It is not a language effect — it is an algorithm difference
-in *this* engine, and it is verifiable in the source. The Rust render loop
-re-resolves wiring **every block**: for every node, for every input port, it
-does a linear scan of the whole edge list
-([`src/graph.rs`](../src/graph.rs) `self.edges.iter().find(...)`), plus two
-`Vec` allocations per node per block. With *N* voices that is ~O(N²) per block.
-This Haskell version binds each node's inputs **once at instantiation**, so the
-render path is strictly O(total samples) with no per-block lookup or allocation
-— hence the flat per-voice cost. A modestly optimized Rust engine that
-pre-resolved its wire buffers (as SuperCollider does) would likely reclaim the
-per-voice lead it shows at one voice; the point is only that *these two
-implementations*, as written, scale differently, and the single-voice figure
-does not predict the polyphonic one.
+**Does Haskell blow up on GC at scale?** No. At 64 voices (`+RTS -s`), after the
+unboxed-state optimization:
 
-**Does Haskell blow up on GC at scale?** No. At 64 voices (`+RTS -s`):
-
-| render | productivity | GC time | max residency | total memory |
+| render | allocated | productivity | max residency | total memory |
 |---|---|---|---|---|
-| 30 s  | 99.7% | <0.5% | 5.7 MB | 19 MiB |
-| 120 s | 99.8% | <0.5% | 21.6 MB | 49 MiB |
+| 30 s | 401 MB | 99.8% | 5.7 MB | 19 MiB |
 
-Allocation is short-lived nursery churn (~60 MB per audio-second — mostly the
-per-sample biquad-coefficient tuple) that dies immediately; GC stays under 0.5%
-of runtime and never pauses meaningfully. Max residency just tracks the output
-buffer (numSamples × 4 bytes: 5.3 MB at 30 s, 21 MB at 120 s), not the voice
-count — no leak, no superlinear growth. Killing that per-sample tuple would cut
-the nursery traffic and buy a little more speed.
+Allocation (down 4.5× from 1.8 GB once the loop accumulators were unboxed) is
+short-lived nursery churn that dies immediately; GC stays under 0.5% of runtime
+and never pauses meaningfully. Max residency just tracks the output buffer
+(numSamples × 4 bytes), not the voice count — no leak, no superlinear growth.
 
 Reproduce: `bash gen_rust_poly.sh N > poly_N.synth` for the Rust side and
 `microsynth-cli --synthdef poly --voices N` for Haskell.

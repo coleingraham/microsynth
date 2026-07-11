@@ -11,26 +11,27 @@ module Microsynth.UGen.Envelope
   ) where
 
 import Control.Monad.ST (ST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), bindInput, readInput)
 
 -- | Percussive envelope. Inputs: attack (s), release (s). Output: @[0, 1]@.
+-- Level and stage live in unboxed cells so the loop's threaded accumulators
+-- stay unboxed (see the note in "Microsynth.UGen.Filter").
 mkPerc :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkPerc sr ins out = do
-  levelRef <- newSTRef 0
-  stageRef <- newSTRef (0 :: Int)
+  levelV <- VUM.replicate 1 (0 :: Float)  -- unboxed level
+  stageV <- VUM.replicate 1 (0 :: Int)    -- unboxed stage (0=atk,1=rel,2=done)
   let atkIn = bindInput ins 0
       relIn = bindInput ins 1
       !n    = VUM.length out
   pure $ Node $ do
-    l0 <- readSTRef levelRef
-    g0 <- readSTRef stageRef
+    l0 <- VUM.unsafeRead levelV 0
+    g0 <- VUM.unsafeRead stageV 0
     let step !i !lvl !stage = VUM.unsafeWrite out i lvl >> go (i + 1) lvl stage
         go !i !lvl !stage
-          | i >= n    = writeSTRef levelRef lvl >> writeSTRef stageRef stage
+          | i >= n    = VUM.unsafeWrite levelV 0 lvl >> VUM.unsafeWrite stageV 0 stage
           | otherwise = do
               at <- max 0.0001 <$> readInput atkIn i 0.001
               rt <- max 0.0001 <$> readInput relIn i 0.1

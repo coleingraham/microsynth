@@ -96,17 +96,27 @@ a boxed `Vector (MBlock s)` here — same invariant, no `unsafe`.
 
 ## Performance
 
-See [`README.md`](README.md#performance-vs-rust). Summary: after render-path
-optimization the Haskell version is ~1.4–1.75× slower than Rust for identical
-DSP and renders ~365× faster than real time. The remaining gap is not a
-language ceiling — the biggest shared cost is the per-sample `sin`/`cos` in the
-biquad coefficients, which both engines pay equally.
+See [`README.md`](README.md#performance-vs-rust) for the numbers and methodology.
+Summary: with both engines equally optimized, the Haskell version is ~2.4× slower
+than Rust at a single voice and ~1.1–1.3× slower across a polyphonic sweep, and
+renders comfortably faster than real time throughout. The biggest shared cost is
+the per-sample `sin`/`cos` in the biquad coefficients, which both engines pay.
 
-The optimizations (inputs/output bound once at instantiation so the render step
-is a bare `ST s ()`; `unsafeRead`/`unsafeWrite`; filter/envelope state threaded
-through the loop instead of per-sample `STRef` traffic; constants filled once; a
-single preallocated output buffer; compare-and-subtract phase wrap) took it from
-0.00476 to 0.00274 s per audio-second — a ~1.74× speedup over the first cut.
+Two things are worth recording as design lessons:
+
+- **Unboxing the loop accumulators, not just the cells.** Keeping per-UGen state
+  in unboxed cells (rather than a boxed `STRef Float`) is what lets GHC keep the
+  inner loop's threaded state as `Float#` — a boxed write demands a boxed value
+  and forces per-sample boxing. This cut allocation 4.5×. It slightly *slows*
+  single-voice rendering (cache-hot, allocation-cheap) while speeding polyphony
+  and slashing GC pressure — a deliberate trade toward the real-time path.
+- **The polyphony benchmark found a real O(N²) bug in the *Rust* engine.** Its
+  `render()` re-resolved wiring every block via an edge-list scan per node/input.
+  Because the Haskell port binds inputs once at instantiation, it scaled better
+  and briefly overtook Rust — which turned out to be a fixable Rust bug, not a
+  Haskell win. Fixing `src/graph.rs` (resolve inputs once in `prepare()`) made
+  both engines O(nodes)/block and restored Rust's constant-factor lead. The
+  lesson: single-voice timings predict neither engine's polyphonic scaling.
 
 ## Why Haskell is a good fit here
 
