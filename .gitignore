@@ -1,5 +1,7 @@
 /target
+/target-speed
 /web/pkg
+dist-newstyle/
 
 *.swp
 .DS_Store
