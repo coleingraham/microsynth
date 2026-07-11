@@ -104,3 +104,61 @@ Takeaways:
 
 Reproduce: `bash bench.sh 60 5` (end-to-end) or the two-duration slope method
 in the commit description. Numbers vary with hardware; ratios are stable.
+
+### Polyphony — the scaling test single-voice benchmarks hide
+
+A single-voice benchmark is easy to over-trust, so here is the same patch
+scaled to *N* independent voices (each its own filtered-saw + envelope at its
+own frequency, all summed). Same slope method; `s/as` is DSP seconds per audio
+second, `per-voice` is that divided by *N*.
+
+| voices | rust `opt=s` s/as (per-voice) | rust `opt=3` s/as (per-voice) | haskell s/as (per-voice) |
+|---:|---|---|---|
+| 1  | 0.00180 (0.001804) | 0.00139 (0.001391) | 0.00267 (0.002671) |
+| 8  | 0.01278 (0.001597) | 0.01032 (0.001289) | 0.01191 (0.001489) |
+| 16 | 0.02684 (0.001677) | 0.02193 (0.001370) | 0.02267 (0.001417) |
+| 32 | 0.05905 (0.001845) | 0.04941 (0.001543) | 0.04379 (**0.001368**) |
+| 64 | 0.13801 (0.002156) | 0.10913 (0.001705) | 0.09155 (**0.001430**) |
+
+The single-voice number **undersold** the Haskell version — and it turns out the
+scaling curves point opposite ways:
+
+- **Haskell's per-voice cost is flat** (~0.00143 from 8 voices up; the higher
+  1-voice figure is just fixed per-render cost — topo sort, instantiation, the
+  one output-buffer freeze — amortising out).
+- **Rust's per-voice cost rises** with polyphony (0.00139 → 0.00171 for
+  `opt=3`, +23% from 1 to 64 voices).
+- They **cross over around 24–32 voices**. By 64 voices Haskell renders
+  **~1.2× faster than speed-optimized Rust** and **~1.5× faster than the
+  project-default Rust** (~11× vs ~9× vs ~7× real time).
+
+Why the crossover? It is not a language effect — it is an algorithm difference
+in *this* engine, and it is verifiable in the source. The Rust render loop
+re-resolves wiring **every block**: for every node, for every input port, it
+does a linear scan of the whole edge list
+([`src/graph.rs`](../src/graph.rs) `self.edges.iter().find(...)`), plus two
+`Vec` allocations per node per block. With *N* voices that is ~O(N²) per block.
+This Haskell version binds each node's inputs **once at instantiation**, so the
+render path is strictly O(total samples) with no per-block lookup or allocation
+— hence the flat per-voice cost. A modestly optimized Rust engine that
+pre-resolved its wire buffers (as SuperCollider does) would likely reclaim the
+per-voice lead it shows at one voice; the point is only that *these two
+implementations*, as written, scale differently, and the single-voice figure
+does not predict the polyphonic one.
+
+**Does Haskell blow up on GC at scale?** No. At 64 voices (`+RTS -s`):
+
+| render | productivity | GC time | max residency | total memory |
+|---|---|---|---|---|
+| 30 s  | 99.7% | <0.5% | 5.7 MB | 19 MiB |
+| 120 s | 99.8% | <0.5% | 21.6 MB | 49 MiB |
+
+Allocation is short-lived nursery churn (~60 MB per audio-second — mostly the
+per-sample biquad-coefficient tuple) that dies immediately; GC stays under 0.5%
+of runtime and never pauses meaningfully. Max residency just tracks the output
+buffer (numSamples × 4 bytes: 5.3 MB at 30 s, 21 MB at 120 s), not the voice
+count — no leak, no superlinear growth. Killing that per-sample tuple would cut
+the nursery traffic and buy a little more speed.
+
+Reproduce: `bash gen_rust_poly.sh N > poly_N.synth` for the Rust side and
+`microsynth-cli --synthdef poly --voices N` for Haskell.

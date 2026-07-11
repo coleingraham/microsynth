@@ -16,6 +16,7 @@ data Opts = Opts
   , optSampleRate :: Double
   , optOutput     :: FilePath
   , optSynth      :: String
+  , optVoices     :: Int
   , optParams     :: [(String, Float)]
   }
 
@@ -33,6 +34,9 @@ optsParser = Opts
   <*> strOption
         ( long "synthdef" <> short 's' <> metavar "NAME"
        <> value "demo" <> showDefault <> help "Which demo synthdef to render" )
+  <*> option auto
+        ( long "voices" <> metavar "N"
+       <> value 8 <> showDefault <> help "Voice count for the 'poly' synthdef" )
   <*> many
         ( option (eitherReader parseParam)
             ( long "param" <> short 'p' <> metavar "NAME=VALUE"
@@ -49,7 +53,10 @@ main :: IO ()
 main = do
   opts <- execParser $ info (optsParser <**> helper)
     ( fullDesc <> progDesc "Render a microsynth demo synthdef to a WAV file" )
-  case lookup (optSynth opts) registry of
+  let selected = case optSynth opts of
+        "poly" -> Just (polyVoices (optVoices opts))
+        name   -> lookup name registry
+  case selected of
     Nothing ->
       putStrLn $ "unknown synthdef '" ++ optSynth opts
         ++ "'; available: " ++ unwords (map fst registry)
