@@ -40,6 +40,15 @@ pub struct AudioGraph {
     edges: Vec<Edge>,
     /// Cached topological order (indices into `nodes`).
     topo_order: Vec<NodeId>,
+    /// Resolved input wiring, indexed by node index. For each node,
+    /// `input_sources[idx][port]` is the source node feeding that input port
+    /// (or `None` if unconnected). Rebuilt in `prepare()` so that `render()`
+    /// never has to scan the edge list — keeping render O(nodes), not
+    /// O(nodes × edges).
+    input_sources: Vec<Vec<Option<NodeId>>>,
+    /// Reusable scratch for gathering input buffer pointers during render,
+    /// so the render path performs no per-node allocation.
+    input_ptr_scratch: Vec<*const AudioBuffer>,
     /// The output node we pull from.
     sink: Option<NodeId>,
     /// Whether the graph needs re-sorting.
@@ -76,6 +85,8 @@ impl AudioGraph {
             nodes: Vec::new(),
             edges: Vec::new(),
             topo_order: Vec::new(),
+            input_sources: Vec::new(),
+            input_ptr_scratch: Vec::new(),
             sink: None,
             dirty: true,
             topo_scratch: TopoScratch::new(),
@@ -141,9 +152,43 @@ impl AudioGraph {
     /// Must be called after any structural changes and before `render()`.
     pub fn prepare(&mut self, context: &ProcessContext) {
         self.topological_sort();
+        self.resolve_inputs();
         self.resolve_channels(context);
         self.init_nodes(context);
         self.dirty = false;
+    }
+
+    /// Resolve, once, which source node feeds each input port of each node.
+    /// This moves the per-input edge-list scan out of the per-block render
+    /// path and into `prepare()` (called only after structural changes).
+    fn resolve_inputs(&mut self) {
+        let n = self.nodes.len();
+        self.input_sources.clear();
+        self.input_sources.resize(n, Vec::new());
+
+        for idx in 0..n {
+            let num_inputs = match &self.nodes[idx] {
+                Some(slot) => slot.ugen.spec().inputs.len(),
+                None => {
+                    self.input_sources[idx].clear();
+                    continue;
+                }
+            };
+
+            let node_id = NodeId(idx as u32);
+            let sources = &mut self.input_sources[idx];
+            sources.clear();
+            for input_idx in 0..num_inputs {
+                let src = self
+                    .edges
+                    .iter()
+                    .find(|e| e.to == node_id && e.to_input == input_idx)
+                    .map(|e| e.from)
+                    // Only keep the source if the node still exists.
+                    .filter(|from| self.nodes[from.index()].is_some());
+                sources.push(src);
+            }
+        }
     }
 
     /// Render one block of audio by evaluating nodes in topological order.
@@ -160,56 +205,42 @@ impl AudioGraph {
             slot.processed = false;
         }
 
-        // Process nodes in topological order.
-        // We need to work around the borrow checker: gather input buffer
-        // pointers before calling process on each node.
+        // Process nodes in topological order. Inputs were resolved once in
+        // `prepare()` (see `input_sources`), so here we only gather the source
+        // output pointers — no per-block edge scan, no per-node allocation.
         for order_idx in 0..self.topo_order.len() {
             let node_id = self.topo_order[order_idx];
             let idx = node_id.index();
 
-            // Gather input info: for each input port, which node feeds it?
-            let num_inputs = match &self.nodes[idx] {
-                Some(slot) => slot.ugen.spec().inputs.len(),
-                None => continue,
-            };
+            if self.nodes[idx].is_none() {
+                continue;
+            }
 
-            // Build a list of source node indices for each input port.
-            // We'll read their output buffers as raw pointers to work around
-            // the borrow checker (safe because topo order guarantees sources
-            // are already processed and won't be mutated again).
-            let mut input_ptrs: Vec<*const AudioBuffer> = Vec::new();
-            for input_idx in 0..num_inputs {
-                let source = self
-                    .edges
-                    .iter()
-                    .find(|e| e.to == node_id && e.to_input == input_idx)
-                    .map(|e| e.from);
-
-                match source {
-                    Some(src_id) => {
-                        let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
-                        input_ptrs.push(&src_slot.output as *const AudioBuffer);
-                    }
-                    None => {
-                        // No connection to this input — will skip
-                        input_ptrs.push(core::ptr::null());
-                    }
+            // Gather source output buffer pointers into reusable scratch.
+            // SAFETY: topological order guarantees every source node has
+            // already been processed this block and will not be mutated again,
+            // so these pointers stay valid for this node's `process` call.
+            self.input_ptr_scratch.clear();
+            for src in &self.input_sources[idx] {
+                if let Some(src_id) = src {
+                    let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
+                    self.input_ptr_scratch
+                        .push(&src_slot.output as *const AudioBuffer);
                 }
             }
 
-            // Now process the node
+            // View the gathered `*const AudioBuffer` scratch as `&[&AudioBuffer]`
+            // (identical layout). This borrows nothing tracked, so the mutable
+            // borrow of the destination node below is permitted.
+            let input_refs: &[&AudioBuffer] = unsafe {
+                core::slice::from_raw_parts(
+                    self.input_ptr_scratch.as_ptr() as *const &AudioBuffer,
+                    self.input_ptr_scratch.len(),
+                )
+            };
+
             let slot = self.nodes[idx].as_mut().unwrap();
-
-            // Build input references from pointers
-            // SAFETY: topo order guarantees all source nodes are already processed.
-            // Source output buffers won't be mutated again this block.
-            let input_refs: Vec<&AudioBuffer> = input_ptrs
-                .iter()
-                .filter(|p| !p.is_null())
-                .map(|p| unsafe { &**p })
-                .collect();
-
-            slot.ugen.process(context, &input_refs, &mut slot.output);
+            slot.ugen.process(context, input_refs, &mut slot.output);
             slot.processed = true;
         }
 
