@@ -5,7 +5,9 @@ An idiomatic-Haskell proof-of-concept for the Rust `microsynth` engine. It is
 synth graph → compile → render offline → write a WAV) with a small but
 representative set of UGens, so the design can be evaluated and benchmarked
 against the Rust original. See [`DESIGN.md`](DESIGN.md) for the full
-Rust → Haskell mapping and rationale.
+Rust → Haskell mapping and rationale, and [`COEXISTENCE.md`](COEXISTENCE.md) for
+a proposed architecture where Haskell authors instruments and Rust deploys them
+via a shared SynthDef IR — aimed at human and AI authoring workflows.
 
 ## The idea
 
