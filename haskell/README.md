@@ -70,23 +70,37 @@ renders per wall-clock second of DSP.
 
 | Build | DSP time / audio-second | ≈ realtime factor | vs. Haskell |
 |---|---|---|---|
-| Rust, `opt-level=3` + LTO | 0.00157 s | ~637× | **3.0× faster** |
-| Rust, `opt-level="s"` (project default) | 0.00198 s | ~504× | **2.4× faster** |
-| Haskell, `-O2` (this scaffold) | 0.00476 s | ~210× | 1.0× (baseline) |
+| Rust, `opt-level=3` + LTO | 0.00157 s | ~638× | **1.75× faster** |
+| Rust, `opt-level="s"` (project default) | 0.00195 s | ~512× | **1.40× faster** |
+| Haskell, `-O2` (optimized) | 0.00274 s | ~365× | 1.0× (baseline) |
+| Haskell, `-O2` (first cut) | 0.00476 s | ~210× | 0.58× |
 
 Takeaways:
 
-- The Haskell scaffold is **~2.4–3.0× slower** than Rust for identical DSP, and
-  still renders this patch **~210× faster than real time** — comfortably
+- The optimized Haskell is **~1.4–1.75× slower** than Rust for identical DSP,
+  and renders this patch **~365× faster than real time** — comfortably
   real-time-capable.
-- The gap is expected and mostly *unoptimized-scaffold* overhead, not a
-  language ceiling: node state lives in per-`STRef` cells read/written per
-  sample, and node outputs are reached through a boxed vector indirection.
-  Known levers to close it (not applied here): pack per-UGen state into a
-  single unboxed record, specialize the inner loops, drop the per-node output
-  indirection, and try the `-fllvm` backend.
+- Getting there was **~1.74× faster than the first cut** (0.00476 → 0.00274)
+  and closed most of the original 2.4–3.0× gap. The optimizations, all in the
+  render path:
+  - **Bind each node's inputs/output once at instantiation** so the block loop
+    is a bare `ST s ()` per node — no per-block input-list passing, no `drop`
+    per sample.
+  - **`unsafeRead`/`unsafeWrite`** in the inner loops (indices are in-bounds by
+    construction).
+  - **Thread filter/envelope state through the loop** — one `STRef` read/write
+    per block instead of per sample. (Oscillator phase already did this.)
+  - **Constants fill their block once** and then do zero work per block.
+  - **Render into one preallocated buffer** (a per-block `copy`) instead of
+    freezing + concatenating per block.
+  - **Faster phase wrap**: a compare-and-subtract instead of `floor`, which
+    GHC does not lower to a single instruction.
+- The `-fllvm` backend gave no measurable gain here (GHC 9.4 predates the
+  available LLVM 18). Remaining headroom: pack per-UGen state into a single
+  unboxed record and specialize the `sin`/`cos` in the per-sample biquad
+  coefficients (the dominant cost, and equally expensive in both engines).
 - The two Rust bars show the project's size-optimized default profile costs
-  ~25% throughput vs. a speed-optimized build.
+  ~20% throughput vs. a speed-optimized build.
 
-Reproduce: `bash bench.sh 60 5` (end-to-end) or see the two-duration slope
-method in the commit description. Numbers vary with hardware; ratios are stable.
+Reproduce: `bash bench.sh 60 5` (end-to-end) or the two-duration slope method
+in the commit description. Numbers vary with hardware; ratios are stable.

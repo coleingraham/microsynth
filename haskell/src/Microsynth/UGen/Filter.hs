@@ -4,7 +4,8 @@
 --
 -- Port of the RBJ biquad low-pass from Rust @src/ugens/filters.rs@:
 -- coefficients recomputed per sample (audio-rate cutoff/q), processed with a
--- transposed direct-form II biquad (@z1@/@z2@ state).
+-- transposed direct-form II biquad. The @z1@/@z2@ state is read once per block,
+-- threaded through the loop as unboxed arguments, and written back once.
 module Microsynth.UGen.Filter
   ( mkLpf
   ) where
@@ -13,13 +14,14 @@ import Control.Monad.ST (ST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
-import Microsynth.Node (Node (..), sampleAt)
+import Microsynth.Buffer (MBlock)
+import Microsynth.Node (Node (..), bindInput, readInput)
 
 tau :: Float
 tau = 2 * pi
 
--- | RBJ low-pass biquad coefficients: returns @(b0, b1, b2, a1, a2)@ already
--- normalised by @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source.
+-- | RBJ low-pass biquad coefficients: @(b0, b1, b2, a1, a2)@ normalised by
+-- @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source.
 lpfCoeffs :: Float -> Float -> Float -> (Float, Float, Float, Float, Float)
 lpfCoeffs freq q sr =
   let w0    = tau * freq / sr
@@ -37,24 +39,25 @@ lpfCoeffs freq q sr =
 {-# INLINE lpfCoeffs #-}
 
 -- | Low-pass filter. Inputs: signal, cutoff (Hz), q.
-mkLpf :: Float -> ST s (Node s)
-mkLpf sr = do
+mkLpf :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+mkLpf sr ins out = do
   z1Ref <- newSTRef 0
   z2Ref <- newSTRef 0
-  pure $ Node $ \_ ins out -> do
-    let !n = VUM.length out
-        go !i
-          | i >= n    = pure ()
+  let sigIn = bindInput ins 0
+      cutIn = bindInput ins 1
+      qIn   = bindInput ins 2
+      !n    = VUM.length out
+  pure $ Node $ do
+    s1_0 <- readSTRef z1Ref
+    s2_0 <- readSTRef z2Ref
+    let go !i !s1 !s2
+          | i >= n    = writeSTRef z1Ref s1 >> writeSTRef z2Ref s2
           | otherwise = do
-              x  <- sampleAt ins 0 i 0
-              fc <- sampleAt ins 1 i 1000
-              q  <- sampleAt ins 2 i 0.707
+              x  <- readInput sigIn i 0
+              fc <- readInput cutIn i 1000
+              q  <- readInput qIn i 0.707
               let (b0, b1, b2, a1, a2) = lpfCoeffs fc q sr
-              s1 <- readSTRef z1Ref
-              s2 <- readSTRef z2Ref
-              let !y = b0 * x + s1
-              writeSTRef z1Ref (b1 * x - a1 * y + s2)
-              writeSTRef z2Ref (b2 * x - a2 * y)
-              VUM.write out i y
-              go (i + 1)
-    go 0
+                  !y = b0 * x + s1
+              VUM.unsafeWrite out i y
+              go (i + 1) (b1 * x - a1 * y + s2) (b2 * x - a2 * y)
+    go 0 s1_0 s2_0

@@ -1,35 +1,41 @@
 -- | The @UGen@ abstraction.
 --
 -- Port of the Rust @trait UGen@ (@src/node.rs@). Rust's @&mut self@ +
--- @process(ctx, inputs, out)@ becomes a function that closes over the node's
--- own mutable state (@STRef@s / mutable vectors created at instantiation) and
--- writes its output block in place. That closure /is/ the node, so no
--- existential type is needed — the state is captured, not exposed.
+-- @process(ctx, inputs, out)@ becomes, at instantiation, a closure that has
+-- already captured its input blocks, its output block, and its own mutable
+-- state — leaving a bare per-block action. Because the graph pre-allocates
+-- every block once, a node's inputs never move, so binding them once (instead
+-- of threading an input list every block) removes the hot-path indirection.
 module Microsynth.Node
   ( Node (..)
-  , sampleAt
+  , Input
+  , bindInput
+  , readInput
   ) where
 
 import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Context (Context)
 
--- | A live, instantiated processing node.
---
--- @runNode ctx inputs output@ reads one sample at a time from each input
--- block and writes @output@ in place, mutating any captured state. The graph
--- guarantees (via topological order) that every input block is already
--- filled before this runs.
-newtype Node s = Node
-  { runNode :: Context -> [MBlock s] -> MBlock s -> ST s () }
+-- | A live node's per-block work: read its captured inputs, write its captured
+-- output, mutate its captured state. Everything else is closed over.
+newtype Node s = Node { runBlock :: ST s () }
 
--- | Read sample @i@ from input port @port@, or a default if that input is
--- absent. The analogue of Rust's @inputs.get(port)@ + per-sample indexing
--- (minus the modulo channel wrapping, which the mono scaffold doesn't need).
-sampleAt :: [MBlock s] -> Int -> Int -> Float -> ST s Float
-sampleAt ins port i def = case drop port ins of
-  (b : _) -> VUM.read b i
-  []      -> pure def
-{-# INLINE sampleAt #-}
+-- | A resolved input port: either a source block, or absent (use a default).
+type Input s = Maybe (MBlock s)
+
+-- | Resolve input port @port@ from a node's input block list, once, at build
+-- time (the analogue of Rust's @inputs.get(port)@).
+bindInput :: [MBlock s] -> Int -> Input s
+bindInput ins port = case drop port ins of
+  (b : _) -> Just b
+  []      -> Nothing
+
+-- | Read sample @i@ from a bound input, or a default if the port is absent.
+-- Uses an unchecked read: callers iterate @0 .. blockSize-1@ and every block is
+-- the same length, so the index is always in bounds.
+readInput :: Input s -> Int -> Float -> ST s Float
+readInput Nothing    _ d = pure d
+readInput (Just b)   i _ = VUM.unsafeRead b i
+{-# INLINE readInput #-}

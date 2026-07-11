@@ -45,19 +45,23 @@ live graph**. Haskell keeps that split but sharpens each half:
 
 ### The UGen abstraction (`Node`)
 
-Rust's `trait UGen` with `&mut self` + `process(ctx, inputs, out)` becomes a
-function that closes over the node's own mutable state and writes its output in
-place. The closure *is* the node — state is captured, not exposed — so no
-existential type is needed:
+Rust's `trait UGen` with `&mut self` + `process(ctx, inputs, out)` becomes, at
+instantiation, a closure that has already captured its input blocks, its output
+block, and its own mutable state — leaving a bare per-block action. Because the
+graph pre-allocates every block once and never moves them, binding inputs once
+(instead of threading an input list every block) removes the hot-path
+indirection. The closure *is* the node, so no existential type is needed:
 
 ```haskell
-newtype Node s = Node
-  { runNode :: Context -> [MBlock s] -> MBlock s -> ST s () }
+newtype Node s = Node { runBlock :: ST s () }
+
+mkLpf :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)   -- builder shape
 ```
 
 A stateful UGen (oscillator phase, biquad `z1`/`z2`, envelope level/stage) holds
 its state in `STRef`s created at instantiation, exactly mirroring the fields of
-the Rust struct.
+the Rust struct. On the hot path the state is read once per block, threaded
+through the inner loop as unboxed arguments, and written back once.
 
 ### The Signal EDSL (replaces `dsl/`)
 
@@ -92,10 +96,17 @@ a boxed `Vector (MBlock s)` here — same invariant, no `unsafe`.
 
 ## Performance
 
-See [`README.md`](README.md#performance-vs-rust). Summary: the unoptimized
-scaffold is ~2.4–3.0× slower than Rust for identical DSP and still renders
-~210× faster than real time. The gap is scaffold overhead (per-`STRef` state,
-boxed output indirection), not a language ceiling.
+See [`README.md`](README.md#performance-vs-rust). Summary: after render-path
+optimization the Haskell version is ~1.4–1.75× slower than Rust for identical
+DSP and renders ~365× faster than real time. The remaining gap is not a
+language ceiling — the biggest shared cost is the per-sample `sin`/`cos` in the
+biquad coefficients, which both engines pay equally.
+
+The optimizations (inputs/output bound once at instantiation so the render step
+is a bare `ST s ()`; `unsafeRead`/`unsafeWrite`; filter/envelope state threaded
+through the loop instead of per-sample `STRef` traffic; constants filled once; a
+single preallocated output buffer; compare-and-subtract phase wrap) took it from
+0.00476 to 0.00274 s per audio-second — a ~1.74× speedup over the first cut.
 
 ## Why Haskell is a good fit here
 
