@@ -1,0 +1,4 @@
+synthdef demo freq=220.0 amp=0.4 =
+  let osc = saw freq
+  let env = perc 0.01 0.6
+  lpf osc (freq * 6.0) 1.5 * env * amp
