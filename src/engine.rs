@@ -180,10 +180,7 @@ impl Engine {
     /// Returns the VoiceId, or None if the bus has no free slots.
     pub fn spawn_voice_on_bus(&mut self, def: &SynthDef, bus_node: NodeId) -> Option<VoiceId> {
         // Find the next free input slot on the bus
-        let bus_max = match self.graph.node_spec(bus_node) {
-            Some(spec) => spec.inputs.len(),
-            None => return None,
-        };
+        let bus_max = self.graph.node_spec(bus_node)?.inputs.len();
 
         // Find which slots are already used by checking existing edges
         let used_slots: Vec<usize> = self
