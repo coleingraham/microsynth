@@ -221,12 +221,10 @@ impl AudioGraph {
             // already been processed this block and will not be mutated again,
             // so these pointers stay valid for this node's `process` call.
             self.input_ptr_scratch.clear();
-            for src in &self.input_sources[idx] {
-                if let Some(src_id) = src {
-                    let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
-                    self.input_ptr_scratch
-                        .push(&src_slot.output as *const AudioBuffer);
-                }
+            for src_id in self.input_sources[idx].iter().flatten() {
+                let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
+                self.input_ptr_scratch
+                    .push(&src_slot.output as *const AudioBuffer);
             }
 
             // View the gathered `*const AudioBuffer` scratch as `&[&AudioBuffer]`
