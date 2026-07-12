@@ -1,6 +1,6 @@
 //! Wavetable oscillator UGen.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use crate::sample::Sample;
@@ -104,9 +104,7 @@ impl UGen for WaveTable {
             let wt_ch = ch % waveform.num_channels();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0) as f64;
+                let freq = read_input(freq_buf, ch, i, 440.0) as f64;
 
                 // Read with wrapping interpolation
                 let read_pos = phase * table_len;

@@ -3,7 +3,7 @@
 //! - [`Delay`]: Simple read-only delay line.
 //! - [`FeedbackDelay`]: Delay line with feedback (output feeds back into input).
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use alloc::vec::Vec;
@@ -92,10 +92,7 @@ impl UGen for Delay {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let delay_time = time_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0);
+                let delay_time = read_input(time_buf, ch, i, 0.1).max(0.0);
                 let delay_samples = (delay_time * self.sample_rate)
                     .min(max_delay_samples)
                     .max(0.0);
@@ -217,14 +214,8 @@ impl UGen for FeedbackDelay {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let delay_time = time_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.25)
-                    .max(0.0);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(-0.999, 0.999);
+                let delay_time = read_input(time_buf, ch, i, 0.25).max(0.0);
+                let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.999, 0.999);
 
                 let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 

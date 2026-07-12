@@ -8,7 +8,7 @@
 //! - `phase` (SinOsc only): phase offset in radians
 //! - `width` (Pulse only): pulse width in [0, 1]
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use core::f32::consts::TAU;
@@ -88,12 +88,8 @@ impl UGen for SinOsc {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
-                let phase_offset = phase_offset_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
+                let phase_offset = read_input(phase_offset_buf, ch, i, 0.0);
 
                 *out_sample = (phase * TAU + phase_offset).sin();
                 phase += freq * inv_sr;
@@ -175,9 +171,7 @@ impl UGen for Phasor {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
 
                 *out_sample = phase;
                 phase += freq * inv_sr;
@@ -257,9 +251,7 @@ impl UGen for Saw {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
 
                 // Map phase [0,1) to [-1,1)
                 *out_sample = 2.0 * phase - 1.0;
@@ -347,12 +339,8 @@ impl UGen for Pulse {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
-                let width = width_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5);
+                let freq = read_input(freq_buf, ch, i, 440.0);
+                let width = read_input(width_buf, ch, i, 0.5);
 
                 *out_sample = if phase < width { 1.0 } else { -1.0 };
                 phase += freq * inv_sr;
@@ -432,9 +420,7 @@ impl UGen for Tri {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
 
                 // Triangle: rise from -1 to +1 in first half, fall +1 to -1 in second
                 *out_sample = if phase < 0.5 {

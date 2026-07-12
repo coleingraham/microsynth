@@ -2,7 +2,7 @@
 //!
 //! Time-modulated delay effects for spatial width and movement.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use alloc::vec::Vec;
@@ -297,22 +297,10 @@ impl UGen for Flanger {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.3)
-                    .max(0.01);
-                let depth = depth_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.002)
-                    .clamp(0.0, 0.010);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(-0.95, 0.95);
-                let mix = mix_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
+                let rate = read_input(rate_buf, ch, i, 0.3).max(0.01);
+                let depth = read_input(depth_buf, ch, i, 0.002).clamp(0.0, 0.010);
+                let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.95, 0.95);
+                let mix = read_input(mix_buf, ch, i, 0.5).clamp(0.0, 1.0);
 
                 // LFO-modulated delay time (unipolar: 0 to depth)
                 let lfo = (lfo_phase * TAU).sin() * 0.5 + 0.5;
@@ -451,22 +439,10 @@ impl UGen for Phaser {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.4)
-                    .max(0.01);
-                let depth = depth_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.7)
-                    .clamp(0.0, 1.0);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.3)
-                    .clamp(-0.95, 0.95);
-                let mix = mix_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
+                let rate = read_input(rate_buf, ch, i, 0.4).max(0.01);
+                let depth = read_input(depth_buf, ch, i, 0.7).clamp(0.0, 1.0);
+                let feedback = read_input(fb_buf, ch, i, 0.3).clamp(-0.95, 0.95);
+                let mix = read_input(mix_buf, ch, i, 0.5).clamp(0.0, 1.0);
 
                 // LFO sweeps allpass corner frequency in log space
                 // Range: 200 Hz to 4000 Hz

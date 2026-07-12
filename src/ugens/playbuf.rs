@@ -1,6 +1,6 @@
 //! Sample playback UGen.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use crate::sample::Sample;
@@ -127,9 +127,7 @@ impl UGen for PlayBuf {
 
             for (i, out_sample) in out.iter_mut().enumerate() {
                 // Check trigger (restart playback)
-                let trig = trig_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let trig = read_input(trig_buf, ch, i, 0.0);
                 if trig > 0.0 && prev_trig <= 0.0 {
                     position = 0.0;
                     playing = true;
@@ -137,9 +135,7 @@ impl UGen for PlayBuf {
                 }
                 prev_trig = trig;
 
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0);
+                let rate = read_input(rate_buf, ch, i, 1.0);
 
                 if playing && !done {
                     *out_sample = sample.read_interpolated(ch, position);

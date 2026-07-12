@@ -11,7 +11,7 @@
 //! - [`SpectralBlur`]: Temporal magnitude smoothing.
 //! - [`Convolution`]: FFT-based overlap-add convolution.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use crate::spectral::complex::Complex;
@@ -109,9 +109,7 @@ impl UGen for SpectralFreeze {
 
             for i in 0..out.len() {
                 // Detect trigger positive edge.
-                let trig_val = trig_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let trig_val = read_input(trig_buf, ch, i, 0.0);
 
                 if ch == 0 {
                     let is_positive_edge = trig_val > 0.0 && self.prev_trig <= 0.0;

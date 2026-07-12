@@ -3,7 +3,7 @@
 //! Soft clipping, overdrive, and wavefolder effects for adding harmonic saturation.
 //! These complement the hard `Clip` UGen in `utility`.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 
@@ -78,10 +78,7 @@ impl UGen for SoftClip {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let drive = drive_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
+                let drive = read_input(drive_buf, ch, i, 1.0).max(0.0);
                 out[i] = (drive * x).tanh();
             }
         }
@@ -181,18 +178,9 @@ impl UGen for Overdrive {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let drive = drive_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
-                let tone = tone_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-                let mix = mix_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .clamp(0.0, 1.0);
+                let drive = read_input(drive_buf, ch, i, 1.0).max(0.0);
+                let tone = read_input(tone_buf, ch, i, 0.5).clamp(0.0, 1.0);
+                let mix = read_input(mix_buf, ch, i, 1.0).clamp(0.0, 1.0);
 
                 // Pre-gain
                 let gained = drive * x;
@@ -305,14 +293,8 @@ impl UGen for WaveFolder {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let drive = drive_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
-                let symmetry = sym_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0)
-                    .clamp(-1.0, 1.0);
+                let drive = read_input(drive_buf, ch, i, 1.0).max(0.0);
+                let symmetry = read_input(sym_buf, ch, i, 0.0).clamp(-1.0, 1.0);
 
                 // Apply symmetry offset, then fold via sin
                 let driven = (x + symmetry) * drive;

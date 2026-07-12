@@ -8,7 +8,7 @@
 //! aliasing at discontinuities, providing ~30 dB of alias rejection over
 //! naive waveforms with minimal CPU cost.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 
@@ -95,9 +95,7 @@ impl UGen for BlSaw {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
 
                 // Naive saw: phase [0,1) → [-1,1)
@@ -190,14 +188,10 @@ impl UGen for BlPulse {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
-                let width = width_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(dt.max(0.01), (1.0 - dt).min(0.99));
+                let width =
+                    read_input(width_buf, ch, i, 0.5).clamp(dt.max(0.01), (1.0 - dt).min(0.99));
 
                 // Naive pulse
                 let mut sample = if phase < width { 1.0 } else { -1.0 };
@@ -293,9 +287,7 @@ impl UGen for BlTri {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
 
                 // Band-limited square wave (width = 0.5)

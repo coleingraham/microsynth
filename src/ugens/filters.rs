@@ -4,7 +4,7 @@
 //! Coefficients are recalculated per-sample to support audio-rate modulation
 //! of cutoff frequency and Q.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 use alloc::vec::Vec;
@@ -80,9 +80,7 @@ impl UGen for OnePole {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let coeff = coeff_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5);
+                let coeff = read_input(coeff_buf, ch, i, 0.5);
                 let abs_coeff = coeff.abs().min(0.9999);
                 let x = in_ch[i];
                 y1 = (1.0 - abs_coeff) * x + coeff * y1;
@@ -334,13 +332,9 @@ macro_rules! biquad_ugen {
                     let out = output.channel_mut(ch).samples_mut();
 
                     for i in 0..out.len() {
-                        let freq = freq_buf
-                            .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                            .unwrap_or(1000.0)
+                        let freq = read_input(freq_buf, ch, i, 1000.0)
                             .clamp(20.0, nyquist - 1.0);
-                        let q = q_buf
-                            .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                            .unwrap_or($q_default)
+                        let q = read_input(q_buf, ch, i, $q_default)
                             .max(0.01);
 
                         let (b0, b1, b2, a1, a2) = $coeffs(freq, q, sr);
@@ -492,14 +486,8 @@ impl UGen for CombFilter {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let delay_time = delay_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.01)
-                    .max(0.0);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(-0.999, 0.999);
+                let delay_time = read_input(delay_buf, ch, i, 0.01).max(0.0);
+                let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.999, 0.999);
 
                 let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 
@@ -962,24 +950,11 @@ impl UGen for Compressor {
             let mut env_db = self.env_db[env_idx];
 
             for i in 0..out.len() {
-                let threshold = thresh_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(-10.0);
-                let ratio = ratio_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(4.0)
-                    .max(1.0);
-                let attack_time = attack_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.01)
-                    .max(0.0001);
-                let release_time = release_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
-                let makeup = makeup_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let threshold = read_input(thresh_buf, ch, i, -10.0);
+                let ratio = read_input(ratio_buf, ch, i, 4.0).max(1.0);
+                let attack_time = read_input(attack_buf, ch, i, 0.01).max(0.0001);
+                let release_time = read_input(release_buf, ch, i, 0.1).max(0.0001);
+                let makeup = read_input(makeup_buf, ch, i, 0.0);
 
                 // Sidechain level detection (peak, in dB)
                 let sc_db = fast_lin_to_db(sc_ch[i]);

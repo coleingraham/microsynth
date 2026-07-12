@@ -1,6 +1,6 @@
 //! Utility UGens: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 
@@ -318,9 +318,7 @@ impl UGen for Impulse {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0);
+                let freq = read_input(freq_buf, ch, i, 1.0);
 
                 if first {
                     *out_sample = 1.0;
@@ -420,10 +418,7 @@ impl UGen for Lag {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let lag_time = time_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0);
+                let lag_time = read_input(time_buf, ch, i, 0.1).max(0.0);
 
                 if lag_time <= 0.0 {
                     y1 = x;
@@ -508,12 +503,8 @@ impl UGen for Clip {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let lo = lo_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(-1.0);
-                let hi = hi_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0);
+                let lo = read_input(lo_buf, ch, i, -1.0);
+                let hi = read_input(hi_buf, ch, i, 1.0);
                 out[i] = x.clamp(lo, hi);
             }
         }

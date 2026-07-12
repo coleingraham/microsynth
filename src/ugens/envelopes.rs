@@ -1,6 +1,6 @@
 //! Envelope UGens: Line, XLine, Perc, ExpPerc, ASR, ADSR.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
 
@@ -409,14 +409,8 @@ impl UGen for Perc {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let attack_time = attack_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.001)
-                    .max(0.0001);
-                let release_time = release_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
+                let attack_time = read_input(attack_buf, ch, i, 0.001).max(0.0001);
+                let release_time = read_input(release_buf, ch, i, 0.1).max(0.0001);
 
                 match stage {
                     PercStage::Attack => {
@@ -550,14 +544,8 @@ impl UGen for ExpPerc {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let attack_time = attack_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.001)
-                    .max(0.0001);
-                let release_time = release_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
+                let attack_time = read_input(attack_buf, ch, i, 0.001).max(0.0001);
+                let release_time = read_input(release_buf, ch, i, 0.1).max(0.0001);
 
                 match stage {
                     ExpPercStage::Attack => {
@@ -699,14 +687,8 @@ impl UGen for ASR {
 
             for i in 0..out.len() {
                 let gate = gate_ch[i];
-                let attack_time = attack_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.01)
-                    .max(0.0001);
-                let release_time = release_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
+                let attack_time = read_input(attack_buf, ch, i, 0.01).max(0.0001);
+                let release_time = read_input(release_buf, ch, i, 0.1).max(0.0001);
 
                 let gate_on = gate > 0.0;
 
@@ -876,22 +858,10 @@ impl UGen for ADSR {
 
             for i in 0..out.len() {
                 let gate = gate_ch[i];
-                let attack_time = attack_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.01)
-                    .max(0.0001);
-                let decay_time = decay_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
-                let sustain_level = sustain_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-                let release_time = release_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0001);
+                let attack_time = read_input(attack_buf, ch, i, 0.01).max(0.0001);
+                let decay_time = read_input(decay_buf, ch, i, 0.1).max(0.0001);
+                let sustain_level = read_input(sustain_buf, ch, i, 0.5).clamp(0.0, 1.0);
+                let release_time = read_input(release_buf, ch, i, 0.1).max(0.0001);
 
                 let gate_on = gate > 0.0;
 
