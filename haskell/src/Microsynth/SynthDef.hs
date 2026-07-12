@@ -17,6 +17,8 @@ module Microsynth.SynthDef
   , synthdef
   , param
   , out
+  , mkSynthDef
+  , paramsOf
   ) where
 
 import Control.Monad.State.Strict (State, execState, gets, modify', runState)
@@ -75,8 +77,19 @@ compile :: String -> Signal -> SynthDef
 compile name sig =
   let (outId, st) = runState (walk sig) (CompS 0 Map.empty Map.empty)
       nodes       = Map.elems (csNodes st) -- Map Int is ordered by id
-      params      = mapMaybe declaredParam nodes
-  in SynthDef name nodes outId params
+  in mkSynthDef name nodes outId
+
+-- | Assemble a 'SynthDef' directly from a flat node list and its output id,
+-- recovering the declared parameters from the 'KParam' leaves. This is the
+-- entry point for rebuilding an /edited/ graph (e.g. a structural edit proposed
+-- over the flat 'NodeDef' list) without round-tripping through the 'Signal'
+-- AST, which only the builder DSL can produce.
+mkSynthDef :: String -> [NodeDef] -> Int -> SynthDef
+mkSynthDef name nodes outId = SynthDef name nodes outId (paramsOf nodes)
+
+-- | The declared parameters (name, default) of a flat node list, in node order.
+paramsOf :: [NodeDef] -> [(String, Float)]
+paramsOf = mapMaybe declaredParam
   where
     declaredParam (NodeDef (KParam nm d) _) = Just (nm, d)
     declaredParam _                          = Nothing

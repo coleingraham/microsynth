@@ -1,6 +1,7 @@
 -- | Numeric sanity checks for the render path.
 module Main (main) where
 
+import Data.List (find)
 import Data.Word (Word64)
 import GHC.Float (castFloatToWord32)
 import qualified Data.Map.Strict as Map
@@ -8,6 +9,7 @@ import qualified Data.Vector.Unboxed as VU
 import Test.Hspec
 
 import Microsynth
+import Microsynth.SynthDef.Introspect (nodeArity, nodePorts, nodeTag)
 
 -- | A deterministic FNV-1a hash over the raw 32-bit bit patterns of every
 -- rendered sample. This is the golden safety net: it pins the exact byte output
@@ -75,3 +77,35 @@ main = hspec $ do
       renderHash pad Map.empty `shouldBe` 4387305950413733972
     it "poly (8 voices) matches its golden hash" $
       renderHash (polyVoices 8) Map.empty `shouldBe` 11557555834769524848
+
+  -- Descriptor-derived introspection over the compiled graph.
+  describe "graph introspection (Microsynth.SynthDef.Introspect)" $ do
+    let nodes = sdNodes demo
+
+    it "tags every demo node with its serialization kind" $ do
+      let tags = map nodeTag nodes
+      -- demo = lpf (saw freq) (freq*6) 1.5 * (perc ..) * amp
+      tags `shouldContain` ["Saw"]
+      tags `shouldContain` ["Lpf"]
+      tags `shouldContain` ["Perc"]
+      tags `shouldContain` ["Param"]
+      tags `shouldContain` ["BinOp"]
+
+    it "exposes the Lpf node's ports as named binding roles" $ do
+      let mlpf = find ((== "Lpf") . nodeTag) nodes
+      fmap (map fst . nodePorts) mlpf `shouldBe` Just ["sig", "cutoff", "q"]
+      fmap nodeArity mlpf `shouldBe` Just 3
+
+    it "gives leaves (Param/Const) no ports" $ do
+      let leaves = filter (\nd -> nodeTag nd `elem` ["Param", "Const"]) nodes
+      map nodePorts leaves `shouldSatisfy` all null
+      map nodeArity leaves `shouldSatisfy` all (== 0)
+
+  -- Rebuilding a SynthDef from its flat node list (the proposer's entry point)
+  -- recovers the same params and renders byte-identically.
+  describe "mkSynthDef (rebuild flat graph)" $ do
+    let rebuilt = mkSynthDef (sdName demo) (sdNodes demo) (sdOutput demo)
+    it "recovers the declared parameters" $
+      sdParams rebuilt `shouldBe` sdParams demo
+    it "renders byte-identically to the original" $
+      renderHash rebuilt Map.empty `shouldBe` renderHash demo Map.empty

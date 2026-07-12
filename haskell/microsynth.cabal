@@ -34,6 +34,7 @@ library
       Microsynth.Signal
       Microsynth.Graph
       Microsynth.SynthDef
+      Microsynth.SynthDef.Introspect
       Microsynth.Engine
       Microsynth.Wav
       Microsynth.Demo
