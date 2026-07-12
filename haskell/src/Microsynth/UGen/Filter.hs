@@ -21,9 +21,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), bindInput, readInput)
-
-tau :: Float
-tau = 2 * pi
+import Microsynth.Numerics (tau)
 
 -- | RBJ low-pass biquad coefficients: @(# b0, b1, b2, a1, a2 #)@ normalised by
 -- @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source. The unboxed tuple

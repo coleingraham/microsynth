@@ -30,6 +30,7 @@ library
       Microsynth.Context
       Microsynth.Buffer
       Microsynth.Node
+      Microsynth.Numerics
       Microsynth.Signal
       Microsynth.Graph
       Microsynth.SynthDef
@@ -37,6 +38,7 @@ library
       Microsynth.Wav
       Microsynth.Demo
       Microsynth.UGen
+      Microsynth.UGen.Common
       Microsynth.UGen.Math
       Microsynth.UGen.Oscillator
       Microsynth.UGen.Filter
