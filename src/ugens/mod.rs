@@ -20,6 +20,22 @@
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 //! - `spectral`: SpectralFreeze, PitchShift, SpectralFilter, SpectralGate, SpectralBlur, Convolution
+//!
+//! # Adding a UGen
+//!
+//! To avoid re-introducing the boilerplate this layer was refactored to remove,
+//! follow the shared patterns (see the "Authoring a new UGen" section of
+//! `PLAN.md` for the full checklist):
+//!
+//! - Generate `spec()` with the `ugen_spec!` macro instead of hand-written
+//!   `static InputSpec`/`OutputSpec` arrays (hand-write `spec()` only for
+//!   control-rate or runtime-computed ports, as in `math::BinOpUGen` / `Bus`).
+//! - Read modulatable inputs with [`crate::buffer::read_input`], not the
+//!   `map(...).unwrap_or(...)` channel-wrap idiom.
+//! - Register below with [`UGenRegistry::register_spec`] — pass only the DSL
+//!   name and a factory; ports come from the UGen's own `spec()`.
+//! - For a family of near-identical variants, stamp them with a small local
+//!   `macro_rules!` (see `biquad_ugen!` in `filters`).
 
 // Declared first with `#[macro_use]` so the `ugen_spec!` macro it defines is
 // in scope for every UGen submodule declared below.
