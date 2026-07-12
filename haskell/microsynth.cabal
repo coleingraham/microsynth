@@ -25,6 +25,7 @@ library
     , containers
     , mtl
     , bytestring
+    , aeson
   exposed-modules:
       Microsynth
       Microsynth.Context
@@ -35,6 +36,7 @@ library
       Microsynth.Graph
       Microsynth.SynthDef
       Microsynth.SynthDef.Introspect
+      Microsynth.SynthDef.IR
       Microsynth.Engine
       Microsynth.Wav
       Microsynth.Demo
@@ -70,3 +72,4 @@ test-suite spec
     , containers
     , vector
     , hspec
+    , QuickCheck

@@ -34,7 +34,7 @@ data NodeDef = NodeDef
   { ndKind   :: !UGenKind
   , ndInputs :: ![Int]
   }
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- | An immutable, compiled synth template.
 data SynthDef = SynthDef
@@ -43,7 +43,7 @@ data SynthDef = SynthDef
   , sdOutput :: Int               -- ^ id of the sink node
   , sdParams :: [(String, Float)] -- ^ declared parameters (name, default)
   }
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- | The SynthDef builder monad. It threads the (single) output expression;
 -- parameters are recovered from the compiled node list.

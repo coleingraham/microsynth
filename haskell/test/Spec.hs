@@ -10,6 +10,9 @@ import Test.Hspec
 
 import Microsynth
 import Microsynth.SynthDef.Introspect (nodeArity, nodePorts, nodeTag)
+import Microsynth.SynthDef.IR (fromIR, toIR)
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck (Positive (..))
 
 -- | A deterministic FNV-1a hash over the raw 32-bit bit patterns of every
 -- rendered sample. This is the golden safety net: it pins the exact byte output
@@ -109,3 +112,15 @@ main = hspec $ do
       sdParams rebuilt `shouldBe` sdParams demo
     it "renders byte-identically to the original" $
       renderHash rebuilt Map.empty `shouldBe` renderHash demo Map.empty
+
+  -- JSON interchange IR: fromIR . toIR must be the identity on real graphs.
+  describe "SynthDef JSON IR round-trip (Microsynth.SynthDef.IR)" $ do
+    let roundTrips d = fromIR (toIR d) `shouldBe` Right d
+    it "round-trips tone" $ roundTrips tone
+    it "round-trips demo" $ roundTrips demo
+    it "round-trips pad"  $ roundTrips pad
+    it "round-trips poly (1 voice)"  $ roundTrips (polyVoices 1)
+    it "round-trips poly (16 voices)" $ roundTrips (polyVoices 16)
+    prop "round-trips poly for any voice count" $ \(Positive k) ->
+      let n = 1 + k `mod` 32
+      in fromIR (toIR (polyVoices n)) == Right (polyVoices n)
