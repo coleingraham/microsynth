@@ -35,29 +35,8 @@ impl OnePole {
     }
 }
 
-static ONEPOLE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "coeff",
-        rate: Rate::Audio,
-    },
-];
-static ONEPOLE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for OnePole {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "OnePole",
-            inputs: &ONEPOLE_INPUTS,
-            outputs: &ONEPOLE_OUTPUTS,
-        }
-    }
+    ugen_spec!("OnePole", inputs = ["in", "coeff"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -425,33 +404,12 @@ impl CombFilter {
     }
 }
 
-static COMB_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "delay",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-];
-static COMB_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for CombFilter {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "CombFilter",
-            inputs: &COMB_INPUTS,
-            outputs: &COMB_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "CombFilter",
+        inputs = ["in", "delay", "feedback"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -658,41 +616,12 @@ impl GVerb {
     }
 }
 
-static GVERB_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "roomsize",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "damping",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "wet",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "dry",
-        rate: Rate::Audio,
-    },
-];
-static GVERB_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for GVerb {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "GVerb",
-            inputs: &GVERB_INPUTS,
-            outputs: &GVERB_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "GVerb",
+        inputs = ["in", "roomsize", "damping", "wet", "dry"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -849,41 +778,6 @@ impl Compressor {
     }
 }
 
-static COMP_INPUTS: [InputSpec; 7] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "sidechain",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "threshold",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "ratio",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "attack",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "release",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "makeup",
-        rate: Rate::Audio,
-    },
-];
-static COMP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 /// Fast log2 approximation using IEEE 754 float bit tricks (no_std compatible).
 /// Accurate to ~0.09 dB for audio signals.
 #[inline]
@@ -911,13 +805,19 @@ fn fast_db_to_lin(db: f32) -> f32 {
 }
 
 impl UGen for Compressor {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Compressor",
-            inputs: &COMP_INPUTS,
-            outputs: &COMP_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Compressor",
+        inputs = [
+            "in",
+            "sidechain",
+            "threshold",
+            "ratio",
+            "attack",
+            "release",
+            "makeup"
+        ],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

@@ -9,8 +9,8 @@
 //! - `width` (Pulse only): pulse width in [0, 1]
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use core::f32::consts::TAU;
 
 // --- SinOsc ---
@@ -39,29 +39,8 @@ impl SinOsc {
     }
 }
 
-static SINOSC_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "phase",
-        rate: Rate::Audio,
-    },
-];
-static SINOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SinOsc {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SinOsc",
-            inputs: &SINOSC_INPUTS,
-            outputs: &SINOSC_OUTPUTS,
-        }
-    }
+    ugen_spec!("SinOsc", inputs = ["freq", "phase"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -131,23 +110,8 @@ impl Phasor {
     }
 }
 
-static PHASOR_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static PHASOR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Phasor {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Phasor",
-            inputs: &PHASOR_INPUTS,
-            outputs: &PHASOR_OUTPUTS,
-        }
-    }
+    ugen_spec!("Phasor", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -211,23 +175,8 @@ impl Saw {
     }
 }
 
-static SAW_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static SAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Saw {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Saw",
-            inputs: &SAW_INPUTS,
-            outputs: &SAW_OUTPUTS,
-        }
-    }
+    ugen_spec!("Saw", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -292,29 +241,8 @@ impl Pulse {
     }
 }
 
-static PULSE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "width",
-        rate: Rate::Audio,
-    },
-];
-static PULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Pulse {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Pulse",
-            inputs: &PULSE_INPUTS,
-            outputs: &PULSE_OUTPUTS,
-        }
-    }
+    ugen_spec!("Pulse", inputs = ["freq", "width"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -380,23 +308,8 @@ impl Tri {
     }
 }
 
-static TRI_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static TRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Tri {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Tri",
-            inputs: &TRI_INPUTS,
-            outputs: &TRI_OUTPUTS,
-        }
-    }
+    ugen_spec!("Tri", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

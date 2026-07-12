@@ -1,8 +1,8 @@
 //! Envelope UGens: Line, XLine, Perc, ExpPerc, ASR, ADSR.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 // --- Line ---
 
@@ -42,33 +42,8 @@ impl Line {
     }
 }
 
-static LINE_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "start",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "end",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "dur",
-        rate: Rate::Audio,
-    },
-];
-static LINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Line {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Line",
-            inputs: &LINE_INPUTS,
-            outputs: &LINE_OUTPUTS,
-        }
-    }
+    ugen_spec!("Line", inputs = ["start", "end", "dur"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -201,33 +176,8 @@ impl XLine {
     }
 }
 
-static XLINE_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "start",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "end",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "dur",
-        rate: Rate::Audio,
-    },
-];
-static XLINE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for XLine {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "XLine",
-            inputs: &XLINE_INPUTS,
-            outputs: &XLINE_OUTPUTS,
-        }
-    }
+    ugen_spec!("XLine", inputs = ["start", "end", "dur"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -357,29 +307,8 @@ impl Perc {
     }
 }
 
-static PERC_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "attack",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "release",
-        rate: Rate::Audio,
-    },
-];
-static PERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Perc {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Perc",
-            inputs: &PERC_INPUTS,
-            outputs: &PERC_OUTPUTS,
-        }
-    }
+    ugen_spec!("Perc", inputs = ["attack", "release"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -492,29 +421,8 @@ impl ExpPerc {
     }
 }
 
-static EXPPERC_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "attack",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "release",
-        rate: Rate::Audio,
-    },
-];
-static EXPPERC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for ExpPerc {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "ExpPerc",
-            inputs: &EXPPERC_INPUTS,
-            outputs: &EXPPERC_OUTPUTS,
-        }
-    }
+    ugen_spec!("ExpPerc", inputs = ["attack", "release"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -630,33 +538,12 @@ impl ASR {
     }
 }
 
-static ASR_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "gate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "attack",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "release",
-        rate: Rate::Audio,
-    },
-];
-static ASR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for ASR {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "ASR",
-            inputs: &ASR_INPUTS,
-            outputs: &ASR_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "ASR",
+        inputs = ["gate", "attack", "release"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -791,41 +678,12 @@ impl ADSR {
     }
 }
 
-static ADSR_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "gate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "attack",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "decay",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "sustain",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "release",
-        rate: Rate::Audio,
-    },
-];
-static ADSR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for ADSR {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "ADSR",
-            inputs: &ADSR_INPUTS,
-            outputs: &ADSR_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "ADSR",
+        inputs = ["gate", "attack", "decay", "sustain", "release"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

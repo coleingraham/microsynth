@@ -21,6 +21,11 @@
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 //! - `spectral`: SpectralFreeze, PitchShift, SpectralFilter, SpectralGate, SpectralBlur, Convolution
 
+// Declared first with `#[macro_use]` so the `ugen_spec!` macro it defines is
+// in scope for every UGen submodule declared below.
+#[macro_use]
+mod macros;
+
 pub mod bitcrush;
 pub mod bl_oscillators;
 pub mod bus;

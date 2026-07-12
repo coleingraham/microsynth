@@ -5,8 +5,8 @@
 
 use super::rng::Rng;
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 
 /// Minimum supported frequency (determines max buffer size).
@@ -68,33 +68,12 @@ impl Pluck {
     }
 }
 
-static PLUCK_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "decay",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static PLUCK_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Pluck {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Pluck",
-            inputs: &PLUCK_INPUTS,
-            outputs: &PLUCK_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Pluck",
+        inputs = ["freq", "decay", "trig"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -231,33 +210,12 @@ fn bow_table(delta_v: f32, pressure: f32) -> f32 {
     if val > 0.0 { val.sqrt() } else { 0.0 }
 }
 
-static BOWED_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "pressure",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "position",
-        rate: Rate::Audio,
-    },
-];
-static BOWED_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Bowed {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Bowed",
-            inputs: &BOWED_INPUTS,
-            outputs: &BOWED_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Bowed",
+        inputs = ["freq", "pressure", "position"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

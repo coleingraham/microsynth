@@ -4,8 +4,8 @@
 //! - [`FeedbackDelay`]: Delay line with feedback (output feeds back into input).
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 
 /// Maximum delay time in seconds. Determines buffer size at init.
@@ -36,29 +36,8 @@ impl Delay {
     }
 }
 
-static DELAY_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-];
-static DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Delay {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Delay",
-            inputs: &DELAY_INPUTS,
-            outputs: &DELAY_OUTPUTS,
-        }
-    }
+    ugen_spec!("Delay", inputs = ["in", "time"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -153,33 +132,12 @@ impl FeedbackDelay {
     }
 }
 
-static FB_DELAY_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-];
-static FB_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FeedbackDelay {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FeedbackDelay",
-            inputs: &FB_DELAY_INPUTS,
-            outputs: &FB_DELAY_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "FeedbackDelay",
+        inputs = ["in", "time", "feedback"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

@@ -12,8 +12,8 @@
 //! - [`Convolution`]: FFT-based overlap-add convolution.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use crate::spectral::complex::Complex;
 use crate::spectral::stft::StftProcessor;
 use crate::spectral::window::WindowType;
@@ -52,29 +52,8 @@ impl SpectralFreeze {
     }
 }
 
-static FREEZE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static FREEZE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SpectralFreeze {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SpectralFreeze",
-            inputs: &FREEZE_INPUTS,
-            outputs: &FREEZE_OUTPUTS,
-        }
-    }
+    ugen_spec!("SpectralFreeze", inputs = ["in", "trig"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {
         let fft_size = 2048;
@@ -178,29 +157,8 @@ impl PitchShift {
     }
 }
 
-static PITCH_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "shift",
-        rate: Rate::Audio,
-    },
-];
-static PITCH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for PitchShift {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "PitchShift",
-            inputs: &PITCH_INPUTS,
-            outputs: &PITCH_OUTPUTS,
-        }
-    }
+    ugen_spec!("PitchShift", inputs = ["in", "shift"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         let fft_size = 4096;
@@ -329,37 +287,12 @@ impl SpectralFilter {
     }
 }
 
-static SFILTER_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "bandwidth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "gain",
-        rate: Rate::Audio,
-    },
-];
-static SFILTER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SpectralFilter {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SpectralFilter",
-            inputs: &SFILTER_INPUTS,
-            outputs: &SFILTER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "SpectralFilter",
+        inputs = ["in", "freq", "bandwidth", "gain"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         let fft_size = 2048;
@@ -459,29 +392,12 @@ impl SpectralGate {
     }
 }
 
-static SGATE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "threshold",
-        rate: Rate::Audio,
-    },
-];
-static SGATE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SpectralGate {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SpectralGate",
-            inputs: &SGATE_INPUTS,
-            outputs: &SGATE_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "SpectralGate",
+        inputs = ["in", "threshold"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {
         let fft_size = 2048;
@@ -573,29 +489,8 @@ impl SpectralBlur {
     }
 }
 
-static SBLUR_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "blur",
-        rate: Rate::Audio,
-    },
-];
-static SBLUR_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SpectralBlur {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SpectralBlur",
-            inputs: &SBLUR_INPUTS,
-            outputs: &SBLUR_OUTPUTS,
-        }
-    }
+    ugen_spec!("SpectralBlur", inputs = ["in", "blur"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {
         let fft_size = 2048;
@@ -732,29 +627,8 @@ impl Convolution {
     }
 }
 
-static CONV_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static CONV_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Convolution {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Convolution",
-            inputs: &CONV_INPUTS,
-            outputs: &CONV_OUTPUTS,
-        }
-    }
+    ugen_spec!("Convolution", inputs = ["in", "mix"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {
         self.fft_size = 4096;

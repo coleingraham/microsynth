@@ -4,8 +4,8 @@
 //! simulation, creative detuning, and sub bass thickening.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use core::f32::consts::TAU;
 
 // --- Hilbert Transform ---
@@ -90,29 +90,8 @@ impl FreqShift {
     }
 }
 
-static FREQSHIFT_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "shift",
-        rate: Rate::Audio,
-    },
-];
-static FREQSHIFT_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FreqShift {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FreqShift",
-            inputs: &FREQSHIFT_INPUTS,
-            outputs: &FREQSHIFT_OUTPUTS,
-        }
-    }
+    ugen_spec!("FreqShift", inputs = ["in", "shift"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

@@ -9,8 +9,8 @@
 //! naive waveforms with minimal CPU cost.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 /// 2-point polynomial bandlimited step correction.
 ///
@@ -55,23 +55,8 @@ impl BlSaw {
     }
 }
 
-static BLSAW_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static BLSAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlSaw {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlSaw",
-            inputs: &BLSAW_INPUTS,
-            outputs: &BLSAW_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlSaw", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -141,29 +126,8 @@ impl BlPulse {
     }
 }
 
-static BLPULSE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "width",
-        rate: Rate::Audio,
-    },
-];
-static BLPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlPulse {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlPulse",
-            inputs: &BLPULSE_INPUTS,
-            outputs: &BLPULSE_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlPulse", inputs = ["freq", "width"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -245,23 +209,8 @@ impl BlTri {
     }
 }
 
-static BLTRI_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static BLTRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlTri {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlTri",
-            inputs: &BLTRI_INPUTS,
-            outputs: &BLTRI_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlTri", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

@@ -3,8 +3,8 @@
 //! Time-modulated delay effects for spatial width and movement.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
@@ -55,37 +55,12 @@ const CHORUS_CENTER_DELAY: f32 = 0.007;
 /// Maximum delay buffer in seconds (center + max depth + margin).
 const CHORUS_MAX_DELAY: f32 = 0.040;
 
-static CHORUS_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static CHORUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Chorus {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Chorus",
-            inputs: &CHORUS_INPUTS,
-            outputs: &CHORUS_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Chorus",
+        inputs = ["in", "rate", "depth", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -221,41 +196,12 @@ impl Flanger {
 
 const FLANGER_MAX_DELAY: f32 = 0.020;
 
-static FLANGER_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static FLANGER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Flanger {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Flanger",
-            inputs: &FLANGER_INPUTS,
-            outputs: &FLANGER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Flanger",
+        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -371,41 +317,12 @@ impl Phaser {
     }
 }
 
-static PHASER_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static PHASER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Phaser {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Phaser",
-            inputs: &PHASER_INPUTS,
-            outputs: &PHASER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Phaser",
+        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

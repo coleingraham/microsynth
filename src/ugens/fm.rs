@@ -4,8 +4,8 @@
 //! and electric piano sounds.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use core::f32::consts::TAU;
 
 // --- FmOsc ---
@@ -61,37 +61,12 @@ impl FmOsc {
     }
 }
 
-static FMOSC_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "ratio",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "index",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-];
-static FMOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FmOsc {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FmOsc",
-            inputs: &FMOSC_INPUTS,
-            outputs: &FMOSC_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "FmOsc",
+        inputs = ["freq", "ratio", "index", "feedback"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

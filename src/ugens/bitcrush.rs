@@ -3,8 +3,8 @@
 //! Lo-fi digital degradation effects for retro/vintage textures.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 // --- Bitcrusher ---
 
@@ -42,33 +42,12 @@ impl Bitcrusher {
     }
 }
 
-static BITCRUSH_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "bits",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "downsample",
-        rate: Rate::Audio,
-    },
-];
-static BITCRUSH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Bitcrusher {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Bitcrusher",
-            inputs: &BITCRUSH_INPUTS,
-            outputs: &BITCRUSH_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Bitcrusher",
+        inputs = ["in", "bits", "downsample"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 

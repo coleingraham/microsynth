@@ -1,8 +1,8 @@
 //! Utility UGens: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 // --- Pan2 ---
 
@@ -27,29 +27,8 @@ impl Pan2 {
     }
 }
 
-static PAN2_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "pos",
-        rate: Rate::Audio,
-    },
-];
-static PAN2_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Pan2 {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Pan2",
-            inputs: &PAN2_INPUTS,
-            outputs: &PAN2_OUTPUTS,
-        }
-    }
+    ugen_spec!("Pan2", inputs = ["in", "pos"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -108,23 +87,8 @@ impl Mix {
     }
 }
 
-static MIX_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "in",
-    rate: Rate::Audio,
-}];
-static MIX_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Mix {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Mix",
-            inputs: &MIX_INPUTS,
-            outputs: &MIX_OUTPUTS,
-        }
-    }
+    ugen_spec!("Mix", inputs = ["in"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -181,29 +145,8 @@ impl SampleAndHold {
     }
 }
 
-static SH_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static SH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SampleAndHold {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SampleAndHold",
-            inputs: &SH_INPUTS,
-            outputs: &SH_OUTPUTS,
-        }
-    }
+    ugen_spec!("SampleAndHold", inputs = ["in", "trig"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -274,23 +217,8 @@ impl Impulse {
     }
 }
 
-static IMPULSE_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static IMPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Impulse {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Impulse",
-            inputs: &IMPULSE_INPUTS,
-            outputs: &IMPULSE_OUTPUTS,
-        }
-    }
+    ugen_spec!("Impulse", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -370,29 +298,8 @@ impl Lag {
     }
 }
 
-static LAG_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-];
-static LAG_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Lag {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Lag",
-            inputs: &LAG_INPUTS,
-            outputs: &LAG_OUTPUTS,
-        }
-    }
+    ugen_spec!("Lag", inputs = ["in", "time"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -456,33 +363,8 @@ impl Clip {
     }
 }
 
-static CLIP_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "lo",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "hi",
-        rate: Rate::Audio,
-    },
-];
-static CLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Clip {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Clip",
-            inputs: &CLIP_INPUTS,
-            outputs: &CLIP_OUTPUTS,
-        }
-    }
+    ugen_spec!("Clip", inputs = ["in", "lo", "hi"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}

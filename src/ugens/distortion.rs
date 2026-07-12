@@ -4,8 +4,8 @@
 //! These complement the hard `Clip` UGen in `utility`.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 // --- SoftClip ---
 
@@ -36,29 +36,8 @@ impl SoftClip {
     }
 }
 
-static SOFTCLIP_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "drive",
-        rate: Rate::Audio,
-    },
-];
-static SOFTCLIP_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for SoftClip {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "SoftClip",
-            inputs: &SOFTCLIP_INPUTS,
-            outputs: &SOFTCLIP_OUTPUTS,
-        }
-    }
+    ugen_spec!("SoftClip", inputs = ["in", "drive"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -122,37 +101,12 @@ impl Overdrive {
     }
 }
 
-static OVERDRIVE_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "drive",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "tone",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static OVERDRIVE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Overdrive {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Overdrive",
-            inputs: &OVERDRIVE_INPUTS,
-            outputs: &OVERDRIVE_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Overdrive",
+        inputs = ["in", "drive", "tone", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -244,33 +198,12 @@ impl WaveFolder {
     }
 }
 
-static WAVEFOLDER_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "drive",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "symmetry",
-        rate: Rate::Audio,
-    },
-];
-static WAVEFOLDER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for WaveFolder {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "WaveFolder",
-            inputs: &WAVEFOLDER_INPUTS,
-            outputs: &WAVEFOLDER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "WaveFolder",
+        inputs = ["in", "drive", "symmetry"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}

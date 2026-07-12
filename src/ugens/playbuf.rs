@@ -1,8 +1,8 @@
 //! Sample playback UGen.
 
 use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use crate::sample::Sample;
 use alloc::sync::Arc;
 
@@ -55,29 +55,8 @@ impl PlayBuf {
     }
 }
 
-static PLAYBUF_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static PLAYBUF_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for PlayBuf {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "PlayBuf",
-            inputs: &PLAYBUF_INPUTS,
-            outputs: &PLAYBUF_OUTPUTS,
-        }
-    }
+    ugen_spec!("PlayBuf", inputs = ["rate", "trig"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
