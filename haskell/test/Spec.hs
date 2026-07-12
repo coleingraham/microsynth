@@ -10,7 +10,8 @@ import Test.Hspec
 
 import Microsynth
 import Microsynth.SynthDef.Introspect (nodeArity, nodePorts, nodeTag)
-import Microsynth.SynthDef.IR (fromIR, toIR)
+import Microsynth.SynthDef.IR
+  (IR (..), IRNode (..), decodeSynthDef, encodeSynthDef, fromIR, toIR)
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Positive (..))
 
@@ -113,14 +114,21 @@ main = hspec $ do
     it "renders byte-identically to the original" $
       renderHash rebuilt Map.empty `shouldBe` renderHash demo Map.empty
 
-  -- JSON interchange IR: fromIR . toIR must be the identity on real graphs.
-  describe "SynthDef JSON IR round-trip (Microsynth.SynthDef.IR)" $ do
-    let roundTrips d = fromIR (toIR d) `shouldBe` Right d
-    it "round-trips tone" $ roundTrips tone
-    it "round-trips demo" $ roundTrips demo
-    it "round-trips pad"  $ roundTrips pad
-    it "round-trips poly (1 voice)"  $ roundTrips (polyVoices 1)
-    it "round-trips poly (16 voices)" $ roundTrips (polyVoices 16)
-    prop "round-trips poly for any voice count" $ \(Positive k) ->
+  -- Interchange IR: the structural map and the JSON bytes must both round-trip.
+  describe "SynthDef IR round-trip (Microsynth.SynthDef.IR)" $ do
+    let irRoundTrips d   = fromIR (toIR d) `shouldBe` Right d
+        jsonRoundTrips d = decodeSynthDef (encodeSynthDef d) `shouldBe` Right d
+
+    it "round-trips demo through the IR type" $ irRoundTrips demo
+    it "round-trips tone through JSON bytes"  $ jsonRoundTrips tone
+    it "round-trips demo through JSON bytes"  $ jsonRoundTrips demo
+    it "round-trips pad through JSON bytes"   $ jsonRoundTrips pad
+    it "round-trips poly (1 voice) through JSON bytes"   $ jsonRoundTrips (polyVoices 1)
+    it "round-trips poly (16 voices) through JSON bytes" $ jsonRoundTrips (polyVoices 16)
+
+    it "numbers node ids 0..n-1 as a real field" $
+      map irnId (irNodes (toIR demo)) `shouldBe` [0 .. length (sdNodes demo) - 1]
+
+    prop "round-trips poly through JSON for any voice count" $ \(Positive k) ->
       let n = 1 + k `mod` 32
-      in fromIR (toIR (polyVoices n)) == Right (polyVoices n)
+      in decodeSynthDef (encodeSynthDef (polyVoices n)) == Right (polyVoices n)
