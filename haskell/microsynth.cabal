@@ -26,8 +26,10 @@ library
     , mtl
     , bytestring
     , aeson
+    , vector-th-unbox
   exposed-modules:
       Microsynth
+      Microsynth.Types
       Microsynth.Context
       Microsynth.Buffer
       Microsynth.Node

@@ -30,6 +30,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Input, bindInput)
+import Microsynth.Types (Sample)
 import Microsynth.UGen.Spec (UGenTag, portDefaults)
 
 -- | Wrap a phase accumulator back into @[0, 1)@. Since the accumulator is always
@@ -37,14 +38,14 @@ import Microsynth.UGen.Spec (UGenTag, portDefaults)
 -- in @[0, 2)@, so a single compare-and-subtract is both correct and much faster
 -- than @floor@ on the hot path (GHC's @floor :: Float -> Int@ is not one
 -- instruction). Mirrors Rust's @phase -= phase.floor()@ under the same invariant.
-wrap01 :: Float -> Float
+wrap01 :: Sample -> Sample
 wrap01 p = if p >= 1 then p - 1 else p
 {-# INLINE wrap01 #-}
 
 -- | Advance a phase accumulator by one sample at frequency @f@ (Hz), given the
 -- reciprocal sample rate @invSr = 1 / sampleRate@, wrapping into @[0, 1)@. This
 -- is the shared step of every phase-accumulator oscillator.
-phasorStep :: Float -> Float -> Float -> Float
+phasorStep :: Sample -> Sample -> Sample -> Sample
 phasorStep invSr f p = wrap01 (p + f * invSr)
 {-# INLINE phasorStep #-}
 
@@ -52,14 +53,14 @@ phasorStep invSr f p = wrap01 (p + f * invSr)
 -- port's default value taken from the descriptor registry (rather than a literal
 -- baked into the builder). Called once per node at build time, so the @!!@ and
 -- the descriptor lookup never touch the render path; the returned default is a
--- plain 'Float' read per sample by 'Microsynth.Node.readInput'.
-bindPort :: [MBlock s] -> UGenTag -> Int -> (Input s, Float)
+-- plain 'Sample' read per sample by 'Microsynth.Node.readInput'.
+bindPort :: [MBlock s] -> UGenTag -> Int -> (Input s, Sample)
 bindPort ins tag p = (bindInput ins p, portDefaults tag !! p)
 {-# INLINE bindPort #-}
 
 -- | Fill an output block from a stateless per-sample function of the index.
 -- Replaces the hand-written @go !i@ loop in the stateless arithmetic UGens.
-mapBlock :: Int -> MBlock s -> (Int -> ST s Float) -> ST s ()
+mapBlock :: Int -> MBlock s -> (Int -> ST s Sample) -> ST s ()
 mapBlock n out f = go 0
   where
     go !i
@@ -74,7 +75,7 @@ mapBlock n out f = go 0
 -- the start and written back once at the end; @step i s@ receives the sample
 -- index and current state, writes its own output sample, and returns the next
 -- state. The state stays unboxed (@Float#@) through the loop.
-scanBlock1F :: MBlock s -> Int -> (Int -> Float -> ST s Float) -> ST s ()
+scanBlock1F :: MBlock s -> Int -> (Int -> Sample -> ST s Sample) -> ST s ()
 scanBlock1F cell n step = do
   s0 <- VUM.unsafeRead cell 0
   let go !i !s
@@ -89,7 +90,7 @@ scanBlock1F cell n step = do
 -- (@[a, b]@). Both are read once up front and written back once at the end;
 -- @step i a b@ writes its own output sample and returns @(a', b')@. The two
 -- accumulators are threaded as separate unboxed arguments.
-scanBlock2F :: MBlock s -> Int -> (Int -> Float -> Float -> ST s (Float, Float)) -> ST s ()
+scanBlock2F :: MBlock s -> Int -> (Int -> Sample -> Sample -> ST s (Sample, Sample)) -> ST s ()
 scanBlock2F cell n step = do
   a0 <- VUM.unsafeRead cell 0
   b0 <- VUM.unsafeRead cell 1
@@ -106,7 +107,7 @@ scanBlock2F cell n step = do
 -- end; @step i f n@ writes its own output sample and returns @(f', n')@.
 scanBlockFI
   :: MBlock s -> VUM.MVector s Int -> Int
-  -> (Int -> Float -> Int -> ST s (Float, Int)) -> ST s ()
+  -> (Int -> Sample -> Int -> ST s (Sample, Int)) -> ST s ()
 scanBlockFI fCell iCell n step = do
   f0 <- VUM.unsafeRead fCell 0
   g0 <- VUM.unsafeRead iCell 0

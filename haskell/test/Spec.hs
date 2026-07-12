@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Numeric sanity checks for the render path.
 module Main (main) where
 
@@ -19,12 +21,12 @@ import Test.QuickCheck (Positive (..))
 -- rendered sample. This is the golden safety net: it pins the exact byte output
 -- of the reference renders so any refactor that changes a single sample fails
 -- loudly. The constants below were captured from the pre-refactor engine.
-renderHash :: SynthDef -> Map.Map String Float -> Word64
+renderHash :: SynthDef -> Map.Map ParamName Sample -> Word64
 renderHash sdef overrides =
   foldl step 1469598103934665603 (concatMap VU.toList chans)
   where
-    chans = renderOffline sdef 44100 44100 overrides
-    step acc x = acc * 1099511628211 + fromIntegral (castFloatToWord32 x)
+    chans = renderOffline sdef (SampleRate 44100) (SampleCount 44100) overrides
+    step acc x = acc * 1099511628211 + fromIntegral (castFloatToWord32 (unSample x))
 
 -- | A bare 440 Hz sine at unit amplitude.
 sine :: SynthDef
@@ -35,9 +37,8 @@ sine = synthdef "sine" $ do
 main :: IO ()
 main = hspec $ do
   describe "renderOffline (sinOsc 440)" $ do
-    let sr    = 44100
-        n     = sr
-        chans = renderOffline sine (fromIntegral sr) n Map.empty
+    let n     = 44100
+        chans = renderOffline sine (SampleRate 44100) (SampleCount n) Map.empty
         v     = head chans
 
     it "produces exactly one (mono) channel" $
@@ -58,16 +59,15 @@ main = hspec $ do
 
   describe "parameter overrides" $
     it "changes the rendered signal when freq is overridden" $ do
-      let sr   = 44100 :: Int
-          n    = 2048
-          base = head (renderOffline sine (fromIntegral sr) n Map.empty)
-          hi   = head (renderOffline sine (fromIntegral sr) n
+      let n    = 2048
+          base = head (renderOffline sine (SampleRate 44100) (SampleCount n) Map.empty)
+          hi   = head (renderOffline sine (SampleRate 44100) (SampleCount n)
                          (Map.fromList [("freq", 880)]))
       (base == hi) `shouldBe` False
 
   describe "demo synthdefs compile and render" $
     it "renders the filtered percussive demo without error" $ do
-      let v = head (renderOffline demo 44100 44100 Map.empty)
+      let v = head (renderOffline demo (SampleRate 44100) (SampleCount 44100) Map.empty)
       VU.length v `shouldBe` 44100
 
   -- Golden byte output: every reference render must hash to its pinned value.
@@ -127,7 +127,7 @@ main = hspec $ do
     it "round-trips poly (16 voices) through JSON bytes" $ jsonRoundTrips (polyVoices 16)
 
     it "numbers node ids 0..n-1 as a real field" $
-      map irnId (irNodes (toIR demo)) `shouldBe` [0 .. length (sdNodes demo) - 1]
+      map irnId (irNodes (toIR demo)) `shouldBe` map NodeId [0 .. length (sdNodes demo) - 1]
 
     prop "round-trips poly through JSON for any voice count" $ \(Positive k) ->
       let n = 1 + k `mod` 32

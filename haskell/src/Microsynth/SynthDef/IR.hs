@@ -56,18 +56,20 @@ import qualified Data.Map.Strict as Map
 
 import Microsynth.Signal (BinOp (..), UGenKind (..))
 import Microsynth.SynthDef (NodeDef (..), SynthDef (..), mkSynthDef)
+import Microsynth.Types
+  (IRVersion (..), NodeId (..), ParamName, Sample, SynthName)
 import Microsynth.UGen.Spec (serTag)
 
 -- | The IR schema version 'toIR' emits. Bumped when the wire shape changes.
-currentIRVersion :: Int
-currentIRVersion = 1
+currentIRVersion :: IRVersion
+currentIRVersion = IRVersion 1
 
 -- --- The IR types ---
 
 -- | A declared parameter in the IR.
 data IRParam = IRParam
-  { irpName    :: !String
-  , irpDefault :: !Float
+  { irpName    :: !ParamName
+  , irpDefault :: !Sample
   }
   deriving (Eq, Show)
 
@@ -75,20 +77,20 @@ data IRParam = IRParam
 -- (reusing the domain 'UGenKind', so leaf payloads stay typed), and the ids of
 -- the nodes feeding each input port, in order.
 data IRNode = IRNode
-  { irnId     :: !Int
+  { irnId     :: !NodeId
   , irnKind   :: !UGenKind
-  , irnInputs :: ![Int]
+  , irnInputs :: ![NodeId]
   }
   deriving (Eq, Show)
 
 -- | The whole interchange document: a versioned, named, flat node graph plus its
 -- declared params and output node id.
 data IR = IR
-  { irVersion :: !Int
-  , irName    :: !String
+  { irVersion :: !IRVersion
+  , irName    :: !SynthName
   , irParams  :: ![IRParam]
   , irNodes   :: ![IRNode]
-  , irOutput  :: !Int
+  , irOutput  :: !NodeId
   }
   deriving (Eq, Show)
 
@@ -182,7 +184,7 @@ toIR sd = IR
   , irOutput  = sdOutput sd
   }
   where
-    mkNode i nd = IRNode i (ndKind nd) (ndInputs nd)
+    mkNode i nd = IRNode (NodeId i) (ndKind nd) (ndInputs nd)
 
 -- | Rebuild a 'SynthDef' from the IR, or a human-readable error. The node ids
 -- must form a contiguous @0..n-1@ set (which 'toIR' guarantees); nodes are
@@ -195,10 +197,10 @@ fromIR ir = do
   nodes <- orderNodesById (irNodes ir)
   pure (mkSynthDef (irName ir) nodes (irOutput ir))
 
-checkVersion :: Int -> Either String ()
+checkVersion :: IRVersion -> Either String ()
 checkVersion v
   | v == currentIRVersion = Right ()
-  | otherwise             = Left ("unsupported IR version: " ++ show v)
+  | otherwise             = Left ("unsupported IR version: " ++ show (unIRVersion v))
 
 -- | Place IR nodes into the flat, position-indexed node list, validating that
 -- their ids are exactly @0..n-1@ with no gaps or duplicates.
@@ -209,7 +211,7 @@ orderNodesById ns
   where
     n    = length ns
     byId = Map.fromList [ (irnId x, x) | x <- ns ]
-    pick i = case Map.lookup i byId of
+    pick i = case Map.lookup (NodeId i) byId of
       Just x  -> Right (NodeDef (irnKind x) (irnInputs x))
       Nothing -> Left ("IR is missing node id " ++ show i)
 

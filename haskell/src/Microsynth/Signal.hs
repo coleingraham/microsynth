@@ -20,12 +20,14 @@ module Microsynth.Signal
   , perc
   ) where
 
+import Microsynth.Types (ParamName, Sample)
+
 -- | The primitive kind of a node. 'KConst' and 'KParam' are the zero-input
 -- leaves; the rest correspond to Rust UGens. This enum is the bridge the
 -- compiler ('Microsynth.UGen.instantiate') dispatches on.
 data UGenKind
-  = KConst !Float          -- ^ constant value (numeric literal)
-  | KParam !String !Float  -- ^ named parameter with a default
+  = KConst !Sample            -- ^ constant value (numeric literal)
+  | KParam !ParamName !Sample -- ^ named parameter with a default
   | KBinOp !BinOp          -- ^ arithmetic binary operator node
   | KNeg                   -- ^ unary negation node
   | KSinOsc                -- ^ sine oscillator (freq, phase)
@@ -59,11 +61,11 @@ instance Fractional Signal where
   fromRational = constSig . fromRational
 
 -- | A constant-valued signal.
-constSig :: Float -> Signal
+constSig :: Sample -> Signal
 constSig v = Signal (KConst v) []
 
 -- | A named, defaulted parameter (the analogue of @synthdef p=default@).
-paramSig :: String -> Float -> Signal
+paramSig :: ParamName -> Sample -> Signal
 paramSig name def = Signal (KParam name def) []
 
 -- | Sine oscillator: @sinOsc freq phase@.

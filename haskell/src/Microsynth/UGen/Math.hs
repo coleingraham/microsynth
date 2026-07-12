@@ -17,17 +17,18 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), readInput)
 import Microsynth.Signal (BinOp (..))
+import Microsynth.Types (Sample)
 import Microsynth.UGen.Common (bindPort, mapBlock)
 import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | A constant node. Its output never changes, so we fill the block once at
 -- build time and do zero work per block.
-constNode :: Float -> MBlock s -> ST s (Node s)
+constNode :: Sample -> MBlock s -> ST s (Node s)
 constNode !v out = do
   VUM.set out v
   pure (Node (pure ()))
 
-binFun :: BinOp -> (Float -> Float -> Float)
+binFun :: BinOp -> (Sample -> Sample -> Sample)
 binFun Add = (+)
 binFun Sub = (-)
 binFun Mul = (*)

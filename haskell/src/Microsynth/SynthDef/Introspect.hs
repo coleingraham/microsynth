@@ -17,17 +17,18 @@ module Microsynth.SynthDef.Introspect
   ) where
 
 import Microsynth.SynthDef (NodeDef (..))
+import Microsynth.Types (KindTag, NodeId, PortName)
 import Microsynth.UGen.Spec (portName, serTag, tagOf, ugenInfo, uiPorts)
 
 -- | The serialization/IR tag for a node's kind (e.g. @"Saw"@, @"Lpf"@).
-nodeTag :: NodeDef -> String
+nodeTag :: NodeDef -> KindTag
 nodeTag = serTag . ndKind
 
 -- | A node's inputs as @(role-name, source-node-id)@ pairs: the descriptor's
 -- ordered port names zipped with the graph edges feeding them. This is exactly
 -- the binding-role view an encoder needs. Leaves ('KConst'\/'KParam') have no
 -- ports and yield @[]@.
-nodePorts :: NodeDef -> [(String, Int)]
+nodePorts :: NodeDef -> [(PortName, NodeId)]
 nodePorts nd = zip names (ndInputs nd)
   where
     names = map portName (uiPorts (ugenInfo (tagOf (ndKind nd))))

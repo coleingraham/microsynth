@@ -6,7 +6,7 @@ module Microsynth.Context
   , Context (..)
   ) where
 
-import Data.Word (Word64)
+import Microsynth.Types (BlockSize, SampleOffset, SampleRate)
 
 -- | Whether a port carries one sample per block (control) or a full
 -- block of samples (audio). Kept for design fidelity with the Rust
@@ -16,8 +16,8 @@ data Rate = Audio | Control
 
 -- | Immutable per-block context. Mirrors @ProcessContext@.
 data Context = Context
-  { ctxSampleRate   :: !Float
-  , ctxBlockSize    :: !Int
-  , ctxSampleOffset :: !Word64
+  { ctxSampleRate   :: !SampleRate
+  , ctxBlockSize    :: !BlockSize
+  , ctxSampleOffset :: !SampleOffset
   }
   deriving (Eq, Show)

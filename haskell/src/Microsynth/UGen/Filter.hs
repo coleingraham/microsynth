@@ -22,15 +22,16 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), readInput)
 import Microsynth.Numerics (tau)
+import Microsynth.Types (Sample (..), SampleRate (..))
 import Microsynth.UGen.Common (bindPort, scanBlock2F)
 import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | RBJ low-pass biquad coefficients: @(# b0, b1, b2, a1, a2 #)@ normalised by
 -- @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source. The unboxed tuple
 -- return means no per-sample heap allocation.
-lpfCoeffs :: Float -> Float -> Float -> (# Float, Float, Float, Float, Float #)
+lpfCoeffs :: Sample -> Sample -> SampleRate -> (# Sample, Sample, Sample, Sample, Sample #)
 lpfCoeffs freq q sr =
-  let w0    = tau * freq / sr
+  let w0    = tau * freq / Sample (unSampleRate sr)
       sinW0 = sin w0
       cosW0 = cos w0
       alpha = sinW0 / (2 * q)
@@ -45,7 +46,7 @@ lpfCoeffs freq q sr =
 {-# INLINE lpfCoeffs #-}
 
 -- | Low-pass filter. Inputs: signal, cutoff (Hz), q.
-mkLpf :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+mkLpf :: SampleRate -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkLpf sr ins out = do
   st <- VUM.replicate 2 0  -- [z1, z2], unboxed
   let (sigIn, dSig) = bindPort ins TLpf 0

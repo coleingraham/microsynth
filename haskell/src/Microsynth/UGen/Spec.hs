@@ -15,6 +15,8 @@
 -- machinery. Port names are the encoder's binding roles; the enumerable tag set
 -- ('allUGens') is the proposer's edit vocabulary; 'uiSerTag' is the IR kind tag.
 -- One producer of the vocabulary, many consumers.
+{-# LANGUAGE OverloadedStrings #-}
+
 module Microsynth.UGen.Spec
   ( UGenTag (..)
   , PortSpec (..)
@@ -27,6 +29,7 @@ module Microsynth.UGen.Spec
   ) where
 
 import Microsynth.Signal (UGenKind (..))
+import Microsynth.Types (KindTag, PortName, Sample)
 
 -- | A payload-free, enumerable handle for each UGen kind. Unlike 'UGenKind'
 -- (whose leaves carry values), this is nullary and @Bounded@\/@Enum@, so
@@ -39,8 +42,8 @@ data UGenTag
 -- unconnected. Names mirror the Rust @spec()@ port names for cross-engine
 -- consistency.
 data PortSpec = PortSpec
-  { portName    :: !String
-  , portDefault :: !Float
+  { portName    :: !PortName
+  , portDefault :: !Sample
   }
   deriving (Eq, Show)
 
@@ -48,7 +51,7 @@ data PortSpec = PortSpec
 -- serialization tag (the IR @kind@ string), and its ordered input ports.
 data UGenInfo = UGenInfo
   { uiTag    :: !UGenTag
-  , uiSerTag :: !String
+  , uiSerTag :: !KindTag
   , uiPorts  :: ![PortSpec]
   }
   deriving (Eq, Show)
@@ -86,11 +89,11 @@ tagOf k = case k of
   KPerc      -> TPerc
 
 -- | The IR serialization tag for a node's kind.
-serTag :: UGenKind -> String
+serTag :: UGenKind -> KindTag
 serTag = uiSerTag . ugenInfo . tagOf
 
 -- | The ordered per-port default values for a UGen kind — what the DSP builders
 -- fall back to for an unconnected port. Single-sourced here so the builders,
 -- the IR, and any future consumer agree by construction.
-portDefaults :: UGenTag -> [Float]
+portDefaults :: UGenTag -> [Sample]
 portDefaults = map portDefault . uiPorts . ugenInfo

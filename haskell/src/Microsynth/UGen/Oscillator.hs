@@ -19,14 +19,15 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), readInput)
 import Microsynth.Numerics (tau)
+import Microsynth.Types (Sample (..), SampleRate (..))
 import Microsynth.UGen.Common (bindPort, phasorStep, scanBlock1F)
 import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | Sine oscillator. Inputs: freq (Hz), phase offset (radians).
-mkSinOsc :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+mkSinOsc :: SampleRate -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkSinOsc sr ins out = do
   phase <- VUM.replicate 1 0  -- unboxed phase accumulator
-  let !invSr        = 1 / sr
+  let !invSr        = Sample (1 / unSampleRate sr)
       (freqIn, dF)  = bindPort ins TSinOsc 0
       (phIn,   dP)  = bindPort ins TSinOsc 1
       !n            = VUM.length out
@@ -37,10 +38,10 @@ mkSinOsc sr ins out = do
     pure (phasorStep invSr f p)
 
 -- | Naive sawtooth. Input: freq (Hz). Output: @2*phase - 1@ in @[-1, 1)@.
-mkSaw :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+mkSaw :: SampleRate -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkSaw sr ins out = do
   phase <- VUM.replicate 1 0  -- unboxed phase accumulator
-  let !invSr       = 1 / sr
+  let !invSr       = Sample (1 / unSampleRate sr)
       (freqIn, dF) = bindPort ins TSaw 0
       !n           = VUM.length out
   pure $ Node $ scanBlock1F phase n $ \i p -> do

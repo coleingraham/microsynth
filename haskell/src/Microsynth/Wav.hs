@@ -12,9 +12,11 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int16)
 import qualified Data.Vector.Unboxed as VU
 
+import Microsynth.Types (Sample, SampleRate (..))
+
 -- | @writeWav path sampleRate channels@ writes each channel (equal length)
 -- interleaved as little-endian 16-bit PCM.
-writeWav :: FilePath -> Float -> [VU.Vector Float] -> IO ()
+writeWav :: FilePath -> SampleRate -> [VU.Vector Sample] -> IO ()
 writeWav path sr channels =
   BL.writeFile path (toLazyByteString (header <> samples))
   where
@@ -24,7 +26,7 @@ writeWav path sr channels =
                    []      -> 0
     bitsPerSample = 16 :: Int
     bytesPerSamp  = bitsPerSample `div` 8
-    byteRate      = round sr * numCh * bytesPerSamp
+    byteRate      = round (unSampleRate sr) * numCh * bytesPerSamp
     blockAlign    = numCh * bytesPerSamp
     dataSize      = numSamples * numCh * bytesPerSamp
     fileSize      = 36 + dataSize
@@ -33,7 +35,7 @@ writeWav path sr channels =
          string7 "RIFF" <> word32LE (fromIntegral fileSize) <> string7 "WAVE"
       <> string7 "fmt " <> word32LE 16 <> word16LE 1
       <> word16LE (fromIntegral numCh)
-      <> word32LE (round sr)
+      <> word32LE (round (unSampleRate sr))
       <> word32LE (fromIntegral byteRate)
       <> word16LE (fromIntegral blockAlign)
       <> word16LE (fromIntegral bitsPerSample)
@@ -45,6 +47,6 @@ writeWav path sr channels =
       , ch <- [0 .. numCh - 1]
       ]
 
-toPcm :: Float -> Int16
+toPcm :: Sample -> Int16
 toPcm x = round (clamped * 32767)
   where clamped = max (-1) (min 1 x)
