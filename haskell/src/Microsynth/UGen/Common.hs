@@ -18,6 +18,7 @@
 module Microsynth.UGen.Common
   ( wrap01
   , phasorStep
+  , bindPort
   , mapBlock
   , scanBlock1F
   , scanBlock2F
@@ -28,6 +29,8 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
+import Microsynth.Node (Input, bindInput)
+import Microsynth.UGen.Spec (UGenTag, portDefaults)
 
 -- | Wrap a phase accumulator back into @[0, 1)@. Since the accumulator is always
 -- in @[0, 1)@ and audio-rate increments are @< 1@, the value before wrapping is
@@ -44,6 +47,15 @@ wrap01 p = if p >= 1 then p - 1 else p
 phasorStep :: Float -> Float -> Float -> Float
 phasorStep invSr f p = wrap01 (p + f * invSr)
 {-# INLINE phasorStep #-}
+
+-- | Bind input port @p@ of a UGen, pairing the resolved source block with the
+-- port's default value taken from the descriptor registry (rather than a literal
+-- baked into the builder). Called once per node at build time, so the @!!@ and
+-- the descriptor lookup never touch the render path; the returned default is a
+-- plain 'Float' read per sample by 'Microsynth.Node.readInput'.
+bindPort :: [MBlock s] -> UGenTag -> Int -> (Input s, Float)
+bindPort ins tag p = (bindInput ins p, portDefaults tag !! p)
+{-# INLINE bindPort #-}
 
 -- | Fill an output block from a stateless per-sample function of the index.
 -- Replaces the hand-written @go !i@ loop in the stateless arithmetic UGens.

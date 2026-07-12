@@ -14,8 +14,9 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Node (..), bindInput, readInput)
-import Microsynth.UGen.Common (scanBlockFI)
+import Microsynth.Node (Node (..), readInput)
+import Microsynth.UGen.Common (bindPort, scanBlockFI)
+import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | Percussive envelope. Inputs: attack (s), release (s). Output: @[0, 1]@.
 -- Level and stage live in unboxed cells so the loop's threaded accumulators
@@ -25,12 +26,12 @@ mkPerc :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkPerc sr ins out = do
   levelV <- VUM.replicate 1 (0 :: Float)  -- unboxed level
   stageV <- VUM.replicate 1 (0 :: Int)    -- unboxed stage (0=atk,1=rel,2=done)
-  let atkIn = bindInput ins 0
-      relIn = bindInput ins 1
-      !n    = VUM.length out
+  let (atkIn, dAtk) = bindPort ins TPerc 0
+      (relIn, dRel) = bindPort ins TPerc 1
+      !n            = VUM.length out
   pure $ Node $ scanBlockFI levelV stageV n $ \i lvl stage -> do
-    at <- max 0.0001 <$> readInput atkIn i 0.001
-    rt <- max 0.0001 <$> readInput relIn i 0.1
+    at <- max 0.0001 <$> readInput atkIn i dAtk
+    rt <- max 0.0001 <$> readInput relIn i dRel
     let (lvl', stage') = case stage of
           0 -> let l = lvl + 1 / (at * sr)
                in if l >= 1 then (1, 1) else (l, 0)

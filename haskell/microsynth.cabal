@@ -38,6 +38,7 @@ library
       Microsynth.Wav
       Microsynth.Demo
       Microsynth.UGen
+      Microsynth.UGen.Spec
       Microsynth.UGen.Common
       Microsynth.UGen.Math
       Microsynth.UGen.Oscillator

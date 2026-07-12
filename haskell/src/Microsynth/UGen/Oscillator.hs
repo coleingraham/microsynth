@@ -17,21 +17,22 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Node (..), bindInput, readInput)
+import Microsynth.Node (Node (..), readInput)
 import Microsynth.Numerics (tau)
-import Microsynth.UGen.Common (phasorStep, scanBlock1F)
+import Microsynth.UGen.Common (bindPort, phasorStep, scanBlock1F)
+import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | Sine oscillator. Inputs: freq (Hz), phase offset (radians).
 mkSinOsc :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkSinOsc sr ins out = do
   phase <- VUM.replicate 1 0  -- unboxed phase accumulator
-  let !invSr = 1 / sr
-      freqIn = bindInput ins 0
-      phIn   = bindInput ins 1
-      !n     = VUM.length out
+  let !invSr        = 1 / sr
+      (freqIn, dF)  = bindPort ins TSinOsc 0
+      (phIn,   dP)  = bindPort ins TSinOsc 1
+      !n            = VUM.length out
   pure $ Node $ scanBlock1F phase n $ \i p -> do
-    f  <- readInput freqIn i 440
-    ph <- readInput phIn i 0
+    f  <- readInput freqIn i dF
+    ph <- readInput phIn i dP
     VUM.unsafeWrite out i (sin (p * tau + ph))
     pure (phasorStep invSr f p)
 
@@ -39,10 +40,10 @@ mkSinOsc sr ins out = do
 mkSaw :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkSaw sr ins out = do
   phase <- VUM.replicate 1 0  -- unboxed phase accumulator
-  let !invSr = 1 / sr
-      freqIn = bindInput ins 0
-      !n     = VUM.length out
+  let !invSr       = 1 / sr
+      (freqIn, dF) = bindPort ins TSaw 0
+      !n           = VUM.length out
   pure $ Node $ scanBlock1F phase n $ \i p -> do
-    f <- readInput freqIn i 440
+    f <- readInput freqIn i dF
     VUM.unsafeWrite out i (2 * p - 1)
     pure (phasorStep invSr f p)

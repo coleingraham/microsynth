@@ -15,9 +15,10 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Node (..), bindInput, readInput)
+import Microsynth.Node (Node (..), readInput)
 import Microsynth.Signal (BinOp (..))
-import Microsynth.UGen.Common (mapBlock)
+import Microsynth.UGen.Common (bindPort, mapBlock)
+import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | A constant node. Its output never changes, so we fill the block once at
 -- build time and do zero work per block.
@@ -35,18 +36,18 @@ binFun Div = (/)
 -- | Elementwise binary arithmetic over two input blocks.
 mkBinOp :: BinOp -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkBinOp op ins out = do
-  let a  = bindInput ins 0
-      b  = bindInput ins 1
-      !n = VUM.length out
-      f  = binFun op
+  let (a, dA) = bindPort ins TBinOp 0
+      (b, dB) = bindPort ins TBinOp 1
+      !n      = VUM.length out
+      f       = binFun op
   pure $ Node $ mapBlock n out $ \i -> do
-    x <- readInput a i 0
-    y <- readInput b i 0
+    x <- readInput a i dA
+    y <- readInput b i dB
     pure (f x y)
 
 -- | Unary negation of a single input block.
 mkNeg :: [MBlock s] -> MBlock s -> ST s (Node s)
 mkNeg ins out = do
-  let a  = bindInput ins 0
-      !n = VUM.length out
-  pure $ Node $ mapBlock n out $ \i -> negate <$> readInput a i 0
+  let (a, dA) = bindPort ins TNeg 0
+      !n      = VUM.length out
+  pure $ Node $ mapBlock n out $ \i -> negate <$> readInput a i dA
