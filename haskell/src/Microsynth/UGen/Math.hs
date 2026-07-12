@@ -17,6 +17,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), bindInput, readInput)
 import Microsynth.Signal (BinOp (..))
+import Microsynth.UGen.Common (mapBlock)
 
 -- | A constant node. Its output never changes, so we fill the block once at
 -- build time and do zero work per block.
@@ -38,26 +39,14 @@ mkBinOp op ins out = do
       b  = bindInput ins 1
       !n = VUM.length out
       f  = binFun op
-  pure $ Node $
-    let go !i
-          | i >= n    = pure ()
-          | otherwise = do
-              x <- readInput a i 0
-              y <- readInput b i 0
-              VUM.unsafeWrite out i (f x y)
-              go (i + 1)
-    in go 0
+  pure $ Node $ mapBlock n out $ \i -> do
+    x <- readInput a i 0
+    y <- readInput b i 0
+    pure (f x y)
 
 -- | Unary negation of a single input block.
 mkNeg :: [MBlock s] -> MBlock s -> ST s (Node s)
 mkNeg ins out = do
   let a  = bindInput ins 0
       !n = VUM.length out
-  pure $ Node $
-    let go !i
-          | i >= n    = pure ()
-          | otherwise = do
-              x <- readInput a i 0
-              VUM.unsafeWrite out i (negate x)
-              go (i + 1)
-    in go 0
+  pure $ Node $ mapBlock n out $ \i -> negate <$> readInput a i 0

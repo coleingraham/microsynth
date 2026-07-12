@@ -22,6 +22,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), bindInput, readInput)
 import Microsynth.Numerics (tau)
+import Microsynth.UGen.Common (scanBlock2F)
 
 -- | RBJ low-pass biquad coefficients: @(# b0, b1, b2, a1, a2 #)@ normalised by
 -- @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source. The unboxed tuple
@@ -50,18 +51,12 @@ mkLpf sr ins out = do
       cutIn = bindInput ins 1
       qIn   = bindInput ins 2
       !n    = VUM.length out
-  pure $ Node $ do
-    s1_0 <- VUM.unsafeRead st 0
-    s2_0 <- VUM.unsafeRead st 1
-    let go !i !s1 !s2
-          | i >= n    = VUM.unsafeWrite st 0 s1 >> VUM.unsafeWrite st 1 s2
-          | otherwise = do
-              x  <- readInput sigIn i 0
-              fc <- readInput cutIn i 1000
-              q  <- readInput qIn i 0.707
-              case lpfCoeffs fc q sr of
-                (# b0, b1, b2, a1, a2 #) -> do
-                  let !y = b0 * x + s1
-                  VUM.unsafeWrite out i y
-                  go (i + 1) (b1 * x - a1 * y + s2) (b2 * x - a2 * y)
-    go 0 s1_0 s2_0
+  pure $ Node $ scanBlock2F st n $ \i s1 s2 -> do
+    x  <- readInput sigIn i 0
+    fc <- readInput cutIn i 1000
+    q  <- readInput qIn i 0.707
+    case lpfCoeffs fc q sr of
+      (# b0, b1, b2, a1, a2 #) -> do
+        let !y = b0 * x + s1
+        VUM.unsafeWrite out i y
+        pure (b1 * x - a1 * y + s2, b2 * x - a2 * y)
