@@ -3,9 +3,9 @@
 //! Single-sideband frequency shifting via Hilbert transform for Leslie speaker
 //! simulation, creative detuning, and sub bass thickening.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use core::f32::consts::TAU;
 
 // --- Hilbert Transform ---
@@ -90,29 +90,8 @@ impl FreqShift {
     }
 }
 
-static FREQSHIFT_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "shift",
-        rate: Rate::Audio,
-    },
-];
-static FREQSHIFT_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FreqShift {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FreqShift",
-            inputs: &FREQSHIFT_INPUTS,
-            outputs: &FREQSHIFT_OUTPUTS,
-        }
-    }
+    ugen_spec!("FreqShift", inputs = ["in", "shift"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -143,9 +122,7 @@ impl UGen for FreqShift {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let shift = shift_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let shift = read_input(shift_buf, ch, i, 0.0);
 
                 // Hilbert transform: produce I (in-phase) and Q (quadrature) signals
                 let sig_i = chain_i.tick(x, &HILBERT_COEFFS_I);

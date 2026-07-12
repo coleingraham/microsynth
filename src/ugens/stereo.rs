@@ -3,8 +3,8 @@
 //! Tools for stereo image manipulation and stereo delay effects.
 
 use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 
 // --- StereoWidth ---
@@ -48,29 +48,8 @@ impl StereoWidth {
 /// Maximum Haas delay in seconds (perceptual limit before echo).
 const HAAS_MAX_DELAY: f32 = 0.030;
 
-static STEREO_WIDTH_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "width",
-        rate: Rate::Audio,
-    },
-];
-static STEREO_WIDTH_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for StereoWidth {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "StereoWidth",
-            inputs: &STEREO_WIDTH_INPUTS,
-            outputs: &STEREO_WIDTH_OUTPUTS,
-        }
-    }
+    ugen_spec!("StereoWidth", inputs = ["in", "width"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -190,37 +169,12 @@ impl PingPongDelay {
 /// Max delay for ping-pong (same as regular delay).
 const PP_MAX_DELAY: f32 = 5.0;
 
-static PP_DELAY_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static PP_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for PingPongDelay {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "PingPongDelay",
-            inputs: &PP_DELAY_INPUTS,
-            outputs: &PP_DELAY_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "PingPongDelay",
+        inputs = ["in", "time", "feedback", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

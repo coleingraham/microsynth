@@ -2,9 +2,9 @@
 //!
 //! Time-modulated delay effects for spatial width and movement.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
@@ -55,37 +55,12 @@ const CHORUS_CENTER_DELAY: f32 = 0.007;
 /// Maximum delay buffer in seconds (center + max depth + margin).
 const CHORUS_MAX_DELAY: f32 = 0.040;
 
-static CHORUS_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static CHORUS_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Chorus {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Chorus",
-            inputs: &CHORUS_INPUTS,
-            outputs: &CHORUS_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Chorus",
+        inputs = ["in", "rate", "depth", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -221,41 +196,12 @@ impl Flanger {
 
 const FLANGER_MAX_DELAY: f32 = 0.020;
 
-static FLANGER_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static FLANGER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Flanger {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Flanger",
-            inputs: &FLANGER_INPUTS,
-            outputs: &FLANGER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Flanger",
+        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -297,22 +243,10 @@ impl UGen for Flanger {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.3)
-                    .max(0.01);
-                let depth = depth_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.002)
-                    .clamp(0.0, 0.010);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(-0.95, 0.95);
-                let mix = mix_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
+                let rate = read_input(rate_buf, ch, i, 0.3).max(0.01);
+                let depth = read_input(depth_buf, ch, i, 0.002).clamp(0.0, 0.010);
+                let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.95, 0.95);
+                let mix = read_input(mix_buf, ch, i, 0.5).clamp(0.0, 1.0);
 
                 // LFO-modulated delay time (unipolar: 0 to depth)
                 let lfo = (lfo_phase * TAU).sin() * 0.5 + 0.5;
@@ -383,41 +317,12 @@ impl Phaser {
     }
 }
 
-static PHASER_INPUTS: [InputSpec; 5] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "depth",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "mix",
-        rate: Rate::Audio,
-    },
-];
-static PHASER_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Phaser {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Phaser",
-            inputs: &PHASER_INPUTS,
-            outputs: &PHASER_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Phaser",
+        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -451,22 +356,10 @@ impl UGen for Phaser {
 
             for i in 0..out.len() {
                 let x = in_ch[i];
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.4)
-                    .max(0.01);
-                let depth = depth_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.7)
-                    .clamp(0.0, 1.0);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.3)
-                    .clamp(-0.95, 0.95);
-                let mix = mix_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
+                let rate = read_input(rate_buf, ch, i, 0.4).max(0.01);
+                let depth = read_input(depth_buf, ch, i, 0.7).clamp(0.0, 1.0);
+                let feedback = read_input(fb_buf, ch, i, 0.3).clamp(-0.95, 0.95);
+                let mix = read_input(mix_buf, ch, i, 0.5).clamp(0.0, 1.0);
 
                 // LFO sweeps allpass corner frequency in log space
                 // Range: 200 Hz to 4000 Hz

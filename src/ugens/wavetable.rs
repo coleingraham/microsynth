@@ -1,8 +1,8 @@
 //! Wavetable oscillator UGen.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use crate::sample::Sample;
 use alloc::sync::Arc;
 
@@ -45,23 +45,8 @@ impl WaveTable {
     }
 }
 
-static WT_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static WT_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for WaveTable {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "WaveTable",
-            inputs: &WT_INPUTS,
-            outputs: &WT_OUTPUTS,
-        }
-    }
+    ugen_spec!("WaveTable", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -104,9 +89,7 @@ impl UGen for WaveTable {
             let wt_ch = ch % waveform.num_channels();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0) as f64;
+                let freq = read_input(freq_buf, ch, i, 440.0) as f64;
 
                 // Read with wrapping interpolation
                 let read_pos = phase * table_len;

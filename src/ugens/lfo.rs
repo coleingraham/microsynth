@@ -8,9 +8,9 @@
 //! [-1, 1], the LFO outputs [0, 1] which maps directly to parameter ranges
 //! without requiring manual offset math.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 /// Multi-shape LFO with unipolar [0, 1] output.
 ///
@@ -43,21 +43,6 @@ impl Lfo {
         }
     }
 }
-
-static LFO_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "shape",
-        rate: Rate::Audio,
-    },
-];
-static LFO_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
 
 /// Compute each waveform shape from phase [0, 1).
 /// All return values in [0, 1].
@@ -111,13 +96,7 @@ fn lfo_eval(phase: f32, shape: f32) -> f32 {
 }
 
 impl UGen for Lfo {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Lfo",
-            inputs: &LFO_INPUTS,
-            outputs: &LFO_OUTPUTS,
-        }
-    }
+    ugen_spec!("Lfo", inputs = ["freq", "shape"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -142,13 +121,8 @@ impl UGen for Lfo {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
-                let shape = shape_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let freq = read_input(freq_buf, ch, i, 1.0).max(0.0);
+                let shape = read_input(shape_buf, ch, i, 0.0);
 
                 *out_sample = lfo_eval(phase, shape);
 

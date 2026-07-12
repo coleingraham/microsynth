@@ -4,8 +4,8 @@
 
 use super::rng::Rng;
 use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{OutputSpec, UGen, UGenSpec};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 // --- WhiteNoise ---
 
@@ -37,19 +37,8 @@ impl WhiteNoise {
     }
 }
 
-static NOISE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for WhiteNoise {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "WhiteNoise",
-            inputs: &[],
-            outputs: &NOISE_OUTPUTS,
-        }
-    }
+    ugen_spec!("WhiteNoise", inputs = [], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -109,13 +98,7 @@ impl PinkNoise {
 }
 
 impl UGen for PinkNoise {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "PinkNoise",
-            inputs: &[],
-            outputs: &NOISE_OUTPUTS,
-        }
-    }
+    ugen_spec!("PinkNoise", inputs = [], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
 

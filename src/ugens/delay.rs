@@ -3,9 +3,9 @@
 //! - [`Delay`]: Simple read-only delay line.
 //! - [`FeedbackDelay`]: Delay line with feedback (output feeds back into input).
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 
 /// Maximum delay time in seconds. Determines buffer size at init.
@@ -36,29 +36,8 @@ impl Delay {
     }
 }
 
-static DELAY_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-];
-static DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Delay {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Delay",
-            inputs: &DELAY_INPUTS,
-            outputs: &DELAY_OUTPUTS,
-        }
-    }
+    ugen_spec!("Delay", inputs = ["in", "time"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -92,10 +71,7 @@ impl UGen for Delay {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let delay_time = time_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.1)
-                    .max(0.0);
+                let delay_time = read_input(time_buf, ch, i, 0.1).max(0.0);
                 let delay_samples = (delay_time * self.sample_rate)
                     .min(max_delay_samples)
                     .max(0.0);
@@ -156,33 +132,12 @@ impl FeedbackDelay {
     }
 }
 
-static FB_DELAY_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "time",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-];
-static FB_DELAY_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FeedbackDelay {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FeedbackDelay",
-            inputs: &FB_DELAY_INPUTS,
-            outputs: &FB_DELAY_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "FeedbackDelay",
+        inputs = ["in", "time", "feedback"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -217,14 +172,8 @@ impl UGen for FeedbackDelay {
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
-                let delay_time = time_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.25)
-                    .max(0.0);
-                let feedback = fb_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(-0.999, 0.999);
+                let delay_time = read_input(time_buf, ch, i, 0.25).max(0.0);
+                let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.999, 0.999);
 
                 let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 

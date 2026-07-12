@@ -67,23 +67,8 @@ impl Bus {
 /// node's input when instantiating an effect.
 pub struct AudioIn;
 
-static AUDIO_IN_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "in",
-    rate: Rate::Audio,
-}];
-static AUDIO_IN_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for AudioIn {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "AudioIn",
-            inputs: &AUDIO_IN_INPUTS,
-            outputs: &AUDIO_IN_OUTPUTS,
-        }
-    }
+    ugen_spec!("AudioIn", inputs = ["in"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}

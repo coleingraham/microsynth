@@ -4,9 +4,9 @@
 //! - [`Bowed`]: Digital waveguide bowed string model
 
 use super::rng::Rng;
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use alloc::vec::Vec;
 
 /// Minimum supported frequency (determines max buffer size).
@@ -68,33 +68,12 @@ impl Pluck {
     }
 }
 
-static PLUCK_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "decay",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static PLUCK_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Pluck {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Pluck",
-            inputs: &PLUCK_INPUTS,
-            outputs: &PLUCK_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Pluck",
+        inputs = ["freq", "decay", "trig"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -134,16 +113,9 @@ impl UGen for Pluck {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
-                let decay = decay_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.99)
-                    .clamp(0.0, 0.999);
-                let trig = trig_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
+                let decay = read_input(decay_buf, ch, i, 0.99).clamp(0.0, 0.999);
+                let trig = read_input(trig_buf, ch, i, 0.0);
 
                 // Trigger detection (positive-going zero crossing)
                 if trig > 0.0 && prev_trig <= 0.0 {
@@ -238,33 +210,12 @@ fn bow_table(delta_v: f32, pressure: f32) -> f32 {
     if val > 0.0 { val.sqrt() } else { 0.0 }
 }
 
-static BOWED_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "pressure",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "position",
-        rate: Rate::Audio,
-    },
-];
-static BOWED_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for Bowed {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Bowed",
-            inputs: &BOWED_INPUTS,
-            outputs: &BOWED_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "Bowed",
+        inputs = ["freq", "pressure", "position"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -304,18 +255,10 @@ impl UGen for Bowed {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(220.0)
-                    .clamp(MIN_FREQ, self.sample_rate * 0.45);
-                let pressure = pressure_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-                let position = position_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.13)
-                    .clamp(0.02, 0.98);
+                let freq =
+                    read_input(freq_buf, ch, i, 220.0).clamp(MIN_FREQ, self.sample_rate * 0.45);
+                let pressure = read_input(pressure_buf, ch, i, 0.5).clamp(0.0, 1.0);
+                let position = read_input(position_buf, ch, i, 0.13).clamp(0.02, 0.98);
 
                 // Compute delay lengths from frequency and bow position
                 let total_delay = self.sample_rate / freq;

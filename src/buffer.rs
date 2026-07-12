@@ -152,3 +152,19 @@ impl AudioBuffer {
         self.channels.first().map_or(0, |b| b.len())
     }
 }
+
+/// Read one input sample with SuperCollider-style channel wrapping.
+///
+/// Returns `default` when `buf` is `None` (an unconnected input port).
+/// Otherwise reads sample `i` of channel `ch`, wrapping the channel index
+/// modulo the buffer's channel count so that, e.g., a mono input feeds every
+/// output channel. This is the canonical per-sample input read used throughout
+/// the UGens; prefer it over hand-writing
+/// `buf.map(|b| b.channel(ch % b.num_channels()).samples()[i]).unwrap_or(d)`.
+#[inline]
+pub fn read_input(buf: Option<&AudioBuffer>, ch: usize, i: usize, default: f32) -> f32 {
+    match buf {
+        Some(b) => b.channel(ch % b.num_channels()).samples()[i],
+        None => default,
+    }
+}

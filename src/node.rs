@@ -56,6 +56,11 @@ pub struct UGenSpec {
 /// to implement SuperCollider-style wrapping.
 pub trait UGen: Send {
     /// Return the static specification for this UGen.
+    ///
+    /// Prefer generating this method with the `ugen_spec!` macro
+    /// (`src/ugens/macros.rs`) rather than hand-writing the port arrays;
+    /// hand-write it only when ports run at `Rate::Control` or are computed at
+    /// runtime. See the "Authoring a new UGen" section of `PLAN.md`.
     fn spec(&self) -> UGenSpec;
 
     /// Called once when the graph is prepared for rendering.

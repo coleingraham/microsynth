@@ -16,16 +16,7 @@ impl Const {
 }
 
 impl UGen for Const {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Const",
-            inputs: &[],
-            outputs: &[OutputSpec {
-                name: "out",
-                rate: Rate::Audio,
-            }],
-        }
-    }
+    ugen_spec!("Const", inputs = [], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -79,16 +70,7 @@ impl Param {
 }
 
 impl UGen for Param {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Param",
-            inputs: &[],
-            outputs: &[OutputSpec {
-                name: "out",
-                rate: Rate::Audio,
-            }],
-        }
-    }
+    ugen_spec!("Param", inputs = [], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -243,24 +225,8 @@ impl UGen for BinOpUGen {
 /// Negation UGen: outputs -input.
 pub struct NegUGen;
 
-static NEG_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "in",
-    rate: Rate::Audio,
-}];
-
-static NEG_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for NegUGen {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "Neg",
-            inputs: &NEG_INPUTS,
-            outputs: &NEG_OUTPUTS,
-        }
-    }
+    ugen_spec!("Neg", inputs = ["in"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}

@@ -3,9 +3,9 @@
 //! Frequency modulation oscillator for DX7-style timbres, metallic bells,
 //! and electric piano sounds.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use core::f32::consts::TAU;
 
 // --- FmOsc ---
@@ -61,37 +61,12 @@ impl FmOsc {
     }
 }
 
-static FMOSC_INPUTS: [InputSpec; 4] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "ratio",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "index",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "feedback",
-        rate: Rate::Audio,
-    },
-];
-static FMOSC_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for FmOsc {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "FmOsc",
-            inputs: &FMOSC_INPUTS,
-            outputs: &FMOSC_OUTPUTS,
-        }
-    }
+    ugen_spec!(
+        "FmOsc",
+        inputs = ["freq", "ratio", "index", "feedback"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -122,21 +97,10 @@ impl UGen for FmOsc {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
-                let ratio = ratio_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
-                let index = index_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0)
-                    .max(0.0);
-                let feedback = feedback_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 1.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
+                let ratio = read_input(ratio_buf, ch, i, 1.0).max(0.0);
+                let index = read_input(index_buf, ch, i, 1.0).max(0.0);
+                let feedback = read_input(feedback_buf, ch, i, 0.0).clamp(0.0, 1.0);
 
                 let mod_freq = freq * ratio;
 

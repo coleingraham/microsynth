@@ -58,6 +58,32 @@ impl UGenRegistry {
         );
     }
 
+    /// Register a UGen using the port specs from its own `spec()`.
+    ///
+    /// This avoids re-declaring `InputSpec`/`OutputSpec` at the call site: the
+    /// port names are read from a one-time probe instance built by `factory`.
+    /// The probe is created off the render path (at registration time), so the
+    /// allocation-free render invariant is untouched.
+    ///
+    /// The DSL `name` stays explicit because it deliberately differs from the
+    /// UGen's internal `spec().name` (camelCase DSL identifier vs PascalCase
+    /// type name), and several DSL names may map to the same UGen type
+    /// (e.g. `sinTable`/`sawTable`/... all build a `WaveTable`).
+    pub fn register_spec(&mut self, name: impl Into<String>, factory: fn() -> Box<dyn UGen>) {
+        let probe = factory();
+        let spec = probe.spec();
+        let input_names = spec.inputs.iter().map(|i| i.name).collect();
+        let output_names = spec.outputs.iter().map(|o| o.name).collect();
+        self.entries.insert(
+            name.into(),
+            UGenEntry {
+                factory,
+                input_names,
+                output_names,
+            },
+        );
+    }
+
     fn get(&self, name: &str) -> Option<&UGenEntry> {
         self.entries.get(name)
     }

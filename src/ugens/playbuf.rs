@@ -1,8 +1,8 @@
 //! Sample playback UGen.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 use crate::sample::Sample;
 use alloc::sync::Arc;
 
@@ -55,29 +55,8 @@ impl PlayBuf {
     }
 }
 
-static PLAYBUF_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "rate",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "trig",
-        rate: Rate::Audio,
-    },
-];
-static PLAYBUF_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for PlayBuf {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "PlayBuf",
-            inputs: &PLAYBUF_INPUTS,
-            outputs: &PLAYBUF_OUTPUTS,
-        }
-    }
+    ugen_spec!("PlayBuf", inputs = ["rate", "trig"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -127,9 +106,7 @@ impl UGen for PlayBuf {
 
             for (i, out_sample) in out.iter_mut().enumerate() {
                 // Check trigger (restart playback)
-                let trig = trig_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.0);
+                let trig = read_input(trig_buf, ch, i, 0.0);
                 if trig > 0.0 && prev_trig <= 0.0 {
                     position = 0.0;
                     playing = true;
@@ -137,9 +114,7 @@ impl UGen for PlayBuf {
                 }
                 prev_trig = trig;
 
-                let rate = rate_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(1.0);
+                let rate = read_input(rate_buf, ch, i, 1.0);
 
                 if playing && !done {
                     *out_sample = sample.read_interpolated(ch, position);

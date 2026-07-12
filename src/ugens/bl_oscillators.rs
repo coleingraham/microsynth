@@ -8,9 +8,9 @@
 //! aliasing at discontinuities, providing ~30 dB of alias rejection over
 //! naive waveforms with minimal CPU cost.
 
-use crate::buffer::AudioBuffer;
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::buffer::{AudioBuffer, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
 
 /// 2-point polynomial bandlimited step correction.
 ///
@@ -55,23 +55,8 @@ impl BlSaw {
     }
 }
 
-static BLSAW_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static BLSAW_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlSaw {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlSaw",
-            inputs: &BLSAW_INPUTS,
-            outputs: &BLSAW_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlSaw", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -95,9 +80,7 @@ impl UGen for BlSaw {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
 
                 // Naive saw: phase [0,1) → [-1,1)
@@ -143,29 +126,8 @@ impl BlPulse {
     }
 }
 
-static BLPULSE_INPUTS: [InputSpec; 2] = [
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "width",
-        rate: Rate::Audio,
-    },
-];
-static BLPULSE_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlPulse {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlPulse",
-            inputs: &BLPULSE_INPUTS,
-            outputs: &BLPULSE_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlPulse", inputs = ["freq", "width"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -190,14 +152,10 @@ impl UGen for BlPulse {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
-                let width = width_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(0.5)
-                    .clamp(dt.max(0.01), (1.0 - dt).min(0.99));
+                let width =
+                    read_input(width_buf, ch, i, 0.5).clamp(dt.max(0.01), (1.0 - dt).min(0.99));
 
                 // Naive pulse
                 let mut sample = if phase < width { 1.0 } else { -1.0 };
@@ -251,23 +209,8 @@ impl BlTri {
     }
 }
 
-static BLTRI_INPUTS: [InputSpec; 1] = [InputSpec {
-    name: "freq",
-    rate: Rate::Audio,
-}];
-static BLTRI_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
-
 impl UGen for BlTri {
-    fn spec(&self) -> UGenSpec {
-        UGenSpec {
-            name: "BlTri",
-            inputs: &BLTRI_INPUTS,
-            outputs: &BLTRI_OUTPUTS,
-        }
-    }
+    ugen_spec!("BlTri", inputs = ["freq"], outputs = ["out"]);
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -293,9 +236,7 @@ impl UGen for BlTri {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = freq_buf
-                    .map(|b| b.channel(ch % b.num_channels()).samples()[i])
-                    .unwrap_or(440.0);
+                let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
 
                 // Band-limited square wave (width = 0.5)
