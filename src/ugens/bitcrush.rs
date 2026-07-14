@@ -45,6 +45,7 @@ impl Bitcrusher {
 impl UGen for Bitcrusher {
     ugen_spec!(
         "Bitcrusher",
+        category = Effect,
         inputs = ["in", "bits", "downsample"],
         outputs = ["out"]
     );

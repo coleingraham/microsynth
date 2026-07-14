@@ -37,7 +37,12 @@ impl SoftClip {
 }
 
 impl UGen for SoftClip {
-    ugen_spec!("SoftClip", inputs = ["in", "drive"], outputs = ["out"]);
+    ugen_spec!(
+        "SoftClip",
+        category = Effect,
+        inputs = ["in", "drive"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -104,6 +109,7 @@ impl Overdrive {
 impl UGen for Overdrive {
     ugen_spec!(
         "Overdrive",
+        category = Effect,
         inputs = ["in", "drive", "tone", "mix"],
         outputs = ["out"]
     );
@@ -201,6 +207,7 @@ impl WaveFolder {
 impl UGen for WaveFolder {
     ugen_spec!(
         "WaveFolder",
+        category = Effect,
         inputs = ["in", "drive", "symmetry"],
         outputs = ["out"]
     );

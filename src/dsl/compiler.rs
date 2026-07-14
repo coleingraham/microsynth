@@ -1,7 +1,7 @@
 //! Compiles DSL AST into SynthDef templates.
 
 use crate::dsl::ast::{BinOp, Expr, SynthDefDecl};
-use crate::node::{InputSpec, OutputSpec, UGen};
+use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory};
 use crate::synthdef::{SynthDef, SynthDefBuilder};
 use crate::ugens;
 use alloc::boxed::Box;
@@ -15,6 +15,9 @@ use core::fmt;
 pub struct UGenEntry {
     /// Factory that creates a fresh instance.
     pub factory: fn() -> Box<dyn UGen>,
+    /// Coarse category of this UGen (from its `spec()`; `Utility` when
+    /// registered via [`UGenRegistry::register`] with explicit port specs).
+    pub category: UGenCategory,
     /// Input port names (in order). The compiler maps positional args to these.
     pub input_names: Vec<&'static str>,
     /// Output port names.
@@ -52,6 +55,7 @@ impl UGenRegistry {
             name.into(),
             UGenEntry {
                 factory,
+                category: UGenCategory::Utility,
                 input_names,
                 output_names,
             },
@@ -78,6 +82,7 @@ impl UGenRegistry {
             name.into(),
             UGenEntry {
                 factory,
+                category: spec.category,
                 input_names,
                 output_names,
             },

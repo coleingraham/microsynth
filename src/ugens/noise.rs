@@ -38,7 +38,12 @@ impl WhiteNoise {
 }
 
 impl UGen for WhiteNoise {
-    ugen_spec!("WhiteNoise", inputs = [], outputs = ["out"]);
+    ugen_spec!(
+        "WhiteNoise",
+        category = Noise,
+        inputs = [],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -98,7 +103,12 @@ impl PinkNoise {
 }
 
 impl UGen for PinkNoise {
-    ugen_spec!("PinkNoise", inputs = [], outputs = ["out"]);
+    ugen_spec!(
+        "PinkNoise",
+        category = Noise,
+        inputs = [],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 

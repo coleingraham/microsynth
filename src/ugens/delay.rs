@@ -37,7 +37,12 @@ impl Delay {
 }
 
 impl UGen for Delay {
-    ugen_spec!("Delay", inputs = ["in", "time"], outputs = ["out"]);
+    ugen_spec!(
+        "Delay",
+        category = Effect,
+        inputs = ["in", "time"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -135,6 +140,7 @@ impl FeedbackDelay {
 impl UGen for FeedbackDelay {
     ugen_spec!(
         "FeedbackDelay",
+        category = Effect,
         inputs = ["in", "time", "feedback"],
         outputs = ["out"]
     );

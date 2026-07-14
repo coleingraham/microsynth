@@ -2,7 +2,7 @@
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
 
 /// Outputs a constant value on all channels and samples.
 pub struct Const {
@@ -187,6 +187,7 @@ impl UGen for BinOpUGen {
                 BinOpKind::Mul => "Mul",
                 BinOpKind::Div => "Div",
             },
+            category: UGenCategory::Math,
             inputs: &BINOP_INPUTS,
             outputs: &BINOP_OUTPUTS,
         }
@@ -226,7 +227,7 @@ impl UGen for BinOpUGen {
 pub struct NegUGen;
 
 impl UGen for NegUGen {
-    ugen_spec!("Neg", inputs = ["in"], outputs = ["out"]);
+    ugen_spec!("Neg", category = Math, inputs = ["in"], outputs = ["out"]);
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}

@@ -43,7 +43,12 @@ impl Line {
 }
 
 impl UGen for Line {
-    ugen_spec!("Line", inputs = ["start", "end", "dur"], outputs = ["out"]);
+    ugen_spec!(
+        "Line",
+        category = Envelope,
+        inputs = ["start", "end", "dur"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -177,7 +182,12 @@ impl XLine {
 }
 
 impl UGen for XLine {
-    ugen_spec!("XLine", inputs = ["start", "end", "dur"], outputs = ["out"]);
+    ugen_spec!(
+        "XLine",
+        category = Envelope,
+        inputs = ["start", "end", "dur"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -308,7 +318,12 @@ impl Perc {
 }
 
 impl UGen for Perc {
-    ugen_spec!("Perc", inputs = ["attack", "release"], outputs = ["out"]);
+    ugen_spec!(
+        "Perc",
+        category = Envelope,
+        inputs = ["attack", "release"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -422,7 +437,12 @@ impl ExpPerc {
 }
 
 impl UGen for ExpPerc {
-    ugen_spec!("ExpPerc", inputs = ["attack", "release"], outputs = ["out"]);
+    ugen_spec!(
+        "ExpPerc",
+        category = Envelope,
+        inputs = ["attack", "release"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -541,6 +561,7 @@ impl ASR {
 impl UGen for ASR {
     ugen_spec!(
         "ASR",
+        category = Envelope,
         inputs = ["gate", "attack", "release"],
         outputs = ["out"]
     );
@@ -681,6 +702,7 @@ impl ADSR {
 impl UGen for ADSR {
     ugen_spec!(
         "ADSR",
+        category = Envelope,
         inputs = ["gate", "attack", "decay", "sustain", "release"],
         outputs = ["out"]
     );

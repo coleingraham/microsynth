@@ -46,8 +46,10 @@
 ///   and — being `'static` — they are returned by reference at zero cost, just
 ///   like the hand-written module-level `static`s they replace.
 macro_rules! ugen_spec {
+    // With an explicit category (immediately after the name).
     (
         $name:literal,
+        category = $category:ident,
         inputs = [$($input:literal),* $(,)?],
         outputs = [$($output:literal),* $(,)?] $(,)?
     ) => {
@@ -70,9 +72,23 @@ macro_rules! ugen_spec {
             ];
             $crate::node::UGenSpec {
                 name: $name,
+                category: $crate::node::UGenCategory::$category,
                 inputs: INPUTS,
                 outputs: OUTPUTS,
             }
         }
+    };
+    // Without a category — defaults to `Utility`.
+    (
+        $name:literal,
+        inputs = [$($input:literal),* $(,)?],
+        outputs = [$($output:literal),* $(,)?] $(,)?
+    ) => {
+        ugen_spec!(
+            $name,
+            category = Utility,
+            inputs = [$($input),*],
+            outputs = [$($output),*]
+        );
     };
 }

@@ -40,7 +40,12 @@ impl SinOsc {
 }
 
 impl UGen for SinOsc {
-    ugen_spec!("SinOsc", inputs = ["freq", "phase"], outputs = ["out"]);
+    ugen_spec!(
+        "SinOsc",
+        category = Oscillator,
+        inputs = ["freq", "phase"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -111,7 +116,12 @@ impl Phasor {
 }
 
 impl UGen for Phasor {
-    ugen_spec!("Phasor", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "Phasor",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -176,7 +186,12 @@ impl Saw {
 }
 
 impl UGen for Saw {
-    ugen_spec!("Saw", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "Saw",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -242,7 +257,12 @@ impl Pulse {
 }
 
 impl UGen for Pulse {
-    ugen_spec!("Pulse", inputs = ["freq", "width"], outputs = ["out"]);
+    ugen_spec!(
+        "Pulse",
+        category = Oscillator,
+        inputs = ["freq", "width"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -309,7 +329,12 @@ impl Tri {
 }
 
 impl UGen for Tri {
-    ugen_spec!("Tri", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "Tri",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

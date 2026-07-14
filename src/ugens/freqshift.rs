@@ -91,7 +91,12 @@ impl FreqShift {
 }
 
 impl UGen for FreqShift {
-    ugen_spec!("FreqShift", inputs = ["in", "shift"], outputs = ["out"]);
+    ugen_spec!(
+        "FreqShift",
+        category = Effect,
+        inputs = ["in", "shift"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

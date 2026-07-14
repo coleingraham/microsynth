@@ -5,7 +5,7 @@
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -107,6 +107,7 @@ impl UGen for Bus {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "Bus",
+            category: UGenCategory::Utility,
             inputs: self.input_specs,
             outputs: &BUS_OUTPUTS,
         }
