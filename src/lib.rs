@@ -7,6 +7,8 @@ pub mod context;
 pub mod dsl;
 pub mod engine;
 pub mod graph;
+#[cfg(feature = "ir")]
+pub mod ir;
 pub mod musical_time;
 pub mod node;
 pub mod routing;

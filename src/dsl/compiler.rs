@@ -87,6 +87,17 @@ impl UGenRegistry {
     fn get(&self, name: &str) -> Option<&UGenEntry> {
         self.entries.get(name)
     }
+
+    /// Look up a registered UGen by name (its DSL/registry kind). Public so the
+    /// [`ir`](crate::ir) layer can resolve kinds to factories and port arities.
+    pub fn entry(&self, name: &str) -> Option<&UGenEntry> {
+        self.entries.get(name)
+    }
+
+    /// Iterate over all registered `(name, entry)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &UGenEntry)> {
+        self.entries.iter()
+    }
 }
 
 impl Default for UGenRegistry {

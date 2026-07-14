@@ -9,9 +9,12 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["std"]
+default = ["std", "ir"]
 std = ["clap"]
 web = ["wasm-bindgen", "js-sys"]
+# Versioned, serializable SynthDef IR (src/ir). Uses only alloc + core (adds no
+# std dependency beyond what the rest of the crate already needs).
+ir = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"], optional = true }
