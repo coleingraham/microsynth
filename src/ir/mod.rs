@@ -53,21 +53,6 @@ pub enum SynthDefClass {
     Effect,
 }
 
-/// Coarse taxonomy for a UGen kind, mirroring the `src/ugens` file
-/// organization. Shell validation and the (downstream) proposer key on this
-/// rather than hard-coded name lists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UGenCategory {
-    Oscillator,
-    Physical,
-    Noise,
-    Filter,
-    Envelope,
-    Effect,
-    Utility,
-    Math,
-}
-
 /// A node in the IR graph. Index-addressed by position in `IrSynthDef::nodes`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrNode {
@@ -583,7 +568,3 @@ impl<'a> IrBuilder<'a> {
         }
     }
 }
-
-// Silence "unused" until the registry-driven category lookup lands; the type is
-// part of the public wire vocabulary from day one.
-const _: Option<UGenCategory> = None;

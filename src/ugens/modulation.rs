@@ -58,6 +58,7 @@ const CHORUS_MAX_DELAY: f32 = 0.040;
 impl UGen for Chorus {
     ugen_spec!(
         "Chorus",
+        category = Effect,
         inputs = ["in", "rate", "depth", "mix"],
         outputs = ["out"]
     );
@@ -199,6 +200,7 @@ const FLANGER_MAX_DELAY: f32 = 0.020;
 impl UGen for Flanger {
     ugen_spec!(
         "Flanger",
+        category = Effect,
         inputs = ["in", "rate", "depth", "feedback", "mix"],
         outputs = ["out"]
     );
@@ -320,6 +322,7 @@ impl Phaser {
 impl UGen for Phaser {
     ugen_spec!(
         "Phaser",
+        category = Effect,
         inputs = ["in", "rate", "depth", "feedback", "mix"],
         outputs = ["out"]
     );

@@ -19,6 +19,7 @@ impl UGen for ConstGen {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "ConstGen",
+            category: UGenCategory::Utility,
             inputs: &[],
             outputs: &[OutputSpec {
                 name: "out",

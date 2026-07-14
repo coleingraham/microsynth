@@ -46,7 +46,12 @@ impl WaveTable {
 }
 
 impl UGen for WaveTable {
-    ugen_spec!("WaveTable", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "WaveTable",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;

@@ -71,6 +71,7 @@ impl Pluck {
 impl UGen for Pluck {
     ugen_spec!(
         "Pluck",
+        category = Physical,
         inputs = ["freq", "decay", "trig"],
         outputs = ["out"]
     );
@@ -213,6 +214,7 @@ fn bow_table(delta_v: f32, pressure: f32) -> f32 {
 impl UGen for Bowed {
     ugen_spec!(
         "Bowed",
+        category = Physical,
         inputs = ["freq", "pressure", "position"],
         outputs = ["out"]
     );

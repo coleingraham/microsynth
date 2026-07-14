@@ -18,6 +18,7 @@ impl UGen for TestGain {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "TestGain",
+            category: UGenCategory::Utility,
             inputs: &[InputSpec {
                 name: "in",
                 rate: Rate::Audio,
@@ -57,6 +58,7 @@ impl UGen for TestMix {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "TestMix",
+            category: UGenCategory::Utility,
             inputs: &[
                 InputSpec {
                     name: "a",

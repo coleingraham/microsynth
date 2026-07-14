@@ -64,6 +64,7 @@ impl FmOsc {
 impl UGen for FmOsc {
     ugen_spec!(
         "FmOsc",
+        category = Oscillator,
         inputs = ["freq", "ratio", "index", "feedback"],
         outputs = ["out"]
     );

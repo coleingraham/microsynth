@@ -17,6 +17,7 @@ impl UGen for ConstGen {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "ConstGen",
+            category: UGenCategory::Utility,
             inputs: &[],
             outputs: &[OutputSpec {
                 name: "out",
@@ -55,6 +56,7 @@ impl UGen for Gain {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "Gain",
+            category: UGenCategory::Utility,
             inputs: &[InputSpec {
                 name: "in",
                 rate: Rate::Audio,
@@ -94,6 +96,7 @@ impl UGen for Add {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "Add",
+            category: UGenCategory::Utility,
             inputs: &[
                 InputSpec {
                     name: "a",
@@ -150,6 +153,7 @@ impl UGen for MultiConst {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "MultiConst",
+            category: UGenCategory::Utility,
             inputs: &[],
             outputs: &[OutputSpec {
                 name: "out",
@@ -192,6 +196,7 @@ impl UGen for ControlConst {
     fn spec(&self) -> UGenSpec {
         UGenSpec {
             name: "ControlConst",
+            category: UGenCategory::Utility,
             inputs: &[],
             outputs: &[OutputSpec {
                 name: "out",

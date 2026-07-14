@@ -53,7 +53,12 @@ impl SpectralFreeze {
 }
 
 impl UGen for SpectralFreeze {
-    ugen_spec!("SpectralFreeze", inputs = ["in", "trig"], outputs = ["out"]);
+    ugen_spec!(
+        "SpectralFreeze",
+        category = Effect,
+        inputs = ["in", "trig"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {
         let fft_size = 2048;
@@ -158,7 +163,12 @@ impl PitchShift {
 }
 
 impl UGen for PitchShift {
-    ugen_spec!("PitchShift", inputs = ["in", "shift"], outputs = ["out"]);
+    ugen_spec!(
+        "PitchShift",
+        category = Effect,
+        inputs = ["in", "shift"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         let fft_size = 4096;
@@ -290,6 +300,7 @@ impl SpectralFilter {
 impl UGen for SpectralFilter {
     ugen_spec!(
         "SpectralFilter",
+        category = Effect,
         inputs = ["in", "freq", "bandwidth", "gain"],
         outputs = ["out"]
     );
@@ -395,6 +406,7 @@ impl SpectralGate {
 impl UGen for SpectralGate {
     ugen_spec!(
         "SpectralGate",
+        category = Effect,
         inputs = ["in", "threshold"],
         outputs = ["out"]
     );
@@ -490,7 +502,12 @@ impl SpectralBlur {
 }
 
 impl UGen for SpectralBlur {
-    ugen_spec!("SpectralBlur", inputs = ["in", "blur"], outputs = ["out"]);
+    ugen_spec!(
+        "SpectralBlur",
+        category = Effect,
+        inputs = ["in", "blur"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {
         let fft_size = 2048;
@@ -628,7 +645,12 @@ impl Convolution {
 }
 
 impl UGen for Convolution {
-    ugen_spec!("Convolution", inputs = ["in", "mix"], outputs = ["out"]);
+    ugen_spec!(
+        "Convolution",
+        category = Effect,
+        inputs = ["in", "mix"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {
         self.fft_size = 4096;

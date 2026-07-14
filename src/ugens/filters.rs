@@ -6,7 +6,7 @@
 
 use crate::buffer::{AudioBuffer, read_input};
 use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenSpec};
+use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
@@ -36,7 +36,12 @@ impl OnePole {
 }
 
 impl UGen for OnePole {
-    ugen_spec!("OnePole", inputs = ["in", "coeff"], outputs = ["out"]);
+    ugen_spec!(
+        "OnePole",
+        category = Filter,
+        inputs = ["in", "coeff"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
 
@@ -280,6 +285,7 @@ macro_rules! biquad_ugen {
             fn spec(&self) -> UGenSpec {
                 UGenSpec {
                     name: $name,
+                    category: UGenCategory::Filter,
                     inputs: &BIQUAD_INPUTS,
                     outputs: &BIQUAD_OUTPUTS,
                 }
@@ -407,6 +413,7 @@ impl CombFilter {
 impl UGen for CombFilter {
     ugen_spec!(
         "CombFilter",
+        category = Filter,
         inputs = ["in", "delay", "feedback"],
         outputs = ["out"]
     );
@@ -619,6 +626,7 @@ impl GVerb {
 impl UGen for GVerb {
     ugen_spec!(
         "GVerb",
+        category = Filter,
         inputs = ["in", "roomsize", "damping", "wet", "dry"],
         outputs = ["out"]
     );
@@ -807,6 +815,7 @@ fn fast_db_to_lin(db: f32) -> f32 {
 impl UGen for Compressor {
     ugen_spec!(
         "Compressor",
+        category = Filter,
         inputs = [
             "in",
             "sidechain",

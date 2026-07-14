@@ -27,7 +27,7 @@ pub use context::{ProcessContext, Rate};
 pub use engine::{Engine, EngineConfig};
 pub use graph::AudioGraph;
 pub use musical_time::{MusicalPosition, TimeConfig};
-pub use node::{InputSpec, NodeId, OutputSpec, UGen, UGenSpec};
+pub use node::{InputSpec, NodeId, OutputSpec, UGen, UGenCategory, UGenSpec};
 pub use routing::{BusId, EffectId, RoutingGraph};
 pub use sample::{Sample, SampleBank, SampleId};
 pub use scheduler::{EventAction, Scheduler, VoiceId};

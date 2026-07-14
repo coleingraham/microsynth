@@ -31,11 +31,36 @@ pub struct OutputSpec {
     pub rate: Rate,
 }
 
+/// Coarse taxonomy for a UGen, mirroring the `src/ugens` file organization.
+/// Downstream tooling (graph inspection, IR validation, generative/search
+/// layers) keys on this instead of hard-coded name lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UGenCategory {
+    /// Primary tone generators (`SinOsc`, `Saw`, `FmOsc`, wavetables, …).
+    Oscillator,
+    /// Physical-modelling voices (`Pluck`, `Bowed`).
+    Physical,
+    /// Noise sources (`WhiteNoise`, `PinkNoise`).
+    Noise,
+    /// Filters (`LPF`/`HPF`/`BPF`, `OnePole`, comb/allpass, reverb, dynamics).
+    Filter,
+    /// Envelope generators (`Perc`, `ADSR`, `Line`, …).
+    Envelope,
+    /// Audio-in → audio-out effects (delay, distortion, modulation, spectral).
+    Effect,
+    /// Routing / control / helper nodes (`Mix`, `Pan2`, `Lag`, `Const`, buses).
+    Utility,
+    /// Arithmetic primitives (`Add`/`Sub`/`Mul`/`Div`, `Neg`).
+    Math,
+}
+
 /// Static metadata about a UGen type.
 #[derive(Debug, Clone)]
 pub struct UGenSpec {
     /// Name of this UGen (e.g. "SinOsc", "LPF").
     pub name: &'static str,
+    /// Coarse category of this UGen.
+    pub category: UGenCategory,
     /// Input port descriptors.
     pub inputs: &'static [InputSpec],
     /// Output port descriptors.

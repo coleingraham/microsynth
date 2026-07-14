@@ -49,7 +49,12 @@ impl StereoWidth {
 const HAAS_MAX_DELAY: f32 = 0.030;
 
 impl UGen for StereoWidth {
-    ugen_spec!("StereoWidth", inputs = ["in", "width"], outputs = ["out"]);
+    ugen_spec!(
+        "StereoWidth",
+        category = Effect,
+        inputs = ["in", "width"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -172,6 +177,7 @@ const PP_MAX_DELAY: f32 = 5.0;
 impl UGen for PingPongDelay {
     ugen_spec!(
         "PingPongDelay",
+        category = Effect,
         inputs = ["in", "time", "feedback", "mix"],
         outputs = ["out"]
     );

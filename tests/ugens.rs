@@ -506,6 +506,7 @@ fn test_mix_sums_channels() {
         fn spec(&self) -> UGenSpec {
             UGenSpec {
                 name: "ThreeChannel",
+                category: UGenCategory::Utility,
                 inputs: &[],
                 outputs: &[OutputSpec {
                     name: "out",
@@ -552,6 +553,7 @@ fn test_sample_and_hold() {
         fn spec(&self) -> UGenSpec {
             UGenSpec {
                 name: "Ramp",
+                category: UGenCategory::Utility,
                 inputs: &[],
                 outputs: &[OutputSpec {
                     name: "out",
@@ -692,6 +694,7 @@ fn test_oscillator_multichannel_expansion() {
         fn spec(&self) -> UGenSpec {
             UGenSpec {
                 name: "TwoFreq",
+                category: UGenCategory::Utility,
                 inputs: &[],
                 outputs: &[OutputSpec {
                     name: "out",

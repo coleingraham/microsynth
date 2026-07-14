@@ -56,7 +56,12 @@ impl BlSaw {
 }
 
 impl UGen for BlSaw {
-    ugen_spec!("BlSaw", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "BlSaw",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -127,7 +132,12 @@ impl BlPulse {
 }
 
 impl UGen for BlPulse {
-    ugen_spec!("BlPulse", inputs = ["freq", "width"], outputs = ["out"]);
+    ugen_spec!(
+        "BlPulse",
+        category = Oscillator,
+        inputs = ["freq", "width"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -210,7 +220,12 @@ impl BlTri {
 }
 
 impl UGen for BlTri {
-    ugen_spec!("BlTri", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "BlTri",
+        category = Oscillator,
+        inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
