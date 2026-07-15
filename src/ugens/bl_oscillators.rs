@@ -164,8 +164,13 @@ impl UGen for BlPulse {
             for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = read_input(freq_buf, ch, i, 440.0);
                 let dt = (freq * inv_sr).abs();
-                let width =
-                    read_input(width_buf, ch, i, 0.5).clamp(dt.max(0.01), (1.0 - dt).min(0.99));
+                // Keep the pulse width off both edges so the polyBLEPs don't
+                // overlap. When dt >= ~0.5 (freq at/above Nyquist) the band is
+                // degenerate and lo would exceed hi — guard with lo.max(hi) so a
+                // near-Nyquist freq pins the width instead of panicking clamp().
+                let lo = dt.max(0.01);
+                let hi = (1.0 - dt).min(0.99);
+                let width = read_input(width_buf, ch, i, 0.5).clamp(lo, lo.max(hi));
 
                 // Naive pulse
                 let mut sample = if phase < width { 1.0 } else { -1.0 };
@@ -274,5 +279,27 @@ impl UGen for BlTri {
                 self.integrator = integrator;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A freq input at/above Nyquist drives dt >= 0.5, which inverts the pulse-
+    /// width clamp bounds (lo > hi). BlPulse must pin the width, not panic.
+    #[test]
+    fn bl_pulse_survives_above_nyquist_freq() {
+        let ctx = ProcessContext::new(44100.0, 32);
+        let mut osc = BlPulse::new();
+        osc.init(&ctx);
+
+        // 40 kHz > Nyquist (22.05 kHz): dt = 40000/44100 ≈ 0.907 -> lo > hi.
+        let mut freq = AudioBuffer::mono(ctx.block_size);
+        freq.channel_mut(0).samples_mut().fill(40_000.0);
+        let mut out = AudioBuffer::mono(ctx.block_size);
+
+        osc.process(&ctx, &[&freq], &mut out); // must not panic
+        assert!(out.channel(0).samples().iter().all(|s| s.is_finite()));
     }
 }
