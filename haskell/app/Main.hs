@@ -17,7 +17,7 @@ data Opts = Opts
   , optOutput     :: FilePath
   , optSynth      :: String
   , optVoices     :: Int
-  , optParams     :: [(String, Float)]
+  , optParams     :: [(ParamName, Sample)]
   }
 
 optsParser :: Parser Opts
@@ -42,10 +42,10 @@ optsParser = Opts
             ( long "param" <> short 'p' <> metavar "NAME=VALUE"
            <> help "Override a parameter default (repeatable)" ) )
 
-parseParam :: String -> Either String (String, Float)
+parseParam :: String -> Either String (ParamName, Sample)
 parseParam s = case break (== '=') s of
   (name, '=' : val) -> case reads val of
-    [(v, "")] -> Right (name, v)
+    [(v, "")] -> Right (ParamName name, Sample v)
     _         -> Left ("invalid number in --param: " ++ s)
   _ -> Left ("expected NAME=VALUE in --param: " ++ s)
 
@@ -55,17 +55,17 @@ main = do
     ( fullDesc <> progDesc "Render a microsynth demo synthdef to a WAV file" )
   let selected = case optSynth opts of
         "poly" -> Just (polyVoices (optVoices opts))
-        name   -> lookup name registry
+        name   -> lookup (SynthName name) registry
   case selected of
     Nothing ->
       putStrLn $ "unknown synthdef '" ++ optSynth opts
-        ++ "'; available: " ++ unwords (map fst registry)
+        ++ "'; available: " ++ unwords (map (unSynthName . fst) registry)
     Just sdef -> do
-      let sr         = realToFrac (optSampleRate opts)
-          numSamples = round (optDuration opts * optSampleRate opts)
+      let sr         = SampleRate (realToFrac (optSampleRate opts))
+          numSamples = SampleCount (round (optDuration opts * optSampleRate opts))
           overrides  = Map.fromList (optParams opts)
           channels   = renderOffline sdef sr numSamples overrides
       writeWav (optOutput opts) sr channels
       putStrLn $ "Rendered '" ++ optSynth opts ++ "' ("
-        ++ show numSamples ++ " samples @ " ++ show (optSampleRate opts)
+        ++ show (unSampleCount numSamples) ++ " samples @ " ++ show (optSampleRate opts)
         ++ " Hz) -> " ++ optOutput opts

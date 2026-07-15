@@ -20,17 +20,18 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Node (..), bindInput, readInput)
-
-tau :: Float
-tau = 2 * pi
+import Microsynth.Node (Node (..), readInput)
+import Microsynth.Numerics (tau)
+import Microsynth.Types (Sample (..), SampleRate (..))
+import Microsynth.UGen.Common (bindPort, scanBlock2F)
+import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | RBJ low-pass biquad coefficients: @(# b0, b1, b2, a1, a2 #)@ normalised by
 -- @a0@. Mirrors @biquad_lpf_coeffs@ in the Rust source. The unboxed tuple
 -- return means no per-sample heap allocation.
-lpfCoeffs :: Float -> Float -> Float -> (# Float, Float, Float, Float, Float #)
+lpfCoeffs :: Sample -> Sample -> SampleRate -> (# Sample, Sample, Sample, Sample, Sample #)
 lpfCoeffs freq q sr =
-  let w0    = tau * freq / sr
+  let w0    = tau * freq / Sample (unSampleRate sr)
       sinW0 = sin w0
       cosW0 = cos w0
       alpha = sinW0 / (2 * q)
@@ -45,25 +46,19 @@ lpfCoeffs freq q sr =
 {-# INLINE lpfCoeffs #-}
 
 -- | Low-pass filter. Inputs: signal, cutoff (Hz), q.
-mkLpf :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+mkLpf :: SampleRate -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkLpf sr ins out = do
   st <- VUM.replicate 2 0  -- [z1, z2], unboxed
-  let sigIn = bindInput ins 0
-      cutIn = bindInput ins 1
-      qIn   = bindInput ins 2
-      !n    = VUM.length out
-  pure $ Node $ do
-    s1_0 <- VUM.unsafeRead st 0
-    s2_0 <- VUM.unsafeRead st 1
-    let go !i !s1 !s2
-          | i >= n    = VUM.unsafeWrite st 0 s1 >> VUM.unsafeWrite st 1 s2
-          | otherwise = do
-              x  <- readInput sigIn i 0
-              fc <- readInput cutIn i 1000
-              q  <- readInput qIn i 0.707
-              case lpfCoeffs fc q sr of
-                (# b0, b1, b2, a1, a2 #) -> do
-                  let !y = b0 * x + s1
-                  VUM.unsafeWrite out i y
-                  go (i + 1) (b1 * x - a1 * y + s2) (b2 * x - a2 * y)
-    go 0 s1_0 s2_0
+  let (sigIn, dSig) = bindPort ins TLpf 0
+      (cutIn, dCut) = bindPort ins TLpf 1
+      (qIn,   dQ)   = bindPort ins TLpf 2
+      !n            = VUM.length out
+  pure $ Node $ scanBlock2F st n $ \i s1 s2 -> do
+    x  <- readInput sigIn i dSig
+    fc <- readInput cutIn i dCut
+    q  <- readInput qIn i dQ
+    case lpfCoeffs fc q sr of
+      (# b0, b1, b2, a1, a2 #) -> do
+        let !y = b0 * x + s1
+        VUM.unsafeWrite out i y
+        pure (b1 * x - a1 * y + s2, b2 * x - a2 * y)

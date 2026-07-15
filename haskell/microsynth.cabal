@@ -25,18 +25,26 @@ library
     , containers
     , mtl
     , bytestring
+    , aeson
+    , vector-th-unbox
   exposed-modules:
       Microsynth
+      Microsynth.Types
       Microsynth.Context
       Microsynth.Buffer
       Microsynth.Node
+      Microsynth.Numerics
       Microsynth.Signal
       Microsynth.Graph
       Microsynth.SynthDef
+      Microsynth.SynthDef.Introspect
+      Microsynth.SynthDef.IR
       Microsynth.Engine
       Microsynth.Wav
       Microsynth.Demo
       Microsynth.UGen
+      Microsynth.UGen.Spec
+      Microsynth.UGen.Common
       Microsynth.UGen.Math
       Microsynth.UGen.Oscillator
       Microsynth.UGen.Filter
@@ -66,3 +74,4 @@ test-suite spec
     , containers
     , vector
     , hspec
+    , QuickCheck

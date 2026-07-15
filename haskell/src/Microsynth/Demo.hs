@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Example SynthDefs, written directly in the embedded DSL.
 --
 -- These are the payoff of the Haskell version: a SynthDef is just a Haskell
@@ -16,9 +18,10 @@ import Data.List (foldl1')
 
 import Microsynth.Signal
 import Microsynth.SynthDef
+import Microsynth.Types (Sample, SynthName)
 
 -- | The CLI's name -> SynthDef table.
-registry :: [(String, SynthDef)]
+registry :: [(SynthName, SynthDef)]
 registry =
   [ ("demo", demo)
   , ("tone", tone)
@@ -52,7 +55,7 @@ pad = synthdef "pad" $ do
 
 -- | Frequencies for an @n@-voice chromatic cluster starting at 55 Hz. Shared
 -- with the Rust patch generator so both engines render the same graph shape.
-polyFreqs :: Int -> [Float]
+polyFreqs :: Int -> [Sample]
 polyFreqs n = [ 55 * 2 ** (fromIntegral i / 12) | i <- [0 .. n - 1] ]
 
 -- | An @n@-voice polyphonic synth: @n@ independent filtered-saw voices, each

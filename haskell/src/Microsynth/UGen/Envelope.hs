@@ -14,31 +14,31 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Node (..), bindInput, readInput)
+import Microsynth.Node (Node (..), readInput)
+import Microsynth.Types (Sample (..), SampleRate (..))
+import Microsynth.UGen.Common (bindPort, scanBlockFI)
+import Microsynth.UGen.Spec (UGenTag (..))
 
 -- | Percussive envelope. Inputs: attack (s), release (s). Output: @[0, 1]@.
 -- Level and stage live in unboxed cells so the loop's threaded accumulators
--- stay unboxed (see the note in "Microsynth.UGen.Filter").
-mkPerc :: Float -> [MBlock s] -> MBlock s -> ST s (Node s)
+-- stay unboxed (see the note in "Microsynth.UGen.Filter"). The written output
+-- sample is the /post-update/ level, matching the state threaded on.
+mkPerc :: SampleRate -> [MBlock s] -> MBlock s -> ST s (Node s)
 mkPerc sr ins out = do
-  levelV <- VUM.replicate 1 (0 :: Float)  -- unboxed level
-  stageV <- VUM.replicate 1 (0 :: Int)    -- unboxed stage (0=atk,1=rel,2=done)
-  let atkIn = bindInput ins 0
-      relIn = bindInput ins 1
-      !n    = VUM.length out
-  pure $ Node $ do
-    l0 <- VUM.unsafeRead levelV 0
-    g0 <- VUM.unsafeRead stageV 0
-    let step !i !lvl !stage = VUM.unsafeWrite out i lvl >> go (i + 1) lvl stage
-        go !i !lvl !stage
-          | i >= n    = VUM.unsafeWrite levelV 0 lvl >> VUM.unsafeWrite stageV 0 stage
-          | otherwise = do
-              at <- max 0.0001 <$> readInput atkIn i 0.001
-              rt <- max 0.0001 <$> readInput relIn i 0.1
-              case stage of
-                0 -> let l = lvl + 1 / (at * sr)
-                     in if l >= 1 then step i 1 1 else step i l 0
-                1 -> let l = lvl - 1 / (rt * sr)
-                     in if l <= 0 then step i 0 2 else step i l 1
-                _ -> step i 0 2
-    go 0 l0 g0
+  levelV <- VUM.replicate 1 (0 :: Sample)  -- unboxed level
+  stageV <- VUM.replicate 1 (0 :: Int)     -- unboxed stage (0=atk,1=rel,2=done)
+  let (atkIn, dAtk) = bindPort ins TPerc 0
+      (relIn, dRel) = bindPort ins TPerc 1
+      !srS          = Sample (unSampleRate sr)
+      !n            = VUM.length out
+  pure $ Node $ scanBlockFI levelV stageV n $ \i lvl stage -> do
+    at <- max 0.0001 <$> readInput atkIn i dAtk
+    rt <- max 0.0001 <$> readInput relIn i dRel
+    let (lvl', stage') = case stage of
+          0 -> let l = lvl + 1 / (at * srS)
+               in if l >= 1 then (1, 1) else (l, 0)
+          1 -> let l = lvl - 1 / (rt * srS)
+               in if l <= 0 then (0, 2) else (l, 1)
+          _ -> (0, 2)
+    VUM.unsafeWrite out i lvl'
+    pure (lvl', stage')

@@ -25,6 +25,9 @@ import Microsynth.Context (Context (..))
 import Microsynth.Graph (topoSort)
 import Microsynth.Node (Node (..))
 import Microsynth.SynthDef (NodeDef (..), SynthDef (..))
+import Microsynth.Types
+  ( BlockSize (..), NodeId (..), ParamName, Sample, SampleCount (..)
+  , SampleOffset (..), SampleRate )
 import Microsynth.UGen (instantiate)
 
 -- | Render a synth offline to a list of per-channel sample vectors.
@@ -32,31 +35,35 @@ import Microsynth.UGen (instantiate)
 -- @renderOffline def sampleRate numSamples overrides@. The scaffold's UGens
 -- are mono, so the result is a single-element list. Rendering is done in whole
 -- 128-sample blocks and then trimmed to exactly @numSamples@.
-renderOffline :: SynthDef -> Float -> Int -> Map String Float -> [VU.Vector Float]
+renderOffline
+  :: SynthDef -> SampleRate -> SampleCount -> Map ParamName Sample
+  -> [VU.Vector Sample]
 renderOffline sdef sr numSamples overrides = runST $ do
-  let !bsz      = maxBlockSize
+  let bszN      = maxBlockSize
+      !bsz      = unBlockSize bszN
+      !ns       = unSampleCount numSamples
       defs      = V.fromList (sdNodes sdef)
       nnodes    = V.length defs
-      ctx       = Context sr bsz 0
-      edges     = [ (j, i)
+      ctx       = Context sr bszN (SampleOffset 0)
+      edges     = [ (unNodeId j, i)
                   | (i, nd) <- zip [0 ..] (sdNodes sdef)
                   , j <- ndInputs nd
                   ]
       order     = topoSort nnodes edges
-      numBlocks = (numSamples + bsz - 1) `div` bsz
+      numBlocks = (ns + bsz - 1) `div` bsz
 
   -- One output block per node, allocated once and reused every block.
-  outs <- V.replicateM nnodes (newBlock bsz)
+  outs <- V.replicateM nnodes (newBlock bszN)
 
   -- Instantiate each node with its inputs/output already bound.
   nodes <- V.generateM nnodes $ \i -> do
     let nd  = defs V.! i
-        ins = [ outs V.! j | j <- ndInputs nd ]
+        ins = [ outs V.! unNodeId j | j <- ndInputs nd ]
     instantiate ctx overrides (ndKind nd) ins (outs V.! i)
 
   -- Precompute the actual per-block work sequence in topological order.
   let steps = [ runBlock (nodes V.! i) | i <- order ]
-      sink  = outs V.! sdOutput sdef
+      sink  = outs V.! unNodeId (sdOutput sdef)
 
   big <- VUM.new (numBlocks * bsz)
   forM_ [0 .. numBlocks - 1] $ \ !b -> do
@@ -64,4 +71,4 @@ renderOffline sdef sr numSamples overrides = runST $ do
     VUM.copy (VUM.slice (b * bsz) bsz big) sink
 
   frozen <- VU.freeze big
-  pure [VU.take numSamples frozen]
+  pure [VU.take ns frozen]

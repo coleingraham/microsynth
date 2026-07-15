@@ -17,6 +17,7 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
+import Microsynth.Types (Sample)
 
 -- | A live node's per-block work: read its captured inputs, write its captured
 -- output, mutate its captured state. Everything else is closed over.
@@ -35,7 +36,7 @@ bindInput ins port = case drop port ins of
 -- | Read sample @i@ from a bound input, or a default if the port is absent.
 -- Uses an unchecked read: callers iterate @0 .. blockSize-1@ and every block is
 -- the same length, so the index is always in bounds.
-readInput :: Input s -> Int -> Float -> ST s Float
+readInput :: Input s -> Int -> Sample -> ST s Sample
 readInput Nothing    _ d = pure d
 readInput (Just b)   i _ = VUM.unsafeRead b i
 {-# INLINE readInput #-}

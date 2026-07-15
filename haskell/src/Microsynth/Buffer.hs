@@ -17,13 +17,15 @@ module Microsynth.Buffer
 import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
+import Microsynth.Types (BlockSize (..), Sample)
+
 -- | A single-channel, mutable, unboxed block of samples.
-type MBlock s = VUM.MVector s Float
+type MBlock s = VUM.MVector s Sample
 
 -- | Maximum block size. 128 matches the Web Audio render quantum, as in Rust.
-maxBlockSize :: Int
-maxBlockSize = 128
+maxBlockSize :: BlockSize
+maxBlockSize = BlockSize 128
 
 -- | Allocate a zeroed block of the given length.
-newBlock :: Int -> ST s (MBlock s)
-newBlock n = VUM.replicate n 0
+newBlock :: BlockSize -> ST s (MBlock s)
+newBlock n = VUM.replicate (unBlockSize n) 0

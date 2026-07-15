@@ -1,6 +1,7 @@
 -- | Umbrella module re-exporting the public API.
 module Microsynth
-  ( module Microsynth.Context
+  ( module Microsynth.Types
+  , module Microsynth.Context
   , module Microsynth.Signal
   , module Microsynth.SynthDef
   , module Microsynth.Engine
@@ -13,4 +14,5 @@ import Microsynth.Demo
 import Microsynth.Engine
 import Microsynth.Signal
 import Microsynth.SynthDef
+import Microsynth.Types
 import Microsynth.Wav

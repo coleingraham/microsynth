@@ -17,6 +17,7 @@ import Microsynth.Buffer (MBlock)
 import Microsynth.Context (Context (..))
 import Microsynth.Node (Node)
 import Microsynth.Signal (UGenKind (..))
+import Microsynth.Types (ParamName, Sample)
 import Microsynth.UGen.Envelope (mkPerc)
 import Microsynth.UGen.Filter (mkLpf)
 import Microsynth.UGen.Math (constNode, mkBinOp, mkNeg)
@@ -26,7 +27,7 @@ import Microsynth.UGen.Oscillator (mkSaw, mkSinOsc)
 -- default at spawn time (e.g. @--param freq=330@). @ins@ are the resolved
 -- input blocks (in port order); @out@ is this node's output block.
 instantiate
-  :: Context -> Map String Float -> UGenKind
+  :: Context -> Map ParamName Sample -> UGenKind
   -> [MBlock s] -> MBlock s -> ST s (Node s)
 instantiate ctx overrides kind ins out = case kind of
   KConst v    -> constNode v out
