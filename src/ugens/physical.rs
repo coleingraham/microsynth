@@ -20,7 +20,10 @@ const MIN_FREQ: f32 = 20.0;
 /// recirculates through a one-pole lowpass filter with decay feedback.
 /// Signals `is_done()` when energy drops below threshold.
 ///
-/// Inputs: freq (Hz), decay (feedback 0-1, default 0.99), trig (trigger on positive edge).
+/// Inputs: freq (Hz), decay (feedback 0-1, default 0.99), trig (trigger on
+/// positive-going edge; default 1.0, so an unconnected trig auto-plucks once at
+/// the start of the render — the natural one-shot behaviour, and audible rather
+/// than silent when the port is left at its default).
 pub struct Pluck {
     buffer: Vec<f32>,
     buf_len: usize,
@@ -116,7 +119,7 @@ impl UGen for Pluck {
             for (i, out_sample) in out.iter_mut().enumerate() {
                 let freq = read_input(freq_buf, ch, i, 440.0);
                 let decay = read_input(decay_buf, ch, i, 0.99).clamp(0.0, 0.999);
-                let trig = read_input(trig_buf, ch, i, 0.0);
+                let trig = read_input(trig_buf, ch, i, 1.0);
 
                 // Trigger detection (positive-going zero crossing)
                 if trig > 0.0 && prev_trig <= 0.0 {
