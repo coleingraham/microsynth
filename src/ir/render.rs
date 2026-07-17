@@ -30,7 +30,8 @@ pub struct RenderSpec {
 
 impl RenderSpec {
     /// The NSynth render convention: 16 kHz mono, gate held 3 s then released,
-    /// 4 s total (see plan §5.2). `params` starts empty — set `freq`/`amp`.
+    /// 4 s total — matching the note layout of the NSynth dataset. `params`
+    /// starts empty — set `freq`/`amp`.
     pub fn nsynth() -> Self {
         RenderSpec {
             sample_rate: 16_000.0,

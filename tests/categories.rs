@@ -1,15 +1,12 @@
 //! UGen category tags: every registered UGen carries a category from its
 //! `spec()`, exposed on the registry entry for downstream tooling.
 
+use microsynth::UGenCategory;
 use microsynth::UGenCategory::*;
 use microsynth::dsl::compiler::UGenRegistry;
-use microsynth::{UGenCategory, register_builtins};
 
-fn registry() -> UGenRegistry {
-    let mut reg = UGenRegistry::new();
-    register_builtins(&mut reg);
-    reg
-}
+mod common;
+use common::builtin_registry as registry;
 
 fn category_of(reg: &UGenRegistry, name: &str) -> UGenCategory {
     reg.entry(name)

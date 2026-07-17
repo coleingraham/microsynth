@@ -3,8 +3,17 @@
 //! A compiled [`SynthDef`](crate::synthdef::SynthDef) hides its node kinds
 //! inside factory closures (`synthdef.rs`) — it can render, but it cannot be
 //! inspected, serialized, hashed, or programmatically edited. The IR is the
-//! inspectable, serializable form of the same graph: the interchange contract
-//! described in `COEXISTENCE.md` ("one format, many producers, one consumer").
+//! inspectable, serializable form of the same graph, and the intended
+//! interchange contract described in `haskell/COEXISTENCE.md` ("one format,
+//! many producers, one consumer").
+//!
+//! **Caveat: that goal is not yet met.** The Haskell engine ships its own
+//! "version 1" IR (`Microsynth.SynthDef.IR`) with a different node model —
+//! inline per-node `inputs` instead of an edge list, spec-style kind tags
+//! (`"Saw"`) instead of registry names (`"saw"`), one `BinOp` kind instead of
+//! four, and no `class`/`output_channels`. The two are mutually unparseable
+//! despite sharing a version number. Unifying them is an open design decision;
+//! see COEXISTENCE.md's "Current state — two IRs, one version number".
 //!
 //! ```text
 //!   DSL text  ──parse──►  AST  ──[from_decl]──►  IrSynthDef  ──[compile]──►  SynthDef
@@ -39,10 +48,10 @@ pub use serialize::IrCodecError;
 /// byte layout or node model.
 pub const FORMAT_VERSION: u16 = 1;
 
-/// The shell class of a SynthDef — a structural discriminant carried in the
-/// wire format from day one so adding classes later is not a breaking bump.
-/// The engine-general half of each shell is validated here; the search-policy
-/// half lives in the (private) HV encoder.
+/// The structural class of a SynthDef — a discriminant carried in the wire
+/// format from day one so adding classes later is not a breaking bump. Only
+/// the engine-general structural rules are validated here; a consumer may
+/// layer its own policy on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthDefClass {
     /// A tone generator: no audio input, mono output. The only class produced
@@ -156,15 +165,17 @@ impl fmt::Display for IrError {
 // Kind classification
 // ---------------------------------------------------------------------------
 
-/// The DSL's core arithmetic kinds: canonical kind name, the AST [`BinOp`], and
-/// the engine [`BinOpKind`]. Single source of truth for the name↔kind mapping
-/// the decompiler, compiler, and validator share — so the four names live in
-/// exactly one place.
-const BINOPS: [(&str, BinOp, BinOpKind); 4] = [
-    ("Add", BinOp::Add, BinOpKind::Add),
-    ("Sub", BinOp::Sub, BinOpKind::Sub),
-    ("Mul", BinOp::Mul, BinOpKind::Mul),
-    ("Div", BinOp::Div, BinOpKind::Div),
+/// The DSL's core arithmetic kinds: canonical IR kind name paired with the AST
+/// [`BinOp`]. Single source of truth for the name↔op mapping the decompiler,
+/// compiler, and validator share — so the four names live in exactly one place.
+///
+/// The op→engine-[`BinOpKind`] half of the mapping is *not* restated here; it
+/// lives on [`BinOp::kind`], which the DSL compiler uses too.
+const BINOPS: [(&str, BinOp); 4] = [
+    ("Add", BinOp::Add),
+    ("Sub", BinOp::Sub),
+    ("Mul", BinOp::Mul),
+    ("Div", BinOp::Div),
 ];
 
 /// The unary-negation core kind (1 input).
@@ -176,16 +187,16 @@ const AUDIO_IN_KIND: &str = "audioIn";
 fn binop_kind(name: &str) -> Option<BinOpKind> {
     BINOPS
         .iter()
-        .find(|(n, _, _)| *n == name)
-        .map(|&(_, _, k)| k)
+        .find(|(n, _)| *n == name)
+        .map(|&(_, op)| op.kind())
 }
 
 /// The canonical kind name for an AST [`BinOp`].
 fn binop_name(op: BinOp) -> &'static str {
     BINOPS
         .iter()
-        .find(|(_, o, _)| *o == op)
-        .map(|&(n, _, _)| n)
+        .find(|(_, o)| *o == op)
+        .map(|&(n, _)| n)
         .expect("BINOPS covers every BinOp variant")
 }
 
@@ -509,7 +520,18 @@ impl<'a> IrBuilder<'a> {
         })
     }
 
-    /// Mirror of `Compiler::compile_expr`.
+    /// Mirror of `Compiler::compile_expr` — the same AST traversal, emitting IR
+    /// nodes instead of graph nodes. The two must stay in lockstep; the check
+    /// that enforces it is the byte-identical render test in `tests/ir.rs`
+    /// (`DSL → SynthDef` vs `DSL → IR → SynthDef`). Touch one, run that test.
+    ///
+    /// **This duplication is deliberate.** The obvious dedup — routing the DSL
+    /// compiler through the IR so this traversal exists once — would make `dsl`
+    /// depend on `ir`, and `ir` is an optional feature that both WASM builds
+    /// turn off (`web/build.sh` passes `--no-default-features`). Unifying them
+    /// would force the IR into every WASM bundle, which the crate's
+    /// `opt-level = "s"` + LTO profile exists to avoid. The duplicate traversal
+    /// is the cheaper of the two costs.
     fn compile_expr(&mut self, expr: &Expr) -> usize {
         match expr {
             Expr::Lit(v) => self.push(IrNode::Const(*v)),

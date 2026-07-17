@@ -7,9 +7,9 @@
 -- ("Microsynth.UGen.Spec"), so a node's kind tag and its port role names come
 -- from the same single source the builders and IR use.
 --
--- These are the accessors the future FHRR encoder (binding roles = port names)
--- and legal-edit proposer (kind tags + arity as data) read; they are deliberately
--- the read half only — mutation/rebuilding is 'Microsynth.SynthDef.mkSynthDef'.
+-- These are the accessors a graph analyser or serializer reads — port names as
+-- roles, kind tags and arity as data. They are deliberately the read half only;
+-- mutation/rebuilding is 'Microsynth.SynthDef.mkSynthDef'.
 module Microsynth.SynthDef.Introspect
   ( nodeTag
   , nodePorts
@@ -25,9 +25,8 @@ nodeTag :: NodeDef -> KindTag
 nodeTag = serTag . ndKind
 
 -- | A node's inputs as @(role-name, source-node-id)@ pairs: the descriptor's
--- ordered port names zipped with the graph edges feeding them. This is exactly
--- the binding-role view an encoder needs. Leaves ('KConst'\/'KParam') have no
--- ports and yield @[]@.
+-- ordered port names zipped with the graph edges feeding them — the named view
+-- of the wiring. Leaves ('KConst'\/'KParam') have no ports and yield @[]@.
 nodePorts :: NodeDef -> [(PortName, NodeId)]
 nodePorts nd = zip names (ndInputs nd)
   where

@@ -15,7 +15,8 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), readInput)
-import Microsynth.Types (Sample (..), SampleRate (..))
+import Microsynth.Numerics (srSample)
+import Microsynth.Types (Sample, SampleRate)
 import Microsynth.UGen.Common (bindPort, scanBlockFI)
 import Microsynth.UGen.Spec (UGenTag (..))
 
@@ -29,7 +30,7 @@ mkPerc sr ins out = do
   stageV <- VUM.replicate 1 (0 :: Int)     -- unboxed stage (0=atk,1=rel,2=done)
   let (atkIn, dAtk) = bindPort ins TPerc 0
       (relIn, dRel) = bindPort ins TPerc 1
-      !srS          = Sample (unSampleRate sr)
+      !srS          = srSample sr
       !n            = VUM.length out
   pure $ Node $ scanBlockFI levelV stageV n $ \i lvl stage -> do
     at <- max 0.0001 <$> readInput atkIn i dAtk

@@ -168,3 +168,18 @@ pub fn read_input(buf: Option<&AudioBuffer>, ch: usize, i: usize, default: f32) 
         None => default,
     }
 }
+
+/// Borrow a whole input channel with SuperCollider-style channel wrapping.
+///
+/// The block-level counterpart to [`read_input`]: where `read_input` reads one
+/// sample from an optional (possibly unconnected) input port, this hoists a
+/// whole channel's slice out of a *connected* input buffer once, before the
+/// per-sample loop. The channel index wraps modulo the buffer's channel count,
+/// so a mono input feeds every output channel.
+///
+/// Prefer it over hand-writing
+/// `buf.channel(ch % buf.num_channels()).samples()`.
+#[inline]
+pub fn channel_wrapped(buf: &AudioBuffer, ch: usize) -> &[f32] {
+    buf.channel(ch % buf.num_channels()).samples()
+}

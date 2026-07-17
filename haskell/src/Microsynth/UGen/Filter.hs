@@ -21,8 +21,8 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
 import Microsynth.Node (Node (..), readInput)
-import Microsynth.Numerics (tau)
-import Microsynth.Types (Sample (..), SampleRate (..))
+import Microsynth.Numerics (srSample, tau)
+import Microsynth.Types (Sample, SampleRate)
 import Microsynth.UGen.Common (bindPort, scanBlock2F)
 import Microsynth.UGen.Spec (UGenTag (..))
 
@@ -31,7 +31,7 @@ import Microsynth.UGen.Spec (UGenTag (..))
 -- return means no per-sample heap allocation.
 lpfCoeffs :: Sample -> Sample -> SampleRate -> (# Sample, Sample, Sample, Sample, Sample #)
 lpfCoeffs freq q sr =
-  let w0    = tau * freq / Sample (unSampleRate sr)
+  let w0    = tau * freq / srSample sr
       sinW0 = sin w0
       cosW0 = cos w0
       alpha = sinW0 / (2 * q)

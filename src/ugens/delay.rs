@@ -3,10 +3,10 @@
 //! - [`Delay`]: Simple read-only delay line.
 //! - [`FeedbackDelay`]: Delay line with feedback (output feeds back into input).
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
-use alloc::vec::Vec;
+use crate::ugens::delayline::DelayLine;
 
 /// Maximum delay time in seconds. Determines buffer size at init.
 const MAX_DELAY_SECS: f32 = 5.0;
@@ -15,8 +15,7 @@ const MAX_DELAY_SECS: f32 = 5.0;
 ///
 /// Inputs: in (signal), time (delay time in seconds, clamped to max).
 pub struct Delay {
-    buffer: Vec<f32>,
-    write_pos: usize,
+    line: DelayLine,
     sample_rate: f32,
 }
 
@@ -29,8 +28,7 @@ impl Default for Delay {
 impl Delay {
     pub fn new() -> Self {
         Delay {
-            buffer: Vec::new(),
-            write_pos: 0,
+            line: DelayLine::new(),
             sample_rate: 44100.0,
         }
     }
@@ -47,13 +45,11 @@ impl UGen for Delay {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (MAX_DELAY_SECS * context.sample_rate) as usize + 1;
-        self.buffer.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.line.resize(max_samples);
     }
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
+        self.line.clear();
     }
 
     fn process(
@@ -64,15 +60,17 @@ impl UGen for Delay {
     ) {
         let in_buf = inputs[0];
         let time_buf = inputs.get(1).copied();
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
+        if self.line.is_empty() {
             return;
         }
-        let max_delay_samples = (buf_len - 1) as f32;
+        let max_delay_samples = (self.line.len() - 1) as f32;
+
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.line.write_pos();
 
         for ch in 0..output.num_channels() {
-            let mut write_pos = self.write_pos;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            self.line.set_write_pos(start_pos);
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -81,25 +79,10 @@ impl UGen for Delay {
                     .min(max_delay_samples)
                     .max(0.0);
 
-                // Write current sample
-                self.buffer[write_pos] = in_ch[i];
-
-                // Read with linear interpolation
-                let delay_int = delay_samples as usize;
-                let frac = delay_samples - delay_int as f32;
-
-                let read_pos_a = (write_pos + buf_len - delay_int) % buf_len;
-                let read_pos_b = (write_pos + buf_len - delay_int - 1) % buf_len;
-
-                let a = self.buffer[read_pos_a];
-                let b = self.buffer[read_pos_b];
-                out[i] = a + frac * (b - a);
-
-                write_pos = (write_pos + 1) % buf_len;
-            }
-
-            if ch == 0 {
-                self.write_pos = write_pos;
+                // Write first: a delay of zero reads back this very sample.
+                self.line.write(in_ch[i]);
+                out[i] = self.line.read_interp(delay_samples);
+                self.line.advance();
             }
         }
     }
@@ -116,8 +99,7 @@ impl UGen for Delay {
 /// echo/delay effects. Use lower feedback values (0.3–0.6) for clean echoes,
 /// higher values for dub-style repeats.
 pub struct FeedbackDelay {
-    buffer: Vec<f32>,
-    write_pos: usize,
+    line: DelayLine,
     sample_rate: f32,
 }
 
@@ -130,8 +112,7 @@ impl Default for FeedbackDelay {
 impl FeedbackDelay {
     pub fn new() -> Self {
         FeedbackDelay {
-            buffer: Vec::new(),
-            write_pos: 0,
+            line: DelayLine::new(),
             sample_rate: 44100.0,
         }
     }
@@ -148,13 +129,11 @@ impl UGen for FeedbackDelay {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (MAX_DELAY_SECS * context.sample_rate) as usize + 1;
-        self.buffer.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.line.resize(max_samples);
     }
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
+        self.line.clear();
     }
 
     fn process(
@@ -166,15 +145,17 @@ impl UGen for FeedbackDelay {
         let in_buf = inputs[0];
         let time_buf = inputs.get(1).copied();
         let fb_buf = inputs.get(2).copied();
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
+        if self.line.is_empty() {
             return;
         }
-        let max_delay = (buf_len - 1) as f32;
+        let max_delay = (self.line.len() - 1) as f32;
+
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.line.write_pos();
 
         for ch in 0..output.num_channels() {
-            let mut write_pos = self.write_pos;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            self.line.set_write_pos(start_pos);
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -183,26 +164,12 @@ impl UGen for FeedbackDelay {
 
                 let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 
-                // Read from delay line with linear interpolation
-                let delay_int = delay_samples as usize;
-                let frac = delay_samples - delay_int as f32;
-                let read_a = (write_pos + buf_len - delay_int) % buf_len;
-                let read_b = (write_pos + buf_len - delay_int - 1) % buf_len;
-                let delayed =
-                    self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
-
                 // Output = input + feedback * delayed output
+                let delayed = self.line.read_interp(delay_samples);
                 let y = in_ch[i] + feedback * delayed;
 
-                // Write to delay line
-                self.buffer[write_pos] = y;
+                self.line.write_and_advance(y);
                 out[i] = y;
-
-                write_pos = (write_pos + 1) % buf_len;
-            }
-
-            if ch == 0 {
-                self.write_pos = write_pos;
             }
         }
     }

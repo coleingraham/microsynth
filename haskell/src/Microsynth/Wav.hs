@@ -10,6 +10,7 @@ module Microsynth.Wav
 import Data.ByteString.Builder
 import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int16)
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 import Microsynth.Types (Sample, SampleRate (..))
@@ -41,8 +42,13 @@ writeWav path sr channels =
       <> word16LE (fromIntegral bitsPerSample)
       <> string7 "data" <> word32LE (fromIntegral dataSize)
 
+    -- The channel list is indexed once per interleaved sample, so it is hoisted
+    -- into a boxed vector up front: @!!@ here would be O(channels) /per sample/,
+    -- which is invisible at 2 channels and quadratic at many.
+    chans = V.fromList channels
+
     samples = mconcat
-      [ int16LE (toPcm ((channels !! ch) VU.! i))
+      [ int16LE (toPcm (V.unsafeIndex chans ch VU.! i))
       | i  <- [0 .. numSamples - 1]
       , ch <- [0 .. numCh - 1]
       ]

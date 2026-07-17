@@ -1,17 +1,14 @@
 //! SynthDef IR: decompile/compile round-trip renders byte-identically to the
 //! direct DSL compile, plus validation coverage.
 
-use microsynth::dsl::compiler::{UGenRegistry, compile_synthdef};
+use microsynth::dsl::compiler::compile_synthdef;
 use microsynth::dsl::lexer::tokenize;
 use microsynth::dsl::parser::Parser;
 use microsynth::ir::{IrEdge, IrNode, IrSynthDef, RenderSpec, SynthDefClass, from_decl, render_ir};
-use microsynth::{Engine, EngineConfig, SynthDef, register_builtins};
+use microsynth::{Engine, EngineConfig, SynthDef};
 
-fn registry() -> UGenRegistry {
-    let mut reg = UGenRegistry::new();
-    register_builtins(&mut reg);
-    reg
-}
+mod common;
+use common::builtin_registry as registry;
 
 /// Parse one `synthdef` source into a single declaration.
 fn parse_one(src: &str) -> microsynth::dsl::ast::SynthDefDecl {

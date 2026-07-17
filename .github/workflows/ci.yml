@@ -44,6 +44,38 @@ jobs:
       - name: Run doctests
         run: cargo test --doc
 
+  haskell:
+    name: Haskell (build & test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: haskell
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GHC & cabal
+        uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: '9.6.7'
+          cabal-version: '3.12.1.0'
+      - name: Resolve dependencies
+        run: cabal build all --dry-run
+      # cabal's plan.json (written by --dry-run above) is the precise cache key:
+      # it changes only when a dependency actually changes.
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ runner.os }}-ghc${{ steps.setup.outputs.ghc-version }}-${{ hashFiles('haskell/dist-newstyle/cache/plan.json') }}
+          restore-keys: ${{ runner.os }}-ghc${{ steps.setup.outputs.ghc-version }}-
+      - name: Build
+        run: cabal build all
+      - name: Test
+        # Includes the golden byte-output renders. Note demo/pad/poly are pinned
+        # bit-exactly; `tone` is checked against an analytic sine because a raw
+        # sine oscillator is not bit-reproducible across libm implementations.
+        run: cabal test all --test-show-details=direct
+
   wasm:
     name: WASM build
     runs-on: ubuntu-latest

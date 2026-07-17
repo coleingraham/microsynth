@@ -57,8 +57,8 @@ import qualified Data.Map.Strict as Map
 import Microsynth.Signal (BinOp (..), UGenKind (..))
 import Microsynth.SynthDef (NodeDef (..), SynthDef (..), mkSynthDef)
 import Microsynth.Types
-  (IRVersion (..), NodeId (..), ParamName, Sample, SynthName)
-import Microsynth.UGen.Spec (serTag)
+  (IRVersion (..), KindTag (..), NodeId (..), ParamName, Sample, SynthName)
+import Microsynth.UGen.Spec (UGenTag (..), serTag, tagFromSerTag)
 
 -- | The IR schema version 'toIR' emits. Bumped when the wire shape changes.
 currentIRVersion :: IRVersion
@@ -144,33 +144,47 @@ kindArgs (KParam n d) = ["args" .= object ["name" .= n, "default" .= d]]
 kindArgs (KBinOp op)  = ["args" .= object ["op" .= binOpTag op]]
 kindArgs _            = []
 
+-- | The wire name of each arithmetic operator — the one place these four strings
+-- are written. Total, so adding a 'BinOp' constructor is a compile error here
+-- rather than a decoder that silently rejects it. 'parseBinOp' is derived from
+-- this, mirroring Rust's @BINOPS@ table in @src/ir/mod.rs@.
 binOpTag :: BinOp -> String
 binOpTag Add = "Add"
 binOpTag Sub = "Sub"
 binOpTag Mul = "Mul"
 binOpTag Div = "Div"
 
-parseKind :: String -> Maybe Object -> Parser UGenKind
-parseKind t margs = case t of
-  "Const"  -> withArgs $ \a -> KConst <$> a .: "value"
-  "Param"  -> withArgs $ \a -> KParam <$> a .: "name" <*> a .: "default"
-  "BinOp"  -> withArgs $ \a -> KBinOp <$> (a .: "op" >>= parseBinOp)
-  "Neg"    -> pure KNeg
-  "SinOsc" -> pure KSinOsc
-  "Saw"    -> pure KSaw
-  "Lpf"    -> pure KLpf
-  "Perc"   -> pure KPerc
-  _        -> fail ("unknown UGen kind: " ++ t)
+-- | Decode a node's @kind@ tag and @args@ into a typed 'UGenKind'.
+--
+-- The tag is resolved through 'tagFromSerTag' — the descriptor registry's own
+-- reverse lookup — rather than by re-matching the tag literals here. Encoder
+-- ('serTag') and decoder therefore read the same table, and the only thing this
+-- function still decides is what each kind's @args@ /mean/, which is genuinely
+-- IR-side knowledge. Matching on the nullary 'UGenTag' also makes the arms
+-- exhaustively checked: a new UGen fails to compile until it is handled.
+parseKind :: KindTag -> Maybe Object -> Parser UGenKind
+parseKind t margs = case tagFromSerTag t of
+  Nothing  -> fail ("unknown UGen kind: " ++ unKindTag t)
+  Just tag -> case tag of
+    TConst  -> withArgs $ \a -> KConst <$> a .: "value"
+    TParam  -> withArgs $ \a -> KParam <$> a .: "name" <*> a .: "default"
+    TBinOp  -> withArgs $ \a -> KBinOp <$> (a .: "op" >>= parseBinOp)
+    TNeg    -> pure KNeg
+    TSinOsc -> pure KSinOsc
+    TSaw    -> pure KSaw
+    TLpf    -> pure KLpf
+    TPerc   -> pure KPerc
   where
-    withArgs f = maybe (fail ("kind " ++ t ++ " requires \"args\"")) f margs
+    withArgs f =
+      maybe (fail ("kind " ++ unKindTag t ++ " requires \"args\"")) f margs
 
+-- | The inverse of 'binOpTag', derived from it over the whole 'BinOp'
+-- enumeration so the two directions cannot drift apart.
 parseBinOp :: String -> Parser BinOp
-parseBinOp s = case s of
-  "Add" -> pure Add
-  "Sub" -> pure Sub
-  "Mul" -> pure Mul
-  "Div" -> pure Div
-  _     -> fail ("unknown BinOp: " ++ s)
+parseBinOp s =
+  case lookup s [ (binOpTag op, op) | op <- [minBound .. maxBound] ] of
+    Just op -> pure op
+    Nothing -> fail ("unknown BinOp: " ++ s)
 
 -- --- Domain <-> IR ---
 

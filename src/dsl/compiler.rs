@@ -1,6 +1,6 @@
 //! Compiles DSL AST into SynthDef templates.
 
-use crate::dsl::ast::{BinOp, Expr, SynthDefDecl};
+use crate::dsl::ast::{Expr, SynthDefDecl};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory};
 use crate::synthdef::{SynthDef, SynthDefBuilder};
 use crate::ugens;
@@ -15,8 +15,7 @@ use core::fmt;
 pub struct UGenEntry {
     /// Factory that creates a fresh instance.
     pub factory: fn() -> Box<dyn UGen>,
-    /// Coarse category of this UGen (from its `spec()`; `Utility` when
-    /// registered via [`UGenRegistry::register`] with explicit port specs).
+    /// Coarse category of this UGen, always read from its own `spec()`.
     pub category: UGenCategory,
     /// Input port names (in order). The compiler maps positional args to these.
     pub input_names: Vec<&'static str>,
@@ -37,11 +36,17 @@ impl UGenRegistry {
         }
     }
 
-    /// Register a UGen type.
+    /// Register a UGen type with explicit port specs.
     ///
     /// `name` is the identifier used in DSL source (e.g. "sinOsc").
     /// `factory` creates a default instance.
     /// `inputs` and `outputs` describe the port specs.
+    ///
+    /// Prefer [`register_spec`](Self::register_spec), which derives the ports
+    /// from the UGen itself. This lower-level form is for callers that must
+    /// supply ports that differ from `spec()` (e.g. test-only UGens). The
+    /// category is still read from the UGen's own `spec()` — it is never
+    /// something the call site can get wrong.
     pub fn register(
         &mut self,
         name: impl Into<String>,
@@ -51,11 +56,12 @@ impl UGenRegistry {
     ) {
         let input_names = inputs.iter().map(|i| i.name).collect();
         let output_names = outputs.iter().map(|o| o.name).collect();
+        let category = factory().spec().category;
         self.entries.insert(
             name.into(),
             UGenEntry {
                 factory,
-                category: UGenCategory::Utility,
+                category,
                 input_names,
                 output_names,
             },
@@ -223,12 +229,7 @@ impl<'a> Compiler<'a> {
                 let lhs_idx = self.compile_expr(lhs)?;
                 let rhs_idx = self.compile_expr(rhs)?;
 
-                let kind = match op {
-                    BinOp::Add => ugens::BinOpKind::Add,
-                    BinOp::Sub => ugens::BinOpKind::Sub,
-                    BinOp::Mul => ugens::BinOpKind::Mul,
-                    BinOp::Div => ugens::BinOpKind::Div,
-                };
+                let kind = op.kind();
 
                 let node_idx = self
                     .builder

@@ -3,7 +3,7 @@
 //! Single-sideband frequency shifting via Hilbert transform for Leslie speaker
 //! simulation, creative detuning, and sub bass thickening.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use core::f32::consts::TAU;
@@ -122,7 +122,7 @@ impl UGen for FreqShift {
             let mut chain_i = self.chain_i;
             let mut chain_q = self.chain_q;
             let mut osc_phase = self.osc_phase;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {

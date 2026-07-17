@@ -46,6 +46,7 @@ pub mod bitcrush;
 pub mod bl_oscillators;
 pub mod bus;
 pub mod delay;
+pub(crate) mod delayline;
 pub mod distortion;
 pub mod envelopes;
 pub mod filters;

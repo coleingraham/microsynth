@@ -7,10 +7,13 @@
 //! - Sample playback (PlayBuf)
 //! - Bus mixing
 
-use microsynth::dsl::{self, UGenRegistry};
+use microsynth::dsl;
 use microsynth::ugens;
 use microsynth::*;
 use std::sync::Arc;
+
+mod common;
+use common::builtin_registry;
 
 fn make_engine(block_size: usize) -> Engine {
     Engine::new(EngineConfig {
@@ -19,19 +22,13 @@ fn make_engine(block_size: usize) -> Engine {
     })
 }
 
-fn make_registry() -> UGenRegistry {
-    let mut reg = UGenRegistry::new();
-    register_builtins(&mut reg);
-    reg
-}
-
 // ============================================================================
 // Dynamic Parameter Control
 // ============================================================================
 
 #[test]
 fn test_set_param_changes_const_value() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -54,7 +51,7 @@ fn test_set_param_changes_const_value() {
 
 #[test]
 fn test_set_param_returns_false_for_unknown_param() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -67,7 +64,7 @@ fn test_set_param_returns_false_for_unknown_param() {
 
 #[test]
 fn test_voice_param_control() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile(
         "synthdef test freq=440.0 amp=1.0 = sinOsc freq 0.0 * amp",
         &registry,
@@ -95,7 +92,7 @@ fn test_voice_param_control() {
 
 #[test]
 fn test_perc_envelope_done_action() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     // Very short percussive envelope
     let defs = dsl::compile(
         "synthdef hit = sinOsc 440.0 0.0 * perc 0.001 0.01",
@@ -124,7 +121,7 @@ fn test_perc_envelope_done_action() {
 
 #[test]
 fn test_asr_done_after_release() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile(
         "synthdef pad gate=1.0 = sinOsc 440.0 0.0 * asr gate 0.001 0.01",
         &registry,
@@ -195,7 +192,7 @@ fn test_perc_envelope_shape() {
 
 #[test]
 fn test_adsr_envelope_shape() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile(
         "synthdef test gate=1.0 = adsr gate 0.001 0.005 0.5 0.01",
         &registry,
@@ -312,7 +309,7 @@ fn test_lag_smooths_step() {
 
 #[test]
 fn test_clip_clamps_signal() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile(
         "synthdef test = clip (sinOsc 440.0 0.0) (-0.5) 0.5",
         &registry,
@@ -336,7 +333,7 @@ fn test_clip_clamps_signal() {
 
 #[test]
 fn test_scheduler_dispatches_events() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile(
         "synthdef tone freq=440.0 gate=1.0 = sinOsc freq 0.0 * asr gate 0.01 0.01",
         &registry,
@@ -373,7 +370,7 @@ fn test_scheduler_dispatches_events() {
 
 #[test]
 fn test_scheduler_param_change() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -499,7 +496,7 @@ fn test_playbuf_looping() {
 
 #[test]
 fn test_bus_sums_multiple_voices() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -523,7 +520,7 @@ fn test_bus_sums_multiple_voices() {
 
 #[test]
 fn test_bus_voice_removal() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -550,14 +547,14 @@ fn test_bus_voice_removal() {
 
 #[test]
 fn test_dsl_perc_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile("synthdef hit = sinOsc 440.0 0.0 * perc 0.01 0.1", &registry);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_dsl_adsr_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile(
         "synthdef pad gate=1.0 = sinOsc 440.0 0.0 * adsr gate 0.01 0.1 0.7 0.5",
         &registry,
@@ -567,14 +564,14 @@ fn test_dsl_adsr_compiles() {
 
 #[test]
 fn test_dsl_impulse_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile("synthdef clock = impulse 4.0", &registry);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_dsl_lag_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile(
         "synthdef smooth freq=440.0 = sinOsc (lag freq 0.01) 0.0",
         &registry,
@@ -584,7 +581,7 @@ fn test_dsl_lag_compiles() {
 
 #[test]
 fn test_dsl_clip_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile(
         "synthdef clipped = clip (sinOsc 440.0 0.0) (-0.5) 0.5",
         &registry,
@@ -700,7 +697,7 @@ fn test_wavetable_frequency_affects_pitch() {
 
 #[test]
 fn test_dsl_wavetable_compiles() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let result = dsl::compile("synthdef wt freq=440.0 = waveTable freq", &registry);
     assert!(
         result.is_ok(),
@@ -715,7 +712,7 @@ fn test_dsl_wavetable_compiles() {
 
 #[test]
 fn test_param_glide_ramps_value() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -760,7 +757,7 @@ fn test_param_glide_ramps_value() {
 
 #[test]
 fn test_voice_param_glide() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef test amp=0.5 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
@@ -778,7 +775,7 @@ fn test_voice_param_glide() {
 
 #[test]
 fn test_scheduled_param_glide() {
-    let registry = make_registry();
+    let registry = builtin_registry();
     let defs = dsl::compile("synthdef test amp=0.0 = sinOsc 440.0 0.0 * amp", &registry).unwrap();
 
     let mut engine = make_engine(64);
