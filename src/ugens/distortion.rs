@@ -3,7 +3,7 @@
 //! Soft clipping, overdrive, and wavefolder effects for adding harmonic saturation.
 //! These complement the hard `Clip` UGen in `utility`.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -57,7 +57,7 @@ impl UGen for SoftClip {
         let drive_buf = inputs.get(1).copied();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -133,7 +133,7 @@ impl UGen for Overdrive {
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -228,7 +228,7 @@ impl UGen for WaveFolder {
         let half_pi = core::f32::consts::FRAC_PI_2;
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {

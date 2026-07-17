@@ -32,16 +32,32 @@ native (desktop/mobile).
 ```
 src/
 ├── lib.rs          # no_std, public re-exports
-├── buffer.rs       # Block (stack-allocated [f32; 64]) and AudioBuffer (multi-channel)
+├── buffer.rs       # Block (stack-allocated [f32; MAX_BLOCK_SIZE]), AudioBuffer
+│                   #   (multi-channel), read_input/channel_wrapped input helpers
 ├── context.rs      # ProcessContext (sample_rate, block_size, time) and Rate enum
-├── node.rs         # UGen trait, NodeId, InputSpec, OutputSpec, UGenSpec
+├── node.rs         # UGen trait, NodeId, InputSpec, OutputSpec, UGenSpec, UGenCategory
 ├── graph.rs        # AudioGraph: DAG, topo sort, pull render, runtime modification
 ├── synthdef.rs     # SynthDef (immutable template), SynthDefBuilder, Synth (live instance)
 ├── engine.rs       # Engine: owns graph + context, drives rendering
+├── scheduler.rs    # Scheduler: timed events, VoiceId, EventAction, voice lifecycle
+├── routing.rs      # RoutingGraph: audio buses (BusId) and effect chains (EffectId)
+├── musical_time.rs # MusicalPosition / TimeConfig: bars, steps, tick offsets, BPM
+├── tuning.rs       # TuningTable, midi<->hz, cents — incl. non-12TET scales
+├── sample.rs       # Sample, SampleBank, SampleId — loaded audio for playback UGens
+├── web.rs          # #[cfg(wasm32)] WASM/AudioWorklet backend (feature = "web")
+├── bin/
+│   └── microsynth-cli.rs  # CLI: render a .synth file to WAV (feature = "std")
+├── ir/             # Versioned, serializable SynthDef IR (feature = "ir")
+│   ├── mod.rs      # IrSynthDef/IrNode/IrEdge/IrParam, from_decl, compile, validate
+│   ├── serialize.rs# Binary codec (canonical) + JSON, content_hash
+│   └── render.rs   # RenderSpec + render_ir offline conveniences (feature = "std")
 ├── ugens/          # Built-in UGens (one file per category)
 │   ├── mod.rs      # Re-exports + register_builtins (DSL registration table)
 │   ├── macros.rs   # ugen_spec! (and other shared authoring macros)
-│   ├── math.rs     # Const, BinOpUGen, NegUGen, Param
+│   ├── delayline.rs# pub(crate) DelayLine — shared interpolating delay primitive
+│   ├── math.rs     # Const, Param, BinOpUGen, NegUGen
+│   ├── bus.rs      # Bus: dynamic-arity voice summing
+│   ├── rng.rs      # pub(crate) Rng — deterministic PRNG for the noise UGens
 │   ├── oscillators.rs, filters.rs, envelopes.rs, ...  # the DSP library
 │   └── ...
 ├── spectral/       # Frequency-domain processing primitives
@@ -65,12 +81,20 @@ src/
 - `AudioBuffer` — `Vec<Block>`, multi-channel, pre-allocated
 - `ProcessContext` — sample_rate, block_size, sample_offset
 - `Rate` — `Audio` | `Control`
-- `UGen` trait — `spec()`, `init()`, `reset()`, `process()`, `output_channels()`
+- `UGenCategory` — the taxonomy tag on every `UGenSpec` (`Oscillator`, `Filter`,
+  `Envelope`, `Effect`, `Math`, `Utility`, …); downstream tooling keys on it
+- `UGen` trait — `spec()`, `init()`, `reset()`, `process()`, `output_channels()`,
+  plus `set_value`/`set_target` (runtime params), `reseed_noise`, `is_done`
 - `AudioGraph` — nodes + edges, topo sort, pull-based `render()`
 - `SynthDef` — immutable template with `UGenFactory` closures
 - `SynthDefBuilder` — builds SynthDefs
+- `SynthParam` — a declared parameter: name, default, and the node/input it feeds
 - `Synth` — tracks live NodeIds for a SynthDef instance
 - `Engine` — top-level API, owns graph + context
+- `Scheduler` / `VoiceId` — timed events and voice lifecycle
+- `RoutingGraph` / `BusId` / `EffectId` — buses and effect chains
+- `SampleBank`, `TuningTable`, `MusicalPosition` — sample, tuning, and time data
+- `IrSynthDef` — the inspectable/serializable form of a compiled graph (`feature = "ir"`)
 
 ## DSL
 
@@ -83,7 +107,7 @@ to `SynthDef` templates via: tokenize → parse → compile.
 -- Parameters with defaults, function application by juxtaposition
 synthdef pad freq=440.0 amp=0.5 =
   let osc = sinOsc freq 0.0
-  let env = envGen 0.01 1.0
+  let env = perc 0.01 1.0
   osc * env * amp
 
 -- Inline let...in variant
@@ -122,17 +146,22 @@ may map to one type (`sinTable`/`sawTable`/… → `WaveTable`).
   parser, keeping the zero-dependency policy.
 - **`UGenFactory` is `Box<dyn Fn>` not `fn()`** — closures can capture parsed
   values (e.g. constant defaults).
-- **Parameters become Const nodes** — each DSL parameter creates a `Const` UGen
-  outputting its default value. Runtime parameter modification is future work.
+- **Parameters become Param nodes** — each DSL parameter creates a `Param` UGen
+  seeded with its declared default. Unlike a `Const`, a `Param` can be driven at
+  runtime: `Engine::set_param` sets it instantly and `set_param_glide` ramps it
+  (there are `set_voice_param`/`set_effect_param` variants for a single voice or
+  an effect slot), backed by `UGen::set_value`/`set_target`.
 - **Positional arguments** — `sinOsc freq 0.0` maps arguments to inputs in
   declaration order per the UGen's `InputSpec` list.
 
 ## Authoring a new UGen
 
-The UGen layer was deduplicated (see the `claude/rust-refactor-review` history):
-port specs, the per-sample input read, and the registration table each had one
-copy per UGen. Three shared abstractions now hold that logic in one place —
-**use them** when adding a UGen so the duplication does not creep back:
+The UGen layer was deduplicated (see the `claude/rust-refactor-review` history,
+and a later sweep that extended the same idea): port specs, the per-sample input
+read, the block-slice read, the registration table, the interpolating delay
+line, and whole families of near-identical UGens each had one copy per UGen.
+Shared abstractions now hold that logic in one place — **use them** when adding a
+UGen so the duplication does not creep back:
 
 1. **Define** the struct plus `new()`/`Default` in the right `src/ugens/*.rs`
    file (grouped by category).
@@ -142,12 +171,24 @@ copy per UGen. Three shared abstractions now hold that logic in one place —
 
    ```rust
    impl UGen for MyOsc {
-       ugen_spec!("MyOsc", inputs = ["freq", "amp"], outputs = ["out"]);
+       ugen_spec!(
+           "MyOsc",
+           category = Oscillator,
+           inputs = ["freq", "amp"],
+           outputs = ["out"]
+       );
        fn init(&mut self, ctx: &ProcessContext) { /* ... */ }
        fn reset(&mut self) { /* ... */ }
        fn process(&mut self, /* ... */) { /* ... */ }
    }
    ```
+
+   **Always pass `category`.** It is the `UGenCategory` tag on the spec that
+   downstream tooling keys on. The macro has a no-category arm, but it silently
+   defaults to `UGenCategory::Utility` — so omitting it does not fail loudly, it
+   just files your UGen in the wrong drawer. Pick the variant that matches what
+   the UGen *does* (`Oscillator`, `Filter`, `Envelope`, `Effect`, `Math`,
+   `Utility`, …), and add a case to `tests/categories.rs`.
 
    Only hand-write `spec()` if the UGen needs `Rate::Control` ports, or computes
    its name/ports at runtime (see `BinOpUGen`, which names itself from its
@@ -161,7 +202,20 @@ copy per UGen. Three shared abstractions now hold that logic in one place —
    let freq = read_input(freq_buf, ch, i, 440.0).clamp(20.0, nyquist);
    ```
 
-4. **Register for the DSL with `register_spec`** in `register_builtins`
+   When you need the *whole* channel slice for a block (not one sample), use its
+   block-level counterpart `channel_wrapped(buf, ch)` (also in `buffer.rs`)
+   rather than re-spelling `buf.channel(ch % buf.num_channels()).samples()`.
+
+4. **Build any delay-based effect on `DelayLine`** (`ugens/delayline.rs`), never
+   a hand-rolled `Vec<f32>` + write cursor. It owns the circular buffer, the
+   wrap arithmetic, and fractional (linearly-interpolated) reads via
+   `read_interp` — the piece that is easy to get subtly wrong (an off-by-one in
+   the interpolation index silently quantizes the delay to whole samples). Comb
+   and feedback topologies read-then-write with `write_and_advance`; plain taps
+   write-then-read with `write` + `advance`. Every echo, chorus, flanger,
+   ping-pong, reverb comb, and the Haas widener share this one type.
+
+5. **Register for the DSL with `register_spec`** in `register_builtins`
    (`ugens/mod.rs`) — pass only the DSL name and a factory. Ports are derived
    from the UGen's `spec()`; never restate `InputSpec`/`OutputSpec` here:
 
@@ -169,9 +223,11 @@ copy per UGen. Three shared abstractions now hold that logic in one place —
    reg.register_spec("myOsc", || Box::new(MyOsc::new()));
    ```
 
-5. **For a family of variants** that differ only in a small formula (like the
+6. **For a family of variants** that differ only in a small formula (like the
    biquad LPF/HPF/BPF/Notch/Allpass, which differ only in a coefficient function
    and a default), write a small local `macro_rules!` that stamps each concrete
-   named type. See `biquad_ugen!` in `filters.rs` as the template — a macro is
-   preferred over a generic type so the registry and `pub use` re-exports keep
-   referring to each variant by name.
+   named type — a macro is preferred over a generic type so the registry and
+   `pub use` re-exports keep referring to each variant by name. Existing
+   templates to copy: `biquad_ugen!` (`filters.rs`), `phase_osc!`
+   (`oscillators.rs`) and `bl_osc!` (`bl_oscillators.rs`) for phase-accumulator
+   oscillators, and `ramp_ugen!` / `perc_ugen!` (`envelopes.rs`) for envelopes.

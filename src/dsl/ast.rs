@@ -66,6 +66,21 @@ pub enum BinOp {
     Div,
 }
 
+impl BinOp {
+    /// The engine [`BinOpKind`](crate::ugens::BinOpKind) this operator compiles
+    /// to. The single source of truth for the mapping: the DSL compiler and the
+    /// IR decompiler both go through here rather than restating it.
+    pub fn kind(self) -> crate::ugens::BinOpKind {
+        use crate::ugens::BinOpKind;
+        match self {
+            BinOp::Add => BinOpKind::Add,
+            BinOp::Sub => BinOpKind::Sub,
+            BinOp::Mul => BinOpKind::Mul,
+            BinOp::Div => BinOpKind::Div,
+        }
+    }
+}
+
 /// An expression in the DSL.
 #[derive(Debug, Clone)]
 pub enum Expr {

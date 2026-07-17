@@ -2,30 +2,30 @@
 //!
 //! Tools for stereo image manipulation and stereo delay effects.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
-use alloc::vec::Vec;
+use crate::ugens::delayline::DelayLine;
 
 // --- StereoWidth ---
 
 /// Stereo width / Haas effect processor.
 ///
 /// Takes a mono input and produces a stereo output with controllable width.
-/// Uses a short delay on one channel (Haas effect) combined with mid-side
-/// processing to widen or narrow the stereo image.
+/// The left channel is the dry signal; the right channel blends the dry signal
+/// with a short, fractionally-interpolated Haas delay of it. The delay time and
+/// the blend both scale with `width`, so the stereo image widens continuously.
 ///
 /// Inputs:
 /// - `in`: audio signal (mono)
-/// - `width`: stereo width (default 0.5, range 0.0–1.0).
-///   0.0 = mono, 0.5 = natural width, 1.0 = maximum width.
-///   Values above 0.5 introduce Haas delay for extra-wide imaging.
+/// - `width`: stereo width (default 0.5, range 0.0–1.0). At 0.0 both channels
+///   carry the dry signal (mono); as it rises, the right channel's Haas delay
+///   grows from 0 up to 25 ms and mixes in proportionally.
 ///
 /// Output: 2-channel stereo signal.
 pub struct StereoWidth {
-    /// Short delay buffer for Haas effect on right channel.
-    delay_buf: Vec<f32>,
-    write_pos: usize,
+    /// Short delay line for the Haas effect on the right channel.
+    delay: DelayLine,
     sample_rate: f32,
 }
 
@@ -38,8 +38,7 @@ impl Default for StereoWidth {
 impl StereoWidth {
     pub fn new() -> Self {
         StereoWidth {
-            delay_buf: Vec::new(),
-            write_pos: 0,
+            delay: DelayLine::new(),
             sample_rate: 44100.0,
         }
     }
@@ -59,13 +58,11 @@ impl UGen for StereoWidth {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (HAAS_MAX_DELAY * context.sample_rate) as usize + 2;
-        self.delay_buf.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.delay.resize(max_samples);
     }
 
     fn reset(&mut self) {
-        self.delay_buf.fill(0.0);
-        self.write_pos = 0;
+        self.delay.clear();
     }
 
     fn output_channels(&self, _input_channels: &[usize]) -> usize {
@@ -80,54 +77,34 @@ impl UGen for StereoWidth {
     ) {
         let in_buf = inputs[0];
         let width_buf = inputs.get(1).copied();
-        let buf_len = self.delay_buf.len();
-        if buf_len == 0 {
+        if self.delay.is_empty() {
             return;
         }
+        // read_interp reads at delay_samples and delay_samples + 1, so the
+        // largest safe delay is len - 1.
+        let max_delay = (self.delay.len() - 1) as f32;
 
         let block_size = output.block_size();
-        let mut write_pos = self.write_pos;
 
         for i in 0..block_size {
-            let x = in_buf.channel(0).samples()[i];
-            let width = width_buf
-                .map(|b| b.channel(0).samples()[i])
-                .unwrap_or(0.5)
-                .clamp(0.0, 1.0);
+            let x = read_input(Some(in_buf), 0, i, 0.0);
+            let width = read_input(width_buf, 0, i, 0.5).clamp(0.0, 1.0);
 
-            // Write to delay buffer
-            self.delay_buf[write_pos] = x;
+            // Write first, so a delay of zero reads back this very sample.
+            self.delay.write(x);
 
-            // Haas delay time scales with width (0ms at width=0, 25ms at width=1)
-            let delay_secs = width * 0.025;
-            let delay_samples = (delay_secs * self.sample_rate)
-                .min((buf_len - 2) as f32)
-                .max(0.0);
-
-            // Read delayed sample with linear interpolation
-            let d_int = delay_samples as usize;
-            let d_frac = delay_samples - d_int as f32;
-            let delayed = if d_int == 0 && d_frac < 0.001 {
-                x
-            } else {
-                let ra = (write_pos + buf_len - d_int) % buf_len;
-                let rb = (write_pos + buf_len - d_int.max(1)) % buf_len;
-                self.delay_buf[ra] + d_frac * (self.delay_buf[rb] - self.delay_buf[ra])
-            };
+            // Haas delay time scales with width (0 ms at width=0, 25 ms at width=1).
+            let delay_samples = (width * 0.025 * self.sample_rate).clamp(0.0, max_delay);
+            let delayed = self.delay.read_interp(delay_samples);
 
             // Left channel: dry signal
             // Right channel: delayed signal (Haas effect)
             // At width=0 both channels get the same signal (mono)
-            let left = x;
-            let right = x * (1.0 - width) + delayed * width;
+            output.channel_mut(0).samples_mut()[i] = x;
+            output.channel_mut(1).samples_mut()[i] = x * (1.0 - width) + delayed * width;
 
-            output.channel_mut(0).samples_mut()[i] = left;
-            output.channel_mut(1).samples_mut()[i] = right;
-
-            write_pos = (write_pos + 1) % buf_len;
+            self.delay.advance();
         }
-
-        self.write_pos = write_pos;
     }
 }
 
@@ -146,10 +123,8 @@ impl UGen for StereoWidth {
 ///
 /// Output: 2-channel stereo signal.
 pub struct PingPongDelay {
-    buf_l: Vec<f32>,
-    buf_r: Vec<f32>,
-    write_pos_l: usize,
-    write_pos_r: usize,
+    line_l: DelayLine,
+    line_r: DelayLine,
     sample_rate: f32,
 }
 
@@ -162,10 +137,8 @@ impl Default for PingPongDelay {
 impl PingPongDelay {
     pub fn new() -> Self {
         PingPongDelay {
-            buf_l: Vec::new(),
-            buf_r: Vec::new(),
-            write_pos_l: 0,
-            write_pos_r: 0,
+            line_l: DelayLine::new(),
+            line_r: DelayLine::new(),
             sample_rate: 44100.0,
         }
     }
@@ -185,17 +158,13 @@ impl UGen for PingPongDelay {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (PP_MAX_DELAY * context.sample_rate) as usize + 1;
-        self.buf_l.resize(max_samples, 0.0);
-        self.buf_r.resize(max_samples, 0.0);
-        self.write_pos_l = 0;
-        self.write_pos_r = 0;
+        self.line_l.resize(max_samples);
+        self.line_r.resize(max_samples);
     }
 
     fn reset(&mut self) {
-        self.buf_l.fill(0.0);
-        self.buf_r.fill(0.0);
-        self.write_pos_l = 0;
-        self.write_pos_r = 0;
+        self.line_l.clear();
+        self.line_r.clear();
     }
 
     fn output_channels(&self, _input_channels: &[usize]) -> usize {
@@ -212,15 +181,12 @@ impl UGen for PingPongDelay {
         let time_buf = inputs.get(1).copied();
         let fb_buf = inputs.get(2).copied();
         let mix_buf = inputs.get(3).copied();
-        let buf_len = self.buf_l.len();
-        if buf_len == 0 {
+        if self.line_l.is_empty() {
             return;
         }
-        let max_delay = (buf_len - 1) as f32;
+        let max_delay = (self.line_l.len() - 1) as f32;
 
         let block_size = output.block_size();
-        let mut wp_l = self.write_pos_l;
-        let mut wp_r = self.write_pos_r;
 
         for i in 0..block_size {
             let x = in_buf.channel(0).samples()[i];
@@ -238,32 +204,19 @@ impl UGen for PingPongDelay {
                 .clamp(0.0, 1.0);
 
             let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
-            let d_int = delay_samples as usize;
-            let d_frac = delay_samples - d_int as f32;
 
-            // Read from left delay
-            let ra_l = (wp_l + buf_len - d_int) % buf_len;
-            let rb_l = (wp_l + buf_len - d_int - 1) % buf_len;
-            let del_l = self.buf_l[ra_l] + d_frac * (self.buf_l[rb_l] - self.buf_l[ra_l]);
-
-            // Read from right delay
-            let ra_r = (wp_r + buf_len - d_int) % buf_len;
-            let rb_r = (wp_r + buf_len - d_int - 1) % buf_len;
-            let del_r = self.buf_r[ra_r] + d_frac * (self.buf_r[rb_r] - self.buf_r[ra_r]);
+            // Read both delays before writing either: the cross-feed below
+            // depends on the pre-write values.
+            let del_l = self.line_l.read_interp(delay_samples);
+            let del_r = self.line_r.read_interp(delay_samples);
 
             // Cross-feed: input goes to left, left output feeds right, right feeds left
-            self.buf_l[wp_l] = x + feedback * del_r;
-            self.buf_r[wp_r] = feedback * del_l;
+            self.line_l.write_and_advance(x + feedback * del_r);
+            self.line_r.write_and_advance(feedback * del_l);
 
             // Output
             output.channel_mut(0).samples_mut()[i] = (1.0 - mix) * x + mix * del_l;
             output.channel_mut(1).samples_mut()[i] = (1.0 - mix) * x + mix * del_r;
-
-            wp_l = (wp_l + 1) % buf_len;
-            wp_r = (wp_r + 1) % buf_len;
         }
-
-        self.write_pos_l = wp_l;
-        self.write_pos_r = wp_r;
     }
 }

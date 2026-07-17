@@ -7,7 +7,9 @@ representative set of UGens, so the design can be evaluated and benchmarked
 against the Rust original. See [`DESIGN.md`](DESIGN.md) for the full
 Rust → Haskell mapping and rationale, and [`COEXISTENCE.md`](COEXISTENCE.md) for
 a proposed architecture where Haskell authors instruments and Rust deploys them
-via a shared SynthDef IR — aimed at human and AI authoring workflows.
+via a shared SynthDef IR — aimed at human and AI authoring workflows. (The IR
+itself is now half-built on both sides but **not yet shared**; COEXISTENCE.md
+tracks what is real versus intended.)
 
 ## The idea
 
@@ -38,6 +40,7 @@ Two layers, mirroring Rust's "immutable SynthDef vs. mutable graph" split:
 
 | Area | Modules | Ported from |
 |---|---|---|
+| Domain newtypes (`Sample`, `SampleRate`, `NodeId`, …) | `Types` | — (Haskell-side type safety) |
 | Buffers (unboxed mutable blocks) | `Buffer` | `buffer.rs` |
 | UGen abstraction (state-in-closure) | `Node` | `node.rs` (`trait UGen`) |
 | Signal EDSL (`Num`/`Fractional`) | `Signal` | replaces `dsl/*` |
@@ -45,12 +48,21 @@ Two layers, mirroring Rust's "immutable SynthDef vs. mutable graph" split:
 | Kahn topological sort | `Graph` | `graph.rs` |
 | Offline block render (in `ST`) | `Engine` | `engine.rs` |
 | 16-bit PCM WAV writer | `Wav` | `bin/microsynth-cli.rs` |
+| UGen descriptor registry (kind tags, port names + defaults) | `UGen.Spec` | `node.rs` (`spec()`), `ugens/mod.rs` (`register_spec`) |
+| Shared DSP constants + block combinators | `Numerics`, `UGen.Common` | `ugens/macros.rs`, `buffer.rs` (`read_input`) |
 | UGens: const/binop/neg, sinOsc, saw, lpf (RBJ biquad), perc | `UGen.*` | `ugens/*` |
+| Graph introspection (named ports, kind tags, arity) | `SynthDef.Introspect` | — (no Rust equivalent) |
+| Versioned JSON SynthDef IR | `SynthDef.IR` | `ir/` — **but not the same format**, see `COEXISTENCE.md` |
 | CLI (`optparse-applicative`) | `app/Main.hs` | `bin/microsynth-cli.rs` (`clap`) |
 
-Deferred (design-only): the remaining ~40 UGens, FFT/spectral, scheduler,
+Deferred (design-only): the remaining ~50 UGens, FFT/spectral, scheduler,
 routing, musical-time/tuning, the optional text-DSL front end (megaparsec), and
 the WASM/WebAudio backend. See `DESIGN.md`.
+
+> **Caveat on the IR.** Both engines ship a "version 1" SynthDef IR and the two
+> are mutually unparseable — different node model, different field names,
+> different version policy. Unifying them is the open blocker on the coexistence
+> plan; see [`COEXISTENCE.md`](COEXISTENCE.md#current-state--two-irs-one-version-number).
 
 ## Build & run
 

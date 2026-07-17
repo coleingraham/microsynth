@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | The UGen descriptor registry — the single source of truth for UGen
 -- metadata.
 --
@@ -10,12 +12,10 @@
 -- did on the runtime side.
 --
 -- It is deliberately __pure__ (no @ST@, no @s@): the render layer, the graph
--- introspection, the JSON IR, and — in future — the FHRR encoder and the
--- legal-edit proposer all read from here without dragging in the render
--- machinery. Port names are the encoder's binding roles; the enumerable tag set
--- ('allUGens') is the proposer's edit vocabulary; 'uiSerTag' is the IR kind tag.
--- One producer of the vocabulary, many consumers.
-{-# LANGUAGE OverloadedStrings #-}
+-- introspection, and the JSON IR all read from here without dragging in the
+-- render machinery. Port names give each input a role; the enumerable tag set
+-- ('allUGens') is the whole UGen vocabulary as data; 'uiSerTag' is the IR kind
+-- tag. One producer of the vocabulary, many consumers.
 
 module Microsynth.UGen.Spec
   ( UGenTag (..)
@@ -25,6 +25,7 @@ module Microsynth.UGen.Spec
   , allUGens
   , tagOf
   , serTag
+  , tagFromSerTag
   , portDefaults
   ) where
 
@@ -57,8 +58,8 @@ data UGenInfo = UGenInfo
   deriving (Eq, Show)
 
 -- | The single source of truth. Every other view (defaults for the builders,
--- kind tags for the IR, binding roles for the encoder, the vocabulary for the
--- proposer) is derived from this one function.
+-- kind tags for the IR, port role names, the UGen vocabulary) is derived from
+-- this one function.
 ugenInfo :: UGenTag -> UGenInfo
 ugenInfo t = case t of
   TConst  -> UGenInfo t "Const"  []
@@ -67,10 +68,10 @@ ugenInfo t = case t of
   TNeg    -> UGenInfo t "Neg"    [PortSpec "in" 0]
   TSinOsc -> UGenInfo t "SinOsc" [PortSpec "freq" 440, PortSpec "phase" 0]
   TSaw    -> UGenInfo t "Saw"    [PortSpec "freq" 440]
-  TLpf    -> UGenInfo t "Lpf"    [PortSpec "sig" 0, PortSpec "cutoff" 1000, PortSpec "q" 0.707]
+  TLpf    -> UGenInfo t "Lpf"    [PortSpec "in" 0, PortSpec "freq" 1000, PortSpec "q" 0.707]
   TPerc   -> UGenInfo t "Perc"   [PortSpec "attack" 0.001, PortSpec "release" 0.1]
 
--- | Every UGen kind's metadata — the proposer's whole edit vocabulary as data.
+-- | Every UGen kind's metadata — the whole UGen vocabulary as data.
 allUGens :: [UGenInfo]
 allUGens = map ugenInfo [minBound .. maxBound]
 
@@ -91,6 +92,14 @@ tagOf k = case k of
 -- | The IR serialization tag for a node's kind.
 serTag :: UGenKind -> KindTag
 serTag = uiSerTag . ugenInfo . tagOf
+
+-- | The inverse of 'serTag' on tags: recover a UGen kind's handle from its wire
+-- @kind@ string, or 'Nothing' if no UGen claims it. Derived from 'allUGens', so
+-- it is the /same/ table the encoder writes through — a new UGen, or a renamed
+-- 'uiSerTag', is recognised by the decoder the moment 'ugenInfo' says so, with
+-- no second list of tag literals to keep in step.
+tagFromSerTag :: KindTag -> Maybe UGenTag
+tagFromSerTag t = lookup t [ (uiSerTag i, uiTag i) | i <- allUGens ]
 
 -- | The ordered per-port default values for a UGen kind — what the DSP builders
 -- fall back to for an unconnected port. Single-sourced here so the builders,

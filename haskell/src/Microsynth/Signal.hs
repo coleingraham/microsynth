@@ -37,7 +37,7 @@ data UGenKind
   deriving (Eq, Show)
 
 data BinOp = Add | Sub | Mul | Div
-  deriving (Eq, Show)
+  deriving (Eq, Show, Enum, Bounded)
 
 -- | A description of a (sub)graph: a node kind plus its input signals.
 -- Leaves ('KConst' / 'KParam') carry an empty input list. This tree is what

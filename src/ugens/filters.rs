@@ -4,10 +4,10 @@
 //! Coefficients are recalculated per-sample to support audio-rate modulation
 //! of cutoff frequency and Q.
 
-use crate::buffer::{AudioBuffer, read_input};
-use crate::context::{ProcessContext, Rate};
-use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
-use alloc::vec::Vec;
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::context::ProcessContext;
+use crate::node::UGen;
+use crate::ugens::delayline::DelayLine;
 use core::f32::consts::TAU;
 
 // --- OnePole ---
@@ -60,7 +60,7 @@ impl UGen for OnePole {
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -102,20 +102,25 @@ impl BiquadState {
     }
 }
 
-/// Compute biquad lowpass coefficients from freq, q, and sample_rate.
+/// The shared front half of every RBJ biquad coefficient formula.
+///
+/// All five filter shapes below derive their coefficients from the same three
+/// intermediates — `sin(w0)`, `cos(w0)`, and `alpha` — and differ only in how
+/// they combine them into `b0`/`b1`/`b2`.
 #[inline]
-fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+fn biquad_params(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32) {
     let w0 = TAU * freq / sample_rate;
     let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
     let alpha = sin_w0 / (2.0 * q);
+    (sin_w0, cos_w0, alpha)
+}
 
-    let b0 = (1.0 - cos_w0) / 2.0;
-    let b1 = 1.0 - cos_w0;
-    let b2 = b0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-
+/// The shared back half: normalize all coefficients by `a0`.
+///
+/// `a0`/`a1`/`a2` are identical across every shape except allpass, but are
+/// taken as parameters so each formula stays self-contained and readable.
+#[inline]
+fn normalize(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> (f32, f32, f32, f32, f32) {
     let inv_a0 = 1.0 / a0;
     (
         b0 * inv_a0,
@@ -124,102 +129,61 @@ fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
         a1 * inv_a0,
         a2 * inv_a0,
     )
+}
+
+/// Compute biquad lowpass coefficients from freq, q, and sample_rate.
+#[inline]
+fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
+
+    let b0 = (1.0 - cos_w0) / 2.0;
+    let b1 = 1.0 - cos_w0;
+    let b2 = b0;
+    normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
 /// Compute biquad highpass coefficients.
 #[inline]
 fn biquad_hpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
-    let w0 = TAU * freq / sample_rate;
-    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
-    let alpha = sin_w0 / (2.0 * q);
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = (1.0 + cos_w0) / 2.0;
     let b1 = -(1.0 + cos_w0);
     let b2 = b0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-
-    let inv_a0 = 1.0 / a0;
-    (
-        b0 * inv_a0,
-        b1 * inv_a0,
-        b2 * inv_a0,
-        a1 * inv_a0,
-        a2 * inv_a0,
-    )
+    normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
 /// Compute biquad bandpass coefficients (constant-peak-gain).
 #[inline]
 fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
-    let w0 = TAU * freq / sample_rate;
-    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
-    let alpha = sin_w0 / (2.0 * q);
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = alpha;
     let b1 = 0.0;
     let b2 = -alpha;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-
-    let inv_a0 = 1.0 / a0;
-    (
-        b0 * inv_a0,
-        b1 * inv_a0,
-        b2 * inv_a0,
-        a1 * inv_a0,
-        a2 * inv_a0,
-    )
+    normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
 /// Compute biquad notch (band-reject) coefficients.
 #[inline]
 fn biquad_notch_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
-    let w0 = TAU * freq / sample_rate;
-    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
-    let alpha = sin_w0 / (2.0 * q);
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = 1.0;
     let b1 = -2.0 * cos_w0;
     let b2 = 1.0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-
-    let inv_a0 = 1.0 / a0;
-    (
-        b0 * inv_a0,
-        b1 * inv_a0,
-        b2 * inv_a0,
-        a1 * inv_a0,
-        a2 * inv_a0,
-    )
+    normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
 /// Compute biquad allpass coefficients.
 #[inline]
 fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
-    let w0 = TAU * freq / sample_rate;
-    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
-    let alpha = sin_w0 / (2.0 * q);
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = 1.0 - alpha;
     let b1 = -2.0 * cos_w0;
     let b2 = 1.0 + alpha;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-
-    let inv_a0 = 1.0 / a0;
-    (
-        b0 * inv_a0,
-        b1 * inv_a0,
-        b2 * inv_a0,
-        a1 * inv_a0,
-        a2 * inv_a0,
-    )
+    normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
 // --- Biquad filters (LPF / HPF / BPF / Notch / Allpass) ---
@@ -229,25 +193,6 @@ fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32,
 // formula and default Q. The `biquad_ugen!` macro stamps each as a concrete
 // named type so the DSL registry and `pub use filters::*` re-exports keep
 // referencing them by name.
-
-static BIQUAD_INPUTS: [InputSpec; 3] = [
-    InputSpec {
-        name: "in",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "freq",
-        rate: Rate::Audio,
-    },
-    InputSpec {
-        name: "q",
-        rate: Rate::Audio,
-    },
-];
-static BIQUAD_OUTPUTS: [OutputSpec; 1] = [OutputSpec {
-    name: "out",
-    rate: Rate::Audio,
-}];
 
 /// Generate a second-order biquad filter UGen.
 ///
@@ -282,14 +227,12 @@ macro_rules! biquad_ugen {
         }
 
         impl UGen for $ty {
-            fn spec(&self) -> UGenSpec {
-                UGenSpec {
-                    name: $name,
-                    category: UGenCategory::Filter,
-                    inputs: &BIQUAD_INPUTS,
-                    outputs: &BIQUAD_OUTPUTS,
-                }
-            }
+            ugen_spec!(
+                $name,
+                category = Filter,
+                inputs = ["in", "freq", "q"],
+                outputs = ["out"]
+            );
 
             fn init(&mut self, context: &ProcessContext) {
                 self.sample_rate = context.sample_rate;
@@ -313,7 +256,7 @@ macro_rules! biquad_ugen {
 
                 for ch in 0..output.num_channels() {
                     let mut state = self.state;
-                    let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+                    let in_ch = channel_wrapped(in_buf, ch);
                     let out = output.channel_mut(ch).samples_mut();
 
                     for i in 0..out.len() {
@@ -389,8 +332,7 @@ const MAX_COMB_DELAY_SECS: f32 = 1.0;
 /// Inputs: in (signal), delay (delay time in seconds), feedback (0.0 to ~0.99).
 /// Useful for Karplus-Strong synthesis, flanging, and as a building block for reverbs.
 pub struct CombFilter {
-    buffer: Vec<f32>,
-    write_pos: usize,
+    line: DelayLine,
     sample_rate: f32,
 }
 
@@ -403,8 +345,7 @@ impl Default for CombFilter {
 impl CombFilter {
     pub fn new() -> Self {
         CombFilter {
-            buffer: Vec::new(),
-            write_pos: 0,
+            line: DelayLine::new(),
             sample_rate: 44100.0,
         }
     }
@@ -421,13 +362,11 @@ impl UGen for CombFilter {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (MAX_COMB_DELAY_SECS * context.sample_rate) as usize + 1;
-        self.buffer.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.line.resize(max_samples);
     }
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
+        self.line.clear();
     }
 
     fn process(
@@ -439,15 +378,17 @@ impl UGen for CombFilter {
         let in_buf = inputs[0];
         let delay_buf = inputs.get(1).copied();
         let fb_buf = inputs.get(2).copied();
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
+        if self.line.is_empty() {
             return;
         }
-        let max_delay = (buf_len - 1) as f32;
+        let max_delay = (self.line.len() - 1) as f32;
+
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.line.write_pos();
 
         for ch in 0..output.num_channels() {
-            let mut write_pos = self.write_pos;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            self.line.set_write_pos(start_pos);
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -456,26 +397,12 @@ impl UGen for CombFilter {
 
                 let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
 
-                // Read from delay line with linear interpolation
-                let delay_int = delay_samples as usize;
-                let frac = delay_samples - delay_int as f32;
-                let read_a = (write_pos + buf_len - delay_int) % buf_len;
-                let read_b = (write_pos + buf_len - delay_int - 1) % buf_len;
-                let delayed =
-                    self.buffer[read_a] + frac * (self.buffer[read_b] - self.buffer[read_a]);
-
                 // IIR comb: output = input + feedback * delayed_output
+                let delayed = self.line.read_interp(delay_samples);
                 let y = in_ch[i] + feedback * delayed;
 
-                // Write to delay line
-                self.buffer[write_pos] = y;
+                self.line.write_and_advance(y);
                 out[i] = y;
-
-                write_pos = (write_pos + 1) % buf_len;
-            }
-
-            if ch == 0 {
-                self.write_pos = write_pos;
             }
         }
     }
@@ -483,44 +410,9 @@ impl UGen for CombFilter {
 
 // --- GVerb ---
 
-/// Internal delay line for reverb components.
-struct ReverbDelay {
-    buffer: Vec<f32>,
-    write_pos: usize,
-}
-
-impl ReverbDelay {
-    fn new(size: usize) -> Self {
-        ReverbDelay {
-            buffer: alloc::vec![0.0; size.max(1)],
-            write_pos: 0,
-        }
-    }
-
-    fn clear(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
-    }
-
-    /// Read from the delay line at a fixed tap.
-    #[inline]
-    fn read(&self, delay: usize) -> f32 {
-        let len = self.buffer.len();
-        let pos = (self.write_pos + len - delay) % len;
-        self.buffer[pos]
-    }
-
-    /// Write a sample and advance.
-    #[inline]
-    fn write_and_advance(&mut self, sample: f32) {
-        self.buffer[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) % self.buffer.len();
-    }
-}
-
 /// A damped comb filter for use inside the reverb.
 struct ReverbComb {
-    delay: ReverbDelay,
+    delay: DelayLine,
     filter_state: f32,
     delay_samples: usize,
 }
@@ -528,7 +420,7 @@ struct ReverbComb {
 impl ReverbComb {
     fn new(delay_samples: usize) -> Self {
         ReverbComb {
-            delay: ReverbDelay::new(delay_samples + 1),
+            delay: DelayLine::with_len(delay_samples + 1),
             filter_state: 0.0,
             delay_samples,
         }
@@ -553,14 +445,14 @@ impl ReverbComb {
 
 /// An allpass filter for use inside the reverb.
 struct ReverbAllpass {
-    delay: ReverbDelay,
+    delay: DelayLine,
     delay_samples: usize,
 }
 
 impl ReverbAllpass {
     fn new(delay_samples: usize) -> Self {
         ReverbAllpass {
-            delay: ReverbDelay::new(delay_samples + 1),
+            delay: DelayLine::with_len(delay_samples + 1),
             delay_samples,
         }
     }
@@ -623,6 +515,55 @@ impl GVerb {
     }
 }
 
+/// The per-sample reverb parameters, shared by both stereo sides.
+#[derive(Clone, Copy)]
+struct GVerbParams<'a> {
+    roomsize: Option<&'a AudioBuffer>,
+    damping: Option<&'a AudioBuffer>,
+    wet: Option<&'a AudioBuffer>,
+    dry: Option<&'a AudioBuffer>,
+}
+
+impl GVerb {
+    /// Render one stereo side: mono input through that side's parallel comb
+    /// bank, then its series allpass chain, mixed against the dry signal.
+    ///
+    /// The two sides are identical but for their delay taps (see `STEREO_SPREAD`),
+    /// so both go through here with their own comb/allpass banks.
+    fn render_side(
+        combs: &mut [ReverbComb; 8],
+        allpasses: &mut [ReverbAllpass; 4],
+        in_ch: &[f32],
+        out: &mut [f32],
+        params: GVerbParams<'_>,
+    ) {
+        for (i, out_sample) in out.iter_mut().enumerate() {
+            let input = in_ch[i];
+            let roomsize = read_input(params.roomsize, 0, i, 0.5).clamp(0.0, 1.0);
+            let damping = read_input(params.damping, 0, i, 0.5).clamp(0.0, 1.0);
+            let wet = read_input(params.wet, 0, i, 0.3).clamp(0.0, 1.0);
+            let dry = read_input(params.dry, 0, i, 0.7).clamp(0.0, 1.0);
+
+            // Scale roomsize to feedback (0.0 → 0.7, 1.0 → 0.98)
+            let feedback = 0.7 + roomsize * 0.28;
+
+            // Sum of parallel comb filters
+            let mut comb_sum = 0.0;
+            for comb in combs.iter_mut() {
+                comb_sum += comb.tick(input, feedback, damping);
+            }
+
+            // Series allpass filters
+            let mut signal = comb_sum;
+            for ap in allpasses.iter_mut() {
+                signal = ap.tick(signal, 0.5);
+            }
+
+            *out_sample = input * dry + signal * wet;
+        }
+    }
+}
+
 impl UGen for GVerb {
     ugen_spec!(
         "GVerb",
@@ -658,92 +599,31 @@ impl UGen for GVerb {
         inputs: &[&AudioBuffer],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let roomsize_buf = inputs.get(1).copied();
-        let damping_buf = inputs.get(2).copied();
-        let wet_buf = inputs.get(3).copied();
-        let dry_buf = inputs.get(4).copied();
+        let params = GVerbParams {
+            roomsize: inputs.get(1).copied(),
+            damping: inputs.get(2).copied(),
+            wet: inputs.get(3).copied(),
+            dry: inputs.get(4).copied(),
+        };
 
-        let in_ch = in_buf.channel(0).samples();
-        let block_size = output.channel(0).len();
+        let in_ch = inputs[0].channel(0).samples();
 
-        // Left channel
-        let out_l = output.channel_mut(0).samples_mut();
-        for i in 0..block_size {
-            let input = in_ch[i];
-            let roomsize = roomsize_buf
-                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                .unwrap_or(0.5)
-                .clamp(0.0, 1.0);
-            let damping = damping_buf
-                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                .unwrap_or(0.5)
-                .clamp(0.0, 1.0);
-            let wet = wet_buf
-                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                .unwrap_or(0.3)
-                .clamp(0.0, 1.0);
-            let dry = dry_buf
-                .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                .unwrap_or(0.7)
-                .clamp(0.0, 1.0);
+        Self::render_side(
+            &mut self.combs_l,
+            &mut self.allpasses_l,
+            in_ch,
+            output.channel_mut(0).samples_mut(),
+            params,
+        );
 
-            // Scale roomsize to feedback (0.0 → 0.7, 1.0 → 0.98)
-            let feedback = 0.7 + roomsize * 0.28;
-
-            // Sum of parallel comb filters
-            let mut comb_sum = 0.0;
-            for comb in &mut self.combs_l {
-                comb_sum += comb.tick(input, feedback, damping);
-            }
-
-            // Series allpass filters
-            let mut signal = comb_sum;
-            for ap in &mut self.allpasses_l {
-                signal = ap.tick(signal, 0.5);
-            }
-
-            out_l[i] = input * dry + signal * wet;
-        }
-
-        // Right channel
         if output.num_channels() >= 2 {
-            let in_samples = in_buf.channel(0).samples();
-            let out_r = output.channel_mut(1).samples_mut();
-
-            for i in 0..block_size {
-                let input = in_samples[i];
-                let roomsize = roomsize_buf
-                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-                let damping = damping_buf
-                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                    .unwrap_or(0.5)
-                    .clamp(0.0, 1.0);
-                let wet = wet_buf
-                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                    .unwrap_or(0.3)
-                    .clamp(0.0, 1.0);
-                let dry = dry_buf
-                    .map(|b| b.channel(0).samples()[i.min(b.channel(0).len() - 1)])
-                    .unwrap_or(0.7)
-                    .clamp(0.0, 1.0);
-
-                let feedback = 0.7 + roomsize * 0.28;
-
-                let mut comb_sum = 0.0;
-                for comb in &mut self.combs_r {
-                    comb_sum += comb.tick(input, feedback, damping);
-                }
-
-                let mut signal = comb_sum;
-                for ap in &mut self.allpasses_r {
-                    signal = ap.tick(signal, 0.5);
-                }
-
-                out_r[i] = input * dry + signal * wet;
-            }
+            Self::render_side(
+                &mut self.combs_r,
+                &mut self.allpasses_r,
+                in_ch,
+                output.channel_mut(1).samples_mut(),
+                params,
+            );
         }
     }
 }
@@ -852,8 +732,8 @@ impl UGen for Compressor {
         let makeup_buf = inputs.get(6).copied();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
-            let sc_ch = sc_buf.channel(ch % sc_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
+            let sc_ch = channel_wrapped(sc_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
             let env_idx = ch.min(1);
             let mut env_db = self.env_db[env_idx];

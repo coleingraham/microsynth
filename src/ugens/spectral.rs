@@ -11,7 +11,7 @@
 //! - [`SpectralBlur`]: Temporal magnitude smoothing.
 //! - [`Convolution`]: FFT-based overlap-add convolution.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::spectral::complex::Complex;
@@ -88,7 +88,7 @@ impl UGen for SpectralFreeze {
         let fft_size = stft.fft_size();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -201,14 +201,11 @@ impl UGen for PitchShift {
         let expected_phase_advance = 2.0 * PI * hop_size as f32 / fft_size as f32;
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             // Read shift from first sample of the block (control-rate-ish).
-            let shift = shift_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(1.0)
-                .clamp(0.125, 8.0);
+            let shift = read_input(shift_buf, ch, 0, 1.0).clamp(0.125, 8.0);
 
             for i in 0..out.len() {
                 if stft.push_sample(in_ch[i]) {
@@ -332,21 +329,13 @@ impl UGen for SpectralFilter {
         let fft_size = stft.fft_size();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             // Read parameters from first sample (control-rate).
-            let center_freq = freq_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(1000.0)
-                .max(20.0);
-            let bandwidth = bw_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(500.0)
-                .max(1.0);
-            let gain = gain_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(1.0);
+            let center_freq = read_input(freq_buf, ch, 0, 1000.0).max(20.0);
+            let bandwidth = read_input(bw_buf, ch, 0, 500.0).max(1.0);
+            let gain = read_input(gain_buf, ch, 0, 1.0);
 
             let bin_freq = self.sample_rate / fft_size as f32;
             let center_bin = center_freq / bin_freq;
@@ -435,13 +424,10 @@ impl UGen for SpectralGate {
         let fft_size = stft.fft_size();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
-            let threshold = thresh_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(0.1)
-                .clamp(0.0, 1.0);
+            let threshold = read_input(thresh_buf, ch, 0, 0.1).clamp(0.0, 1.0);
 
             for i in 0..out.len() {
                 if stft.push_sample(in_ch[i]) {
@@ -535,13 +521,10 @@ impl UGen for SpectralBlur {
         let fft_size = stft.fft_size();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
-            let blur = blur_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(0.5)
-                .clamp(0.0, 1.0);
+            let blur = read_input(blur_buf, ch, 0, 0.5).clamp(0.0, 1.0);
 
             for i in 0..out.len() {
                 if stft.push_sample(in_ch[i]) {
@@ -686,7 +669,7 @@ impl UGen for Convolution {
         if fft_size == 0 || !self.ir_loaded {
             // No IR loaded — pass through dry signal.
             for ch in 0..output.num_channels() {
-                let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+                let in_ch = channel_wrapped(in_buf, ch);
                 let out = output.channel_mut(ch).samples_mut();
                 out[..in_ch.len()].copy_from_slice(in_ch);
             }
@@ -694,13 +677,10 @@ impl UGen for Convolution {
         }
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
-            let mix = mix_buf
-                .map(|b| b.channel(ch % b.num_channels()).samples()[0])
-                .unwrap_or(1.0)
-                .clamp(0.0, 1.0);
+            let mix = read_input(mix_buf, ch, 0, 1.0).clamp(0.0, 1.0);
 
             for i in 0..out.len() {
                 let dry = in_ch[i];

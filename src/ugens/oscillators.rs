@@ -13,366 +13,149 @@ use crate::context::ProcessContext;
 use crate::node::UGen;
 use core::f32::consts::TAU;
 
-// --- SinOsc ---
+// --- Phase-accumulator oscillators ---
+//
+// Every naive oscillator here is the same machine: hold a phase in [0, 1),
+// emit a sample derived from it, advance by freq/sample_rate, wrap. They
+// differ only in the waveform function — and, for two of them, in taking one
+// extra shaping input. `phase_osc!` stamps each as a concrete named type so
+// the DSL registry and `pub use oscillators::*` re-exports keep referencing
+// them by name.
 
-/// Sine oscillator.
+/// Generate a naive (non-band-limited) phase-accumulator oscillator UGen.
 ///
-/// Inputs: freq (Hz), phase (radians offset).
-/// Output: sin(2*pi*phase_accumulator + phase_offset) in [-1, 1].
-pub struct SinOsc {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for SinOsc {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SinOsc {
-    pub fn new() -> Self {
-        SinOsc {
-            phase: 0.0,
-            sample_rate: 44100.0,
+/// Variants supply `sample`, the waveform function mapping the current phase to
+/// an output sample. An oscillator that takes a second shaping input declares
+/// it as `extra = ("<port>", <default>)`; that port's value is then passed to
+/// `sample` as a second argument, read per sample so it can be modulated at
+/// audio rate.
+macro_rules! phase_osc {
+    (
+        $(#[$meta:meta])*
+        $ty:ident, $name:literal,
+        $(extra = ($port:literal, $default:expr),)?
+        sample = $sample:expr $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $ty {
+            phase: f32,
+            sample_rate: f32,
         }
-    }
-}
 
-impl UGen for SinOsc {
-    ugen_spec!(
-        "SinOsc",
-        category = Oscillator,
-        inputs = ["freq", "phase"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let phase_offset_buf = inputs.get(1).copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            // Each channel shares the same phase accumulator state for now
-            // (multichannel expansion means separate SinOsc instances per channel)
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let phase_offset = read_input(phase_offset_buf, ch, i, 0.0);
-
-                *out_sample = (phase * TAU + phase_offset).sin();
-                phase += freq * inv_sr;
-                // Keep phase in [0, 1) to prevent precision loss over time
-                phase -= phase.floor();
-            }
-
-            // Only update stored phase once (first channel drives it)
-            if ch == 0 {
-                self.phase = phase;
+        impl Default for $ty {
+            fn default() -> Self {
+                Self::new()
             }
         }
-    }
-}
 
-// --- Phasor ---
-
-/// Phasor: ramp from 0 to 1 at the given frequency, then wrap.
-///
-/// Inputs: freq (Hz).
-/// Output: [0, 1) sawtooth ramp.
-pub struct Phasor {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for Phasor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Phasor {
-    pub fn new() -> Self {
-        Phasor {
-            phase: 0.0,
-            sample_rate: 44100.0,
-        }
-    }
-}
-
-impl UGen for Phasor {
-    ugen_spec!(
-        "Phasor",
-        category = Oscillator,
-        inputs = ["freq"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-
-                *out_sample = phase;
-                phase += freq * inv_sr;
-                phase -= phase.floor();
-            }
-
-            if ch == 0 {
-                self.phase = phase;
+        impl $ty {
+            pub fn new() -> Self {
+                $ty {
+                    phase: 0.0,
+                    sample_rate: 44100.0,
+                }
             }
         }
-    }
-}
 
-// --- Saw ---
+        impl UGen for $ty {
+            ugen_spec!(
+                $name,
+                category = Oscillator,
+                inputs = ["freq" $(, $port)?],
+                outputs = ["out"]
+            );
 
-/// Naive sawtooth oscillator (non-band-limited).
-///
-/// Inputs: freq (Hz).
-/// Output: [-1, 1] sawtooth wave (ramps up, resets down).
-pub struct Saw {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for Saw {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Saw {
-    pub fn new() -> Self {
-        Saw {
-            phase: 0.0,
-            sample_rate: 44100.0,
-        }
-    }
-}
-
-impl UGen for Saw {
-    ugen_spec!(
-        "Saw",
-        category = Oscillator,
-        inputs = ["freq"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-
-                // Map phase [0,1) to [-1,1)
-                *out_sample = 2.0 * phase - 1.0;
-                phase += freq * inv_sr;
-                phase -= phase.floor();
+            fn init(&mut self, context: &ProcessContext) {
+                self.sample_rate = context.sample_rate;
             }
 
-            if ch == 0 {
-                self.phase = phase;
-            }
-        }
-    }
-}
-
-// --- Pulse ---
-
-/// Naive pulse/square oscillator (non-band-limited).
-///
-/// Inputs: freq (Hz), width (pulse width in [0, 1], default 0.5 = square).
-/// Output: +1 or -1.
-pub struct Pulse {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for Pulse {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Pulse {
-    pub fn new() -> Self {
-        Pulse {
-            phase: 0.0,
-            sample_rate: 44100.0,
-        }
-    }
-}
-
-impl UGen for Pulse {
-    ugen_spec!(
-        "Pulse",
-        category = Oscillator,
-        inputs = ["freq", "width"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let width_buf = inputs.get(1).copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let width = read_input(width_buf, ch, i, 0.5);
-
-                *out_sample = if phase < width { 1.0 } else { -1.0 };
-                phase += freq * inv_sr;
-                phase -= phase.floor();
+            fn reset(&mut self) {
+                self.phase = 0.0;
             }
 
-            if ch == 0 {
-                self.phase = phase;
+            fn process(
+                &mut self,
+                _context: &ProcessContext,
+                inputs: &[&AudioBuffer],
+                output: &mut AudioBuffer,
+            ) {
+                let freq_buf = inputs.first().copied();
+                let inv_sr = 1.0 / self.sample_rate;
+
+                for ch in 0..output.num_channels() {
+                    // Each channel shares the same phase accumulator state for now
+                    // (multichannel expansion means separate instances per channel).
+                    let mut phase = self.phase;
+                    let out = output.channel_mut(ch).samples_mut();
+
+                    for (i, out_sample) in out.iter_mut().enumerate() {
+                        let freq = read_input(freq_buf, ch, i, 440.0);
+
+                        *out_sample = ($sample)(
+                            phase
+                            $(, read_input(inputs.get(1).copied(), ch, i, $default))?
+                        );
+
+                        phase += freq * inv_sr;
+                        // Keep phase in [0, 1) to prevent precision loss over time
+                        phase -= phase.floor();
+                    }
+
+                    // Only update stored phase once (first channel drives it)
+                    if ch == 0 {
+                        self.phase = phase;
+                    }
+                }
             }
         }
-    }
+    };
 }
 
-// --- Tri ---
-
-/// Naive triangle oscillator (non-band-limited).
-///
-/// Inputs: freq (Hz).
-/// Output: [-1, 1] triangle wave.
-pub struct Tri {
-    phase: f32,
-    sample_rate: f32,
+phase_osc! {
+    /// Sine oscillator.
+    ///
+    /// Inputs: freq (Hz), phase (radians offset).
+    /// Output: sin(2*pi*phase_accumulator + phase_offset) in [-1, 1].
+    SinOsc, "SinOsc",
+    extra = ("phase", 0.0),
+    sample = |phase: f32, phase_offset: f32| (phase * TAU + phase_offset).sin(),
 }
 
-impl Default for Tri {
-    fn default() -> Self {
-        Self::new()
-    }
+phase_osc! {
+    /// Phasor: ramp from 0 to 1 at the given frequency, then wrap.
+    ///
+    /// Inputs: freq (Hz).
+    /// Output: [0, 1) sawtooth ramp.
+    Phasor, "Phasor",
+    sample = |phase: f32| phase,
 }
 
-impl Tri {
-    pub fn new() -> Self {
-        Tri {
-            phase: 0.0,
-            sample_rate: 44100.0,
-        }
-    }
+phase_osc! {
+    /// Naive sawtooth oscillator (non-band-limited).
+    ///
+    /// Inputs: freq (Hz).
+    /// Output: [-1, 1] sawtooth wave (ramps up, resets down).
+    Saw, "Saw",
+    // Map phase [0,1) to [-1,1)
+    sample = |phase: f32| 2.0 * phase - 1.0,
 }
 
-impl UGen for Tri {
-    ugen_spec!(
-        "Tri",
-        category = Oscillator,
-        inputs = ["freq"],
-        outputs = ["out"]
-    );
+phase_osc! {
+    /// Naive pulse/square oscillator (non-band-limited).
+    ///
+    /// Inputs: freq (Hz), width (pulse width in [0, 1], default 0.5 = square).
+    /// Output: +1 or -1.
+    Pulse, "Pulse",
+    extra = ("width", 0.5),
+    sample = |phase: f32, width: f32| if phase < width { 1.0 } else { -1.0 },
+}
 
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-
-                // Triangle: rise from -1 to +1 in first half, fall +1 to -1 in second
-                *out_sample = if phase < 0.5 {
-                    4.0 * phase - 1.0
-                } else {
-                    3.0 - 4.0 * phase
-                };
-                phase += freq * inv_sr;
-                phase -= phase.floor();
-            }
-
-            if ch == 0 {
-                self.phase = phase;
-            }
-        }
-    }
+phase_osc! {
+    /// Naive triangle oscillator (non-band-limited).
+    ///
+    /// Inputs: freq (Hz).
+    /// Output: [-1, 1] triangle wave.
+    Tri, "Tri",
+    // Triangle: rise from -1 to +1 in first half, fall +1 to -1 in second
+    sample = |phase: f32| if phase < 0.5 { 4.0 * phase - 1.0 } else { 3.0 - 4.0 * phase },
 }

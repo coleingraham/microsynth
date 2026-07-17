@@ -29,257 +29,176 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
     }
 }
 
-// --- BlSaw ---
+// --- Band-limited phase-accumulator oscillators ---
+//
+// Like the naive oscillators in `oscillators`, these share one machine: hold a
+// phase in [0, 1), emit a sample, advance by dt = |freq| / sample_rate, wrap.
+// They differ in the waveform function and, independently, in whether they take
+// an extra shaping input (BlPulse) or carry extra per-sample state (BlTri).
 
-/// Band-limited sawtooth oscillator using polyBLEP.
+/// Generate a band-limited (polyBLEP) phase-accumulator oscillator UGen.
 ///
-/// Inputs: freq (Hz).
-/// Output: [-1, 1] sawtooth wave.
-pub struct BlSaw {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for BlSaw {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BlSaw {
-    pub fn new() -> Self {
-        BlSaw {
-            phase: 0.0,
-            sample_rate: 44100.0,
-        }
-    }
-}
-
-impl UGen for BlSaw {
-    ugen_spec!(
-        "BlSaw",
-        category = Oscillator,
-        inputs = ["freq"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let dt = (freq * inv_sr).abs();
-
-                // Naive saw: phase [0,1) → [-1,1)
-                let mut sample = 2.0 * phase - 1.0;
-                // polyBLEP correction at the wrap discontinuity
-                sample -= poly_blep(phase, dt);
-
-                *out_sample = sample;
-                phase += dt;
-                phase -= phase.floor();
-            }
-
-            if ch == 0 {
-                self.phase = phase;
-            }
-        }
-    }
-}
-
-// --- BlPulse ---
-
-/// Band-limited pulse/square oscillator using polyBLEP.
+/// Variants supply `sample`, which receives the current `phase` and the phase
+/// increment `dt` (polyBLEP needs `dt` to size its correction window), and
+/// returns the output sample. Two optional axes extend that signature:
 ///
-/// Inputs: freq (Hz), width (pulse width [0, 1], default 0.5 = square).
-/// Output: [-1, 1] pulse wave.
-pub struct BlPulse {
-    phase: f32,
-    sample_rate: f32,
-}
-
-impl Default for BlPulse {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BlPulse {
-    pub fn new() -> Self {
-        BlPulse {
-            phase: 0.0,
-            sample_rate: 44100.0,
+/// - `extra = ("<port>", <default>)` declares a second input port; its raw
+///   per-sample value is passed to `sample` as a third argument. Any clamping
+///   belongs in `sample`, which is where `dt` is in scope.
+/// - `state = (<field>, <init>)` adds an `f32` field carried across samples and
+///   channels; `sample` receives it as a final `&mut f32` argument.
+macro_rules! bl_osc {
+    (
+        $(#[$meta:meta])*
+        $ty:ident, $name:literal,
+        $(extra = ($port:literal, $default:expr),)?
+        $(state = ($state:ident, $state_init:expr),)?
+        sample = $sample:expr $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $ty {
+            phase: f32,
+            sample_rate: f32,
+            $($state: f32,)?
         }
-    }
-}
 
-impl UGen for BlPulse {
-    ugen_spec!(
-        "BlPulse",
-        category = Oscillator,
-        inputs = ["freq", "width"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let width_buf = inputs.get(1).copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let dt = (freq * inv_sr).abs();
-                // Keep the pulse width off both edges so the polyBLEPs don't
-                // overlap. When dt >= ~0.5 (freq at/above Nyquist) the band is
-                // degenerate and lo would exceed hi — guard with lo.max(hi) so a
-                // near-Nyquist freq pins the width instead of panicking clamp().
-                let lo = dt.max(0.01);
-                let hi = (1.0 - dt).min(0.99);
-                let width = read_input(width_buf, ch, i, 0.5).clamp(lo, lo.max(hi));
-
-                // Naive pulse
-                let mut sample = if phase < width { 1.0 } else { -1.0 };
-
-                // polyBLEP at rising edge (phase ~ 0)
-                sample += poly_blep(phase, dt);
-                // polyBLEP at falling edge (phase ~ width)
-                let phase_shifted = (phase - width + 1.0) % 1.0;
-                sample -= poly_blep(phase_shifted, dt);
-
-                *out_sample = sample;
-                phase += dt;
-                phase -= phase.floor();
-            }
-
-            if ch == 0 {
-                self.phase = phase;
+        impl Default for $ty {
+            fn default() -> Self {
+                Self::new()
             }
         }
-    }
-}
 
-// --- BlTri ---
-
-/// Band-limited triangle oscillator.
-///
-/// Derived by leaky-integrating a band-limited square wave (polyBLEP).
-/// The leak coefficient is frequency-adaptive to maintain consistent amplitude.
-///
-/// Inputs: freq (Hz).
-/// Output: approximately [-1, 1] triangle wave.
-pub struct BlTri {
-    phase: f32,
-    sample_rate: f32,
-    integrator: f32,
-}
-
-impl Default for BlTri {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BlTri {
-    pub fn new() -> Self {
-        BlTri {
-            phase: 0.0,
-            sample_rate: 44100.0,
-            integrator: 0.0,
-        }
-    }
-}
-
-impl UGen for BlTri {
-    ugen_spec!(
-        "BlTri",
-        category = Oscillator,
-        inputs = ["freq"],
-        outputs = ["out"]
-    );
-
-    fn init(&mut self, context: &ProcessContext) {
-        self.sample_rate = context.sample_rate;
-    }
-
-    fn reset(&mut self) {
-        self.phase = 0.0;
-        self.integrator = 0.0;
-    }
-
-    fn process(
-        &mut self,
-        _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
-        output: &mut AudioBuffer,
-    ) {
-        let freq_buf = inputs.first().copied();
-        let inv_sr = 1.0 / self.sample_rate;
-
-        for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let mut integrator = self.integrator;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let dt = (freq * inv_sr).abs();
-
-                // Band-limited square wave (width = 0.5)
-                let mut square = if phase < 0.5 { 1.0 } else { -1.0 };
-                square += poly_blep(phase, dt);
-                let phase_shifted = (phase - 0.5 + 1.0) % 1.0;
-                square -= poly_blep(phase_shifted, dt);
-
-                // Leaky integration with frequency-adaptive coefficients
-                integrator += square * 4.0 * dt;
-                integrator *= 1.0 - 2.0 * dt;
-
-                *out_sample = integrator;
-                phase += dt;
-                phase -= phase.floor();
-            }
-
-            if ch == 0 {
-                self.phase = phase;
-                self.integrator = integrator;
+        impl $ty {
+            pub fn new() -> Self {
+                $ty {
+                    phase: 0.0,
+                    sample_rate: 44100.0,
+                    $($state: $state_init,)?
+                }
             }
         }
-    }
+
+        impl UGen for $ty {
+            ugen_spec!(
+                $name,
+                category = Oscillator,
+                inputs = ["freq" $(, $port)?],
+                outputs = ["out"]
+            );
+
+            fn init(&mut self, context: &ProcessContext) {
+                self.sample_rate = context.sample_rate;
+            }
+
+            fn reset(&mut self) {
+                self.phase = 0.0;
+                $(self.$state = $state_init;)?
+            }
+
+            fn process(
+                &mut self,
+                _context: &ProcessContext,
+                inputs: &[&AudioBuffer],
+                output: &mut AudioBuffer,
+            ) {
+                let freq_buf = inputs.first().copied();
+                let inv_sr = 1.0 / self.sample_rate;
+
+                for ch in 0..output.num_channels() {
+                    let mut phase = self.phase;
+                    $(let mut $state = self.$state;)?
+                    let out = output.channel_mut(ch).samples_mut();
+
+                    for (i, out_sample) in out.iter_mut().enumerate() {
+                        let freq = read_input(freq_buf, ch, i, 440.0);
+                        let dt = (freq * inv_sr).abs();
+
+                        *out_sample = ($sample)(
+                            phase,
+                            dt
+                            $(, read_input(inputs.get(1).copied(), ch, i, $default))?
+                            $(, &mut $state)?
+                        );
+
+                        phase += dt;
+                        phase -= phase.floor();
+                    }
+
+                    if ch == 0 {
+                        self.phase = phase;
+                        $(self.$state = $state;)?
+                    }
+                }
+            }
+        }
+    };
+}
+
+bl_osc! {
+    /// Band-limited sawtooth oscillator using polyBLEP.
+    ///
+    /// Inputs: freq (Hz).
+    /// Output: [-1, 1] sawtooth wave.
+    BlSaw, "BlSaw",
+    sample = |phase: f32, dt: f32| {
+        // Naive saw: phase [0,1) → [-1,1)
+        let sample = 2.0 * phase - 1.0;
+        // polyBLEP correction at the wrap discontinuity
+        sample - poly_blep(phase, dt)
+    },
+}
+
+bl_osc! {
+    /// Band-limited pulse/square oscillator using polyBLEP.
+    ///
+    /// Inputs: freq (Hz), width (pulse width [0, 1], default 0.5 = square).
+    /// Output: [-1, 1] pulse wave.
+    BlPulse, "BlPulse",
+    extra = ("width", 0.5),
+    sample = |phase: f32, dt: f32, raw_width: f32| {
+        // Keep the pulse width off both edges so the polyBLEPs don't
+        // overlap. When dt >= ~0.5 (freq at/above Nyquist) the band is
+        // degenerate and lo would exceed hi — guard with lo.max(hi) so a
+        // near-Nyquist freq pins the width instead of panicking clamp().
+        let lo = dt.max(0.01);
+        let hi = (1.0 - dt).min(0.99);
+        let width = raw_width.clamp(lo, lo.max(hi));
+
+        // Naive pulse
+        let mut sample = if phase < width { 1.0 } else { -1.0 };
+
+        // polyBLEP at rising edge (phase ~ 0)
+        sample += poly_blep(phase, dt);
+        // polyBLEP at falling edge (phase ~ width)
+        let phase_shifted = (phase - width + 1.0) % 1.0;
+        sample -= poly_blep(phase_shifted, dt);
+
+        sample
+    },
+}
+
+bl_osc! {
+    /// Band-limited triangle oscillator.
+    ///
+    /// Derived by leaky-integrating a band-limited square wave (polyBLEP).
+    /// The leak coefficient is frequency-adaptive to maintain consistent amplitude.
+    ///
+    /// Inputs: freq (Hz).
+    /// Output: approximately [-1, 1] triangle wave.
+    BlTri, "BlTri",
+    state = (integrator, 0.0),
+    sample = |phase: f32, dt: f32, integrator: &mut f32| {
+        // Band-limited square wave (width = 0.5)
+        let mut square = if phase < 0.5 { 1.0 } else { -1.0 };
+        square += poly_blep(phase, dt);
+        let phase_shifted = (phase - 0.5 + 1.0) % 1.0;
+        square -= poly_blep(phase_shifted, dt);
+
+        // Leaky integration with frequency-adaptive coefficients
+        *integrator += square * 4.0 * dt;
+        *integrator *= 1.0 - 2.0 * dt;
+        *integrator
+    },
 }
 
 #[cfg(test)]

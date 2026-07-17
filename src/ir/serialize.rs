@@ -319,10 +319,10 @@ impl IrSynthDef {
     /// A stable 128-bit content hash over the canonical structure.
     ///
     /// With `include_values = false` the hash is **topology-only** — kinds and
-    /// wiring, excluding const/param/inline values — which is the identity the
-    /// HV encoder keys node identity on (param nudges never change it). With
-    /// `include_values = true` it also folds in every constant and default, the
-    /// variant used for exact dedup.
+    /// wiring, excluding const/param/inline values — so two graphs that differ
+    /// only in their parameter values hash alike. With `include_values = true`
+    /// it also folds in every constant and default, the variant used for exact
+    /// dedup.
     ///
     /// Independent of node `name`s and of the format version, so cosmetic
     /// renames and version bumps that preserve structure do not perturb it.

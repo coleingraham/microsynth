@@ -25,8 +25,16 @@ A compiled SynthDef is already the natural boundary between "authoring" and
 `scsynth` (a separate C++ server) loads and runs it. The authoring language and
 the runtime are different languages, joined by a compiled graph.
 
-microsynth already has the same shape internally — it is just not yet *exposed*
-as an interchange format:
+> **Status (2026-07).** This document was written before any of it was built.
+> Step 2 of the [pragmatic path](#a-pragmatic-path) is now **done on both sides**
+> — but done *twice, incompatibly*. See
+> [Current state](#current-state--two-irs-one-version-number) before treating any
+> of the following as descriptive. The architecture below is still the intent;
+> it is not yet the reality.
+
+microsynth already has the same shape internally, and each side now *exposes* it
+as an interchange format (`src/ir/` in Rust, `Microsynth.SynthDef.IR` in
+Haskell):
 
 - Rust's `SynthDef` (`src/synthdef.rs`) is an immutable template: node
   factories + edges + a parameter map + an output node.
@@ -61,8 +69,8 @@ optimize the runtime without touching a front-end.
 
 ## The IR
 
-The interchange is the flat, compiled graph — not a surface syntax. A first cut,
-mirroring the structure both engines already build:
+The interchange is the flat, compiled graph — not a surface syntax. The original
+sketch, mirroring the structure both engines already build:
 
 ```jsonc
 {
@@ -86,6 +94,35 @@ mirroring the structure both engines already build:
 Ship it as JSON in development (diffable, git-friendly, human-inspectable) and,
 if size or load time ever matters, a compact binary encoding for production —
 same schema, two serializations.
+
+## Current state — two IRs, one version number
+
+**The sketch above is what Haskell implements. Rust implements something else.**
+Both shipped independently, and both call themselves format version 1, so the
+version number currently carries no information. Neither can read the other:
+`IrSynthDef::from_json` rejects Haskell's output at the first field.
+
+| | Haskell (`Microsynth.SynthDef.IR`) | Rust (`src/ir/`) |
+|---|---|---|
+| version field | `version` | `format_version` |
+| edges | inline `inputs: [id]` per node | separate `edges: [{from,to,to_input}]` |
+| node shape | `{id, kind, args, inputs}` | externally-tagged `{"UGen": {kind, consts}}` |
+| node identity | explicit `id`, validated `0..n-1` | positional index |
+| params | `{name, default}` — discarded on decode | `{name, node, input, default}` — load-bearing |
+| output | `output` | `output_node` |
+| class / channels | absent | `class`, `output_channels` required |
+| canonical form | JSON | binary (magic `MICROSYNTH-IR`); JSON is dev-only |
+| inline consts | none — always separate `Const` nodes | `UGen { consts: [(port, value)] }` |
+| kind tags | `SinOsc`, `Saw`, `Lpf`, `Perc` (spec names) | `sinOsc`, `saw`, `lpf`, `perc` (registry names) |
+| arithmetic | one `BinOp` kind + `args.op` | four kinds: `Add`/`Sub`/`Mul`/`Div` |
+| version policy | exact match — reject anything else | accept any `<= FORMAT_VERSION` |
+
+The last three rows are the deep ones: the two sides disagree on the *node
+model*, not just on spelling. Unifying them is a real design decision (which
+format wins, and what the version bump costs), not a rename.
+
+Until that lands, read "one format, many producers, one consumer" as the goal —
+not as a description of the code.
 
 ## On "just emit the Rust text DSL"
 
@@ -138,12 +175,31 @@ lowers, and generates on both paths.
 
 Maintaining a second engine only pays if it earns its keep. It does — through
 **differential testing**. Render the same SynthDef through the Haskell engine
-and the Rust engine and assert sample-level agreement. (The seed already exists:
-the scaffold produced a byte-identical WAV against the Rust engine for the demo
-patch.) That makes the Haskell engine an **executable specification / reference
-oracle** for the Rust one: any divergence is a bug in exactly one place, found
-automatically. The "duplicate implementation" flips into a cross-check that
-keeps the fast engine honest.
+and the Rust engine and assert sample-level agreement. That would make the
+Haskell engine an **executable specification / reference oracle** for the Rust
+one: any divergence is a bug in exactly one place, found automatically. The
+"duplicate implementation" flips into a cross-check that keeps the fast engine
+honest.
+
+> **Not yet true.** No cross-engine check runs anywhere. Each engine has its own
+> tests; CI runs both, but nothing compares one to the other. An earlier draft
+> cited "the scaffold produced a byte-identical WAV against the Rust engine for
+> the demo patch" as a seed — that was a one-off manual observation, never
+> automated, and two things since have made it a shakier foundation than it
+> sounded:
+>
+> - **Bit-exactness across engines is not a reachable bar for every patch.** The
+>   Haskell suite's own golden for `tone` (a raw sine) was pinned on one machine
+>   and never reproduced on another: libm's `sin` differs by an ulp across
+>   platforms, so a patch evaluating `sin` at many distinct arguments is not
+>   bit-reproducible even between two runs of the *same* engine. It is now
+>   checked against an analytic reference instead. Differential testing should
+>   assert agreement within a tolerance, not byte equality.
+> - **The two engines' `poly` patches are not actually the same graph.** The
+>   frequencies are re-typed by hand in awk (`gen_rust_poly.sh`) and rounded to
+>   4 decimal places, so the benchmark comparison measures two subtly different
+>   patches. See "The honest caveat" below — this is exactly the drift it warns
+>   about, already happening.
 
 ## Division of labor
 
@@ -177,14 +233,15 @@ author against.
 
 ## A pragmatic path
 
-1. **Prove the loop (bootstrap).** Pretty-print Haskell `SynthDef` → text DSL;
-   run it through the existing Rust CLI. No new Rust code.
-2. **Define the IR.** Add a JSON (de)serializer to Haskell's `SynthDef` and a
-   loader on the Rust side (deserialize graph → instantiate). Version it.
-3. **Lock the contract with differential tests.** Render the same IR through
-   both engines in CI; assert sample-level agreement on a corpus of patches.
-4. **Publish the schema.** JSON Schema for the IR becomes the target for GUIs,
-   agents (structured output), and validators.
-5. **Grow the authoring brain in Haskell.** Higher-order UGens, static analyses,
-   and QuickCheck generators — all lowering to the same IR the runtime already
-   consumes.
+Status as of 2026-07. Step 1 was skipped rather than done; step 2 was done twice,
+incompatibly (see [Current state](#current-state--two-irs-one-version-number)),
+which is why step 0 now exists.
+
+| | Step | Status |
+|---|---|---|
+| 0 | **Unify the two IRs.** Pick one node model and one wire format; make the other side conform; bump the version once, deliberately. Prerequisite for 3 and 4 — a contract that two implementations read differently is not a contract. | ⬜ **not started, now the blocker** |
+| 1 | **Prove the loop (bootstrap).** Pretty-print Haskell `SynthDef` → text DSL; run it through the existing Rust CLI. No new Rust code. | ⬜ **skipped** — the project went straight to step 2. No pretty-printer exists. Retained here only because it is still the cheapest way to smoke-test a Haskell-authored patch through the Rust runtime. |
+| 2 | **Define the IR.** Add a JSON (de)serializer to Haskell's `SynthDef` and a loader on the Rust side (deserialize graph → instantiate). Version it. | ✅ **done on both sides** — `Microsynth.SynthDef.IR` (JSON, aeson) and `src/ir/` (binary + JSON). ❌ **but not as one format.** |
+| 3 | **Lock the contract with differential tests.** Render the same IR through both engines in CI; assert sample-level agreement on a corpus of patches. | ⬜ not started. Blocked on 0. Note the assertion must be *within tolerance*, not byte-exact — see the caveat under "Two engines as a feature". |
+| 4 | **Publish the schema.** JSON Schema for the IR becomes the target for GUIs, agents (structured output), and validators. | ⬜ not started. Blocked on 0 — there is no single schema to publish yet. |
+| 5 | **Grow the authoring brain in Haskell.** Higher-order UGens, static analyses, and QuickCheck generators — all lowering to the same IR the runtime already consumes. | ⬜ not started. Haskell implements 8 UGen kinds; Rust has ~60. |

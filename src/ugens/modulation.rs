@@ -2,10 +2,10 @@
 //!
 //! Time-modulated delay effects for spatial width and movement.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
-use alloc::vec::Vec;
+use crate::ugens::delayline::DelayLine;
 use core::f32::consts::TAU;
 
 // --- Chorus ---
@@ -27,8 +27,7 @@ use core::f32::consts::TAU;
 /// Output: 2-channel stereo signal. Left and right taps use LFO phases
 /// offset by 90° for stereo decorrelation.
 pub struct Chorus {
-    buffer: Vec<f32>,
-    write_pos: usize,
+    line: DelayLine,
     lfo_phase: f32,
     sample_rate: f32,
 }
@@ -42,8 +41,7 @@ impl Default for Chorus {
 impl Chorus {
     pub fn new() -> Self {
         Chorus {
-            buffer: Vec::new(),
-            write_pos: 0,
+            line: DelayLine::new(),
             lfo_phase: 0.0,
             sample_rate: 44100.0,
         }
@@ -66,14 +64,12 @@ impl UGen for Chorus {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (CHORUS_MAX_DELAY * context.sample_rate) as usize + 2;
-        self.buffer.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.line.resize(max_samples);
         self.lfo_phase = 0.0;
     }
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
+        self.line.clear();
         self.lfo_phase = 0.0;
     }
 
@@ -92,15 +88,13 @@ impl UGen for Chorus {
         let rate_buf = inputs.get(1).copied();
         let depth_buf = inputs.get(2).copied();
         let mix_buf = inputs.get(3).copied();
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
+        if self.line.is_empty() {
             return;
         }
-        let max_delay_samples = (buf_len - 2) as f32;
+        let max_delay_samples = (self.line.len() - 2) as f32;
         let inv_sr = 1.0 / self.sample_rate;
 
         let block_size = output.block_size();
-        let mut write_pos = self.write_pos;
         let mut lfo_phase = self.lfo_phase;
 
         for i in 0..block_size {
@@ -118,8 +112,8 @@ impl UGen for Chorus {
                 .unwrap_or(0.5)
                 .clamp(0.0, 1.0);
 
-            // Write input to buffer
-            self.buffer[write_pos] = x;
+            // Write input at the cursor; the taps below read behind it.
+            self.line.write(x);
 
             // Two LFO taps at 90° phase offset for stereo
             let lfo_l = (lfo_phase * TAU).sin();
@@ -130,19 +124,8 @@ impl UGen for Chorus {
             let delay_r = ((CHORUS_CENTER_DELAY + depth * lfo_r) * self.sample_rate)
                 .clamp(1.0, max_delay_samples);
 
-            // Read left tap with linear interpolation
-            let dl_int = delay_l as usize;
-            let dl_frac = delay_l - dl_int as f32;
-            let ra_l = (write_pos + buf_len - dl_int) % buf_len;
-            let rb_l = (write_pos + buf_len - dl_int - 1) % buf_len;
-            let wet_l = self.buffer[ra_l] + dl_frac * (self.buffer[rb_l] - self.buffer[ra_l]);
-
-            // Read right tap with linear interpolation
-            let dr_int = delay_r as usize;
-            let dr_frac = delay_r - dr_int as f32;
-            let ra_r = (write_pos + buf_len - dr_int) % buf_len;
-            let rb_r = (write_pos + buf_len - dr_int - 1) % buf_len;
-            let wet_r = self.buffer[ra_r] + dr_frac * (self.buffer[rb_r] - self.buffer[ra_r]);
+            let wet_l = self.line.read_interp(delay_l);
+            let wet_r = self.line.read_interp(delay_r);
 
             // Mix
             output.channel_mut(0).samples_mut()[i] = (1.0 - mix) * x + mix * wet_l;
@@ -150,10 +133,9 @@ impl UGen for Chorus {
 
             lfo_phase += rate * inv_sr;
             lfo_phase -= lfo_phase.floor();
-            write_pos = (write_pos + 1) % buf_len;
+            self.line.advance();
         }
 
-        self.write_pos = write_pos;
         self.lfo_phase = lfo_phase;
     }
 }
@@ -172,8 +154,7 @@ impl UGen for Chorus {
 /// - `feedback`: feedback amount (default 0.5, range -0.95 to 0.95)
 /// - `mix`: dry/wet blend (default 0.5)
 pub struct Flanger {
-    buffer: Vec<f32>,
-    write_pos: usize,
+    line: DelayLine,
     lfo_phase: f32,
     sample_rate: f32,
 }
@@ -187,8 +168,7 @@ impl Default for Flanger {
 impl Flanger {
     pub fn new() -> Self {
         Flanger {
-            buffer: Vec::new(),
-            write_pos: 0,
+            line: DelayLine::new(),
             lfo_phase: 0.0,
             sample_rate: 44100.0,
         }
@@ -208,14 +188,12 @@ impl UGen for Flanger {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (FLANGER_MAX_DELAY * context.sample_rate) as usize + 2;
-        self.buffer.resize(max_samples, 0.0);
-        self.write_pos = 0;
+        self.line.resize(max_samples);
         self.lfo_phase = 0.0;
     }
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
+        self.line.clear();
         self.lfo_phase = 0.0;
     }
 
@@ -230,17 +208,19 @@ impl UGen for Flanger {
         let depth_buf = inputs.get(2).copied();
         let fb_buf = inputs.get(3).copied();
         let mix_buf = inputs.get(4).copied();
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
+        if self.line.is_empty() {
             return;
         }
-        let max_delay_samples = (buf_len - 2) as f32;
+        let max_delay_samples = (self.line.len() - 2) as f32;
         let inv_sr = 1.0 / self.sample_rate;
 
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.line.write_pos();
+
         for ch in 0..output.num_channels() {
-            let mut write_pos = self.write_pos;
+            self.line.set_write_pos(start_pos);
             let mut lfo_phase = self.lfo_phase;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -255,25 +235,18 @@ impl UGen for Flanger {
                 let delay_secs = 0.0005 + depth * lfo; // min 0.5ms
                 let delay_samples = (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
 
-                // Read with linear interpolation
-                let d_int = delay_samples as usize;
-                let d_frac = delay_samples - d_int as f32;
-                let ra = (write_pos + buf_len - d_int) % buf_len;
-                let rb = (write_pos + buf_len - d_int - 1) % buf_len;
-                let delayed = self.buffer[ra] + d_frac * (self.buffer[rb] - self.buffer[ra]);
+                let delayed = self.line.read_interp(delay_samples);
 
                 // Write input + feedback into buffer
-                self.buffer[write_pos] = x + feedback * delayed;
+                self.line.write_and_advance(x + feedback * delayed);
 
                 out[i] = (1.0 - mix) * x + mix * delayed;
 
                 lfo_phase += rate * inv_sr;
                 lfo_phase -= lfo_phase.floor();
-                write_pos = (write_pos + 1) % buf_len;
             }
 
             if ch == 0 {
-                self.write_pos = write_pos;
                 self.lfo_phase = lfo_phase;
             }
         }
@@ -354,7 +327,7 @@ impl UGen for Phaser {
             let mut ap_state = self.ap_state;
             let mut lfo_phase = self.lfo_phase;
             let mut fb_sample = self.feedback_sample;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {

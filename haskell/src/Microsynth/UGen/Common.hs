@@ -18,6 +18,7 @@
 module Microsynth.UGen.Common
   ( wrap01
   , phasorStep
+  , mkPhasorOsc
   , bindPort
   , mapBlock
   , scanBlock1F
@@ -29,8 +30,9 @@ import Control.Monad.ST (ST)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Microsynth.Buffer (MBlock)
-import Microsynth.Node (Input, bindInput)
-import Microsynth.Types (Sample)
+import Microsynth.Node (Input, Node (..), bindInput, readInput)
+import Microsynth.Numerics (invSampleRate)
+import Microsynth.Types (Sample, SampleRate)
 import Microsynth.UGen.Spec (UGenTag, portDefaults)
 
 -- | Wrap a phase accumulator back into @[0, 1)@. Since the accumulator is always
@@ -48,6 +50,32 @@ wrap01 p = if p >= 1 then p - 1 else p
 phasorStep :: Sample -> Sample -> Sample -> Sample
 phasorStep invSr f p = wrap01 (p + f * invSr)
 {-# INLINE phasorStep #-}
+
+-- | Build a phase-accumulator oscillator node — the whole shared skeleton of the
+-- family: an unboxed phase cell, the reciprocal sample rate hoisted out of the
+-- loop, the freq port (always port 0 of a phasor UGen) bound from the descriptor
+-- registry, and the per-sample loop that reads freq, emits, and advances the
+-- phase.
+--
+-- The caller supplies only @emit i p@, which writes the output sample for phase
+-- @p@ (in @[0, 1)@) at index @i@ — the sole thing that distinguishes one phasor
+-- oscillator from another. Any /extra/ ports beyond freq are bound by the caller
+-- and closed over by @emit@, so a UGen's port count stays its own business.
+-- 'INLINE'd, so each call site compiles back to the loop it replaced.
+mkPhasorOsc
+  :: SampleRate -> [MBlock s] -> MBlock s -> UGenTag
+  -> (Int -> Sample -> ST s ())
+  -> ST s (Node s)
+mkPhasorOsc sr ins out tag emit = do
+  phase <- VUM.replicate 1 0  -- unboxed phase accumulator
+  let !invSr       = invSampleRate sr
+      (freqIn, dF) = bindPort ins tag 0
+      !n           = VUM.length out
+  pure $ Node $ scanBlock1F phase n $ \i p -> do
+    f <- readInput freqIn i dF
+    emit i p
+    pure (phasorStep invSr f p)
+{-# INLINE mkPhasorOsc #-}
 
 -- | Bind input port @p@ of a UGen, pairing the resolved source block with the
 -- port's default value taken from the descriptor registry (rather than a literal

@@ -1,6 +1,6 @@
 //! Utility UGens: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -167,8 +167,8 @@ impl UGen for SampleAndHold {
         for ch in 0..output.num_channels() {
             let mut held = self.held_value;
             let mut prev_trig = self.prev_trig;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
-            let trig_ch = trig_buf.channel(ch % trig_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
+            let trig_ch = channel_wrapped(trig_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -320,7 +320,7 @@ impl UGen for Lag {
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {
@@ -380,7 +380,7 @@ impl UGen for Clip {
         let hi_buf = inputs.get(2).copied();
 
         for ch in 0..output.num_channels() {
-            let in_ch = in_buf.channel(ch % in_buf.num_channels()).samples();
+            let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
             for i in 0..out.len() {

@@ -27,23 +27,29 @@ library
     , bytestring
     , aeson
     , vector-th-unbox
+  -- The public API: the umbrella, the vocabulary types the EDSL is written in,
+  -- and the graph/IR/introspection surface an external consumer targets.
   exposed-modules:
       Microsynth
       Microsynth.Types
       Microsynth.Context
-      Microsynth.Buffer
-      Microsynth.Node
-      Microsynth.Numerics
       Microsynth.Signal
-      Microsynth.Graph
       Microsynth.SynthDef
       Microsynth.SynthDef.Introspect
       Microsynth.SynthDef.IR
+      Microsynth.UGen.Spec
       Microsynth.Engine
       Microsynth.Wav
       Microsynth.Demo
+  -- The internal engine: the render path (buffers, nodes, DSP kernels) and the
+  -- graph builder. Reachable only through the exposed API above, so these stay
+  -- free to change without breaking consumers.
+  other-modules:
+      Microsynth.Buffer
+      Microsynth.Node
+      Microsynth.Numerics
+      Microsynth.Graph
       Microsynth.UGen
-      Microsynth.UGen.Spec
       Microsynth.UGen.Common
       Microsynth.UGen.Math
       Microsynth.UGen.Oscillator

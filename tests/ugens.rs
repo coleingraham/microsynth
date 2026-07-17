@@ -2159,3 +2159,77 @@ fn test_dsl_lfo_compiles() {
         .fold(0.0f32, |a, b| a.max(b.abs()));
     assert!(max > 0.0, "lfo DSL synth should produce output");
 }
+
+// ============================================================================
+// StereoWidth
+// ============================================================================
+
+/// StereoWidth's Haas delay must interpolate *fractional* sample delays.
+///
+/// The delay is `width * 0.025 * sample_rate` samples, which is almost never a
+/// whole number, so the fractional part is the whole point — without it the
+/// delay quantizes to integer samples and modulating `width` steps audibly
+/// instead of sweeping.
+///
+/// This pins it analytically rather than to a golden. Drive the UGen with a
+/// linear ramp (`Phasor`, which outputs `n * freq / sr` before it wraps).
+/// Linear interpolation of a linear signal is exact, so a delay of `d` samples
+/// must reproduce the ramp value exactly `d` samples earlier:
+///
+/// ```text
+///   left[n]  = x[n]
+///   right[n] = x[n] * (1 - w) + (x[n] - d * slope) * w  =  left[n] - w * d * slope
+/// ```
+///
+/// At sr = 1000 and w = 0.5 the delay is 12.5 samples — so a correct engine
+/// lands on `left - 0.00625` and one that truncates to 12 lands on
+/// `left - 0.00600`. The 1e-5 tolerance separates them by a wide margin.
+#[test]
+fn test_stereo_width_interpolates_fractional_delay() {
+    const SR: f32 = 1000.0;
+    const FREQ: f32 = 1.0;
+    const WIDTH: f32 = 0.5;
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: SR,
+        block_size: 64,
+    });
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(FREQ)));
+    let ramp = engine.graph_mut().add_node(Box::new(Phasor::new()));
+    let width = engine.graph_mut().add_node(Box::new(Const::new(WIDTH)));
+    let sw = engine.graph_mut().add_node(Box::new(StereoWidth::new()));
+    engine.graph_mut().connect(freq, ramp, 0);
+    engine.graph_mut().connect(ramp, sw, 0);
+    engine.graph_mut().connect(width, sw, 1);
+    engine.graph_mut().set_sink(sw);
+    engine.prepare();
+
+    let output = engine.render().expect("should produce output");
+    let left = output.channel(0).samples();
+    let right = output.channel(1).samples();
+
+    let slope = FREQ / SR; // ramp increment per sample
+    let delay_samples = WIDTH * 0.025 * SR; // 12.5
+    let expected_drop = WIDTH * delay_samples * slope;
+
+    // Truncating the delay to whole samples would give this instead. Assert the
+    // two are far enough apart that the test actually discriminates.
+    let truncated_drop = WIDTH * delay_samples.floor() * slope;
+    assert!(
+        (expected_drop - truncated_drop).abs() > 1e-4,
+        "test would not distinguish interpolated from truncated delay"
+    );
+
+    // Skip the priming region, where the delay line still holds initial zeros.
+    let first = delay_samples.ceil() as usize + 1;
+    for n in first..left.len() {
+        let drop = left[n] - right[n];
+        assert!(
+            (drop - expected_drop).abs() < 1e-5,
+            "sample {n}: expected left-right == {expected_drop} (fractional delay \
+             of {delay_samples} samples), got {drop}. Truncating to \
+             {} samples would give {truncated_drop}.",
+            delay_samples.floor()
+        );
+    }
+}

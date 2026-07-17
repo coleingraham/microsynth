@@ -1,8 +1,8 @@
 # A Haskell version of microsynth — design
 
 This document describes how the Rust `microsynth` engine maps onto idiomatic
-Haskell. The `haskell/` directory implements the shaded ("scaffold") rows
-end-to-end; the rest is design-only.
+Haskell. The `haskell/` directory implements the rows marked ✅ end-to-end; the
+rows marked ⬜ are design-only.
 
 ## Philosophy
 
@@ -24,18 +24,27 @@ live graph**. Haskell keeps that split but sharpens each half:
 
 ## Module mapping (Rust → Haskell)
 
+Modules marked **(internal)** are `other-modules` in `microsynth.cabal` — the
+render path and graph builder, reachable only through the exposed API, so they
+stay free to change without breaking consumers.
+
 | Rust | Haskell module | Status | Notes |
 |---|---|---|---|
-| `buffer.rs` (`Block`, `AudioBuffer`) | `Microsynth.Buffer` | ✅ scaffold | `MVector s Float` block, allocated once, reused |
-| `context.rs` (`ProcessContext`, `Rate`) | `Microsynth.Context` | ✅ scaffold | plain strict record + `Rate` |
-| `node.rs` (`trait UGen`) | `Microsynth.Node` | ✅ scaffold | `newtype Node s = Node (Context -> [MBlock s] -> MBlock s -> ST s ())`; state captured in the closure |
+| — | `Microsynth.Types` | ✅ | domain newtypes (`Sample`, `SampleRate`, `NodeId`, `PortName`, `KindTag`, …) so raw `Int`/`Float`/`String` never cross a boundary |
+| `buffer.rs` (`Block`, `AudioBuffer`) | `Microsynth.Buffer` *(internal)* | ✅ scaffold | `MVector s Float` block, allocated once, reused |
+| `context.rs` (`ProcessContext`) | `Microsynth.Context` | ✅ scaffold | plain strict record. Rust's `Rate` has no analogue — the scaffold is audio-rate only, and the unused `Rate` type was removed rather than kept for symmetry |
+| `node.rs` (`trait UGen`) | `Microsynth.Node` *(internal)* | ✅ scaffold | `newtype Node s = Node (Context -> [MBlock s] -> MBlock s -> ST s ())`; state captured in the closure |
+| `node.rs` (`spec()`), `ugens/mod.rs` (`register_spec`) | `Microsynth.UGen.Spec` | ✅ | the descriptor registry: kind tags + ordered port names/defaults, single-sourced. Rust's analogue is split across `ugen_spec!` and `register_spec` |
+| `ugens/macros.rs`, `buffer.rs` (`read_input`) | `Microsynth.Numerics` *(internal)*, `Microsynth.UGen.Common` *(internal)* | ✅ | shared DSP constants (`tau`, `invSampleRate`) and block combinators (`mkPhasorOsc`, `scanBlock1F`, `phasorStep`, `bindPort`) |
+| — | `Microsynth.SynthDef.Introspect` | ✅ | named-port / kind-tag / arity views over a compiled graph. No Rust equivalent |
+| `ir/` | `Microsynth.SynthDef.IR` | ⚠️ **diverged** | versioned JSON IR — but **not the same format as Rust's**, despite both claiming version 1. See [`COEXISTENCE.md`](COEXISTENCE.md#current-state--two-irs-one-version-number) |
 | `dsl/{lexer,parser,compiler}.rs` | `Microsynth.Signal` | ✅ scaffold | replaced by an EDSL: `Signal` + `Num`/`Fractional` |
 | `synthdef.rs` (`SynthDef`, builder) | `Microsynth.SynthDef` | ✅ scaffold | pure `SynthDef` value; `synthdef`/`param`/`out` builder monad; AST→graph with leaf interning |
-| `graph.rs` (Kahn topo sort, pull render) | `Microsynth.Graph` | ✅ scaffold | `topoSort`; render lives in `Engine` |
+| `graph.rs` (Kahn topo sort, pull render) | `Microsynth.Graph` *(internal)* | ✅ scaffold | `topoSort`; render lives in `Engine` |
 | `engine.rs` (`render`, `render_offline`) | `Microsynth.Engine` | ✅ scaffold | block loop in `runST`; per-node output vector read in topo order |
 | `bin/microsynth-cli.rs` (`clap`, WAV) | `app/Main.hs` + `Microsynth.Wav` | ✅ scaffold | `optparse-applicative`; hand-written RIFF writer |
-| `ugens/{math,oscillators,filters,envelopes}.rs` | `Microsynth.UGen.*` | ✅ subset | const/binop/neg, sinOsc, saw, RBJ lpf, perc |
-| `ugens/*` (≈40 more) | `Microsynth.UGen.*` | ⬜ deferred | band-limited oscs, noise, ADSR/ASR, FM, physical models, distortion, modulation, reverb |
+| `ugens/{math,oscillators,filters,envelopes}.rs` | `Microsynth.UGen.*` *(internal)* | ✅ subset | const/binop/neg, sinOsc, saw, RBJ lpf, perc — 8 kinds vs Rust's ~60 |
+| `ugens/*` (≈50 more) | `Microsynth.UGen.*` | ⬜ deferred | band-limited oscs, noise, ADSR/ASR, FM, physical models, distortion, modulation, reverb |
 | `spectral/*` (FFT/STFT/Griffin-Lim) | `Microsynth.Spectral.*` | ⬜ deferred | recommend the `fft`/`vector-fft` package unless zero-dep is required |
 | `scheduler.rs` | `Microsynth.Scheduler` | ⬜ deferred | time-ordered event queue (`Data.Heap`) |
 | `routing.rs`, `musical_time.rs`, `tuning.rs`, `sample.rs` | matching modules | ⬜ deferred | pure data + maps |
