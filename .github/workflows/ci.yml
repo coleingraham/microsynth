@@ -63,7 +63,7 @@ jobs:
       # cabal's plan.json (written by --dry-run above) is the precise cache key:
       # it changes only when a dependency actually changes.
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.setup.outputs.cabal-store }}
           key: ${{ runner.os }}-ghc${{ steps.setup.outputs.ghc-version }}-${{ hashFiles('haskell/dist-newstyle/cache/plan.json') }}
