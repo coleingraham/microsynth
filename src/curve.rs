@@ -24,6 +24,9 @@ pub enum GlideShape {
     ///
     /// A positive coefficient eases slow-to-fast, a negative one eases
     /// fast-to-slow, and zero is numerically equivalent to [`GlideShape::Linear`].
+    /// The coefficient is sanitized on evaluation (see [`glide_fraction`]):
+    /// non-finite values and out-of-range magnitudes can't produce a
+    /// non-finite result.
     Exponential(f32),
 }
 
@@ -44,11 +47,41 @@ pub enum GlideSpace {
     Pitch,
 }
 
+/// Upper bound (in either direction) on the exponential shape's tension
+/// coefficient.
+///
+/// `f32::exp` overflows to `inf` once its argument exceeds `~88.7`
+/// (`ln(f32::MAX)`), and the reference formula below then divides `inf` by
+/// `inf`, producing `NaN`. This bound stays far under that ceiling —
+/// `TENSION_BOUND.exp()` is about `2.35e17`, nowhere near `f32::MAX`
+/// (`~3.4e38`) — while still being large enough that anything beyond it
+/// would be audibly indistinguishable from a step anyway: at
+/// `k = TENSION_BOUND`, the blend fraction has covered under 2% of the
+/// distance to the target by 90% of the way through the glide (the mirror
+/// image holds for negative tension). Tension is clamped to this range
+/// before the formula runs, so no finite input can drive it to overflow.
+const TENSION_BOUND: f32 = 40.0;
+
+/// Below this magnitude, the exponential shape's tension is treated as
+/// exactly zero (linear).
+///
+/// This isn't just a shortcut for the already-special-cased `k == 0.0`: an
+/// `f32`'s precision near `1.0` means `k.exp() - 1.0` can itself round to
+/// exactly `0.0` for sufficiently small nonzero `k` (below roughly `6e-8`),
+/// which would divide zero by zero. This threshold sits comfortably above
+/// that precision floor, and a tension this close to zero is in any case
+/// perceptually identical to a true linear ramp.
+const TENSION_ZERO_EPSILON: f32 = 1e-4;
+
 /// Evaluate a glide shape at normalized phase `x` (clamped to `[0, 1]`),
 /// returning the fraction of the distance to the target covered so far.
 ///
-/// This is the single place the four shape formulas are implemented;
-/// callers should not reimplement these curves elsewhere.
+/// This is the single place the four shape formulas are implemented, and
+/// the single place the exponential shape's tension is sanitized against
+/// non-finite or extreme values (see [`TENSION_BOUND`] and
+/// [`TENSION_ZERO_EPSILON`]); callers should not reimplement these curves,
+/// or the sanitization, elsewhere. The result is always finite and in
+/// `[0, 1]` regardless of the tension passed in.
 pub fn glide_fraction(shape: GlideShape, x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     match shape {
@@ -56,7 +89,18 @@ pub fn glide_fraction(shape: GlideShape, x: f32) -> f32 {
         GlideShape::Linear => x,
         GlideShape::Sine => (1.0 - (core::f32::consts::PI * x).cos()) / 2.0,
         GlideShape::Exponential(k) => {
-            if k == 0.0 {
+            // NaN carries no direction to preserve, so it falls back to the
+            // neutral (linear) case rather than an arbitrary sign choice.
+            // `f32::clamp` would propagate a NaN `self` through unchanged,
+            // so NaN must be handled before clamping; `clamp` on its own
+            // already maps +-inf to +-TENSION_BOUND correctly (inf compares
+            // greater than max, -inf less than min).
+            let k = if k.is_nan() {
+                0.0
+            } else {
+                k.clamp(-TENSION_BOUND, TENSION_BOUND)
+            };
+            if k.abs() < TENSION_ZERO_EPSILON {
                 x
             } else {
                 ((k * x).exp() - 1.0) / (k.exp() - 1.0)
@@ -130,5 +174,86 @@ mod tests {
         // Fast-to-slow: covers more than half the distance at the midpoint.
         let mid = glide_fraction(GlideShape::Exponential(-4.0), 0.5);
         assert!(mid > 0.5, "expected fast-to-slow midpoint > 0.5, got {mid}");
+    }
+
+    fn sample_xs() -> impl Iterator<Item = f32> {
+        (0..=10).map(|i| i as f32 / 10.0)
+    }
+
+    #[test]
+    fn exponential_hostile_tension_is_always_finite_and_bounded() {
+        let hostile_tensions = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            1000.0,
+            -1000.0,
+            f32::MAX,
+            f32::MIN,
+            200.0,
+            -200.0,
+            89.0,
+            -89.0,
+            1e-10,
+            -1e-10,
+        ];
+        for &k in &hostile_tensions {
+            for x in sample_xs() {
+                let frac = glide_fraction(GlideShape::Exponential(k), x);
+                assert!(
+                    frac.is_finite(),
+                    "k={k}, x={x}: expected a finite result, got {frac}"
+                );
+                assert!(
+                    (0.0..=1.0).contains(&frac),
+                    "k={k}, x={x}: expected a result in [0, 1], got {frac}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exponential_nan_tension_falls_back_to_linear() {
+        // NaN carries no direction to preserve, so it degrades to the
+        // neutral (linear) case rather than an arbitrary sign choice.
+        for x in sample_xs() {
+            assert_eq!(glide_fraction(GlideShape::Exponential(f32::NAN), x), x);
+        }
+    }
+
+    #[test]
+    fn exponential_tiny_nonzero_tension_falls_back_to_linear() {
+        // Below TENSION_ZERO_EPSILON, k.exp() - 1.0 can itself round to
+        // exactly 0.0 in f32, which would otherwise divide zero by zero.
+        for x in sample_xs() {
+            assert_eq!(glide_fraction(GlideShape::Exponential(1e-10), x), x);
+            assert_eq!(glide_fraction(GlideShape::Exponential(-1e-10), x), x);
+        }
+    }
+
+    #[test]
+    fn exponential_tension_is_clamped_to_the_documented_bound() {
+        // Beyond the bound, more extreme magnitudes must not change the
+        // result further — they're all clamped to the same curve.
+        for x in sample_xs() {
+            let at_bound = glide_fraction(GlideShape::Exponential(TENSION_BOUND), x);
+            let past_bound = glide_fraction(GlideShape::Exponential(1000.0), x);
+            assert_eq!(at_bound, past_bound, "x={x}: clamping should be exact");
+
+            let at_neg_bound = glide_fraction(GlideShape::Exponential(-TENSION_BOUND), x);
+            let past_neg_bound = glide_fraction(GlideShape::Exponential(-1000.0), x);
+            assert_eq!(
+                at_neg_bound, past_neg_bound,
+                "x={x}: clamping should be exact"
+            );
+        }
+    }
+
+    #[test]
+    fn exponential_zero_tension_special_case_is_still_exact() {
+        // The fix must not have disturbed the pre-existing exact k=0 case.
+        for x in sample_xs() {
+            assert_eq!(glide_fraction(GlideShape::Exponential(0.0), x), x);
+        }
     }
 }
