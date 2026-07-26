@@ -32,6 +32,15 @@
 //! callers on the JS side should treat it as a stable contract, not
 //! reimplement the shape/space vocabulary itself (see [`crate::curve`]).
 //!
+//! # Contract vs. diagnostic exports
+//!
+//! `ms_voice_param_glide`, `ms_legato_note_on`, `ms_legato_note_off`, and
+//! `ms_schedule_musical_glides` are the stable contract: downstream
+//! consumers build against these signatures. `ms_legato_slot_for` is not —
+//! it's a read-only diagnostic accessor over internal bus-slot bookkeeping,
+//! added only to make that bookkeeping testable, and may change or be
+//! removed independently of the contract above.
+//!
 //! # Architecture
 //!
 //! ```text
