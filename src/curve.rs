@@ -50,17 +50,22 @@ pub enum GlideSpace {
 /// Upper bound (in either direction) on the exponential shape's tension
 /// coefficient.
 ///
-/// `f32::exp` overflows to `inf` once its argument exceeds `~88.7`
-/// (`ln(f32::MAX)`), and the reference formula below then divides `inf` by
-/// `inf`, producing `NaN`. This bound stays far under that ceiling —
-/// `TENSION_BOUND.exp()` is about `2.35e17`, nowhere near `f32::MAX`
-/// (`~3.4e38`) — while still being large enough that anything beyond it
-/// would be audibly indistinguishable from a step anyway: at
-/// `k = TENSION_BOUND`, the blend fraction has covered under 2% of the
-/// distance to the target by 90% of the way through the glide (the mirror
-/// image holds for negative tension). Tension is clamped to this range
-/// before the formula runs, so no finite input can drive it to overflow.
-const TENSION_BOUND: f32 = 40.0;
+/// `f32::exp` overflows to `inf` once its argument exceeds `ln(f32::MAX)`
+/// (`~88.7228`), and the reference formula below then divides `inf` by
+/// `inf`, producing `NaN` — the largest exponential the formula evaluates is
+/// `k.exp()` itself (at `x = 1`), so that's the only overflow to guard.
+/// This bound is deliberately set close to that ceiling rather than to some
+/// arbitrary smaller value: a lower bound would silently distort tensions
+/// that are already perfectly finite and numerically meaningful (e.g.
+/// `k = 50` produces its own valid, merely very steep, curve — clamping it
+/// down to a smaller bound would force it through a different, wrong
+/// curve). `80.0` leaves `e^8.7228 ≈ 6100`x of headroom below the true
+/// overflow point (`80.0.exp() ≈ 5.5e34` vs. `f32::MAX ≈ 3.4e38`), which is
+/// enough margin that the clamp itself can never be the thing that
+/// overflows, while only reshaping tensions that were already about to
+/// overflow unclamped. Tension is clamped to this range before the formula
+/// runs, so no finite input can drive it to overflow.
+const TENSION_BOUND: f32 = 80.0;
 
 /// Below this magnitude, the exponential shape's tension is treated as
 /// exactly zero (linear).
@@ -158,6 +163,31 @@ mod tests {
                 let x = i as f32 / 10.0;
                 let expected = ((k * x).exp() - 1.0) / (k.exp() - 1.0);
                 assert_eq!(glide_fraction(GlideShape::Exponential(k), x), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn exponential_steep_but_finite_tension_is_not_clamped() {
+        // A tension well under the bound — even one as steep as 50 — is
+        // already perfectly finite and numerically meaningful on its own,
+        // and must be evaluated with its own formula rather than silently
+        // reshaped to match some smaller clamped tension. This is what
+        // distinguishes "sanitize hostile input" from "narrow the usable
+        // range": only tensions that would actually overflow get clamped.
+        for &k in &[50.0f32, -50.0, 70.0, -70.0] {
+            assert!(
+                k.abs() < TENSION_BOUND,
+                "test setup: {k} should be under the clamp bound"
+            );
+            for i in 0..=10 {
+                let x = i as f32 / 10.0;
+                let expected = ((k * x).exp() - 1.0) / (k.exp() - 1.0);
+                assert_eq!(
+                    glide_fraction(GlideShape::Exponential(k), x),
+                    expected,
+                    "k={k}, x={x}: unclamped tension must match its own formula exactly"
+                );
             }
         }
     }
