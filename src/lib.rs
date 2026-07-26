@@ -21,7 +21,11 @@ pub mod synthdef;
 pub mod tuning;
 pub mod ugens;
 pub mod voice;
-#[cfg(target_arch = "wasm32")]
+// Not gated on `target_arch = "wasm32"`: the raw `#[no_mangle] extern "C"`
+// exports in this module don't depend on wasm-bindgen (only the `WebSynth`
+// class and its neighbors do, gated separately below by `feature = "web"`),
+// and compiling them on every target lets the native test suite drive the
+// raw C-ABI directly instead of only exercising it by proxy.
 pub mod web;
 
 // Re-export core types for convenience.
