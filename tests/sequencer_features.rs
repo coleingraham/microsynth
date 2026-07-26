@@ -730,7 +730,14 @@ fn test_param_glide_ramps_value() {
     assert!(max1 < 0.001, "Should be silent at amp=0, got {}", max1);
 
     // Set glide to amp=1.0 over ~0.01s (441 samples ≈ 7 blocks at 64)
-    assert!(engine.set_param_glide(&synth, "amp", 1.0, 0.01));
+    assert!(engine.set_param_glide(
+        &synth,
+        "amp",
+        1.0,
+        0.01,
+        GlideShape::default(),
+        GlideSpace::default()
+    ));
 
     // Render several blocks — amplitude should gradually increase
     let mut max_values: Vec<f32> = Vec::new();
@@ -767,10 +774,24 @@ fn test_voice_param_glide() {
     engine.prepare();
 
     // Set glide via voice ID
-    assert!(engine.set_voice_param_glide(voice_id, "amp", 0.0, 0.01));
+    assert!(engine.set_voice_param_glide(
+        voice_id,
+        "amp",
+        0.0,
+        0.01,
+        GlideShape::default(),
+        GlideSpace::default()
+    ));
 
     // Should fail for nonexistent param
-    assert!(!engine.set_voice_param_glide(voice_id, "nonexistent", 0.0, 0.01));
+    assert!(!engine.set_voice_param_glide(
+        voice_id,
+        "nonexistent",
+        0.0,
+        0.01,
+        GlideShape::default(),
+        GlideSpace::default()
+    ));
 }
 
 #[test]
@@ -785,9 +806,15 @@ fn test_scheduled_param_glide() {
     engine.prepare();
 
     // Schedule a glide starting at sample 0
-    engine
-        .scheduler_mut()
-        .schedule_param_glide(0, voice_id, "amp", 1.0, 0.01);
+    engine.scheduler_mut().schedule_param_glide(
+        0,
+        voice_id,
+        "amp",
+        1.0,
+        0.01,
+        GlideShape::default(),
+        GlideSpace::default(),
+    );
 
     // Render — the event should fire and start the glide
     let out1 = engine.render();
@@ -818,7 +845,15 @@ fn test_scheduled_param_glide() {
 fn test_scheduler_param_glide_convenience() {
     let mut scheduler = Scheduler::new();
     let voice = scheduler.alloc_voice_id();
-    scheduler.schedule_param_glide(100, voice, "freq", 880.0, 0.5);
+    scheduler.schedule_param_glide(
+        100,
+        voice,
+        "freq",
+        880.0,
+        0.5,
+        GlideShape::default(),
+        GlideSpace::default(),
+    );
     assert_eq!(scheduler.len(), 1);
 
     let events = scheduler.drain_before(200);
@@ -829,12 +864,255 @@ fn test_scheduler_param_glide_convenience() {
             param,
             target,
             glide_secs,
+            shape,
+            space,
         } => {
             assert_eq!(*v, voice);
             assert_eq!(param, "freq");
             assert!((target - 880.0).abs() < f32::EPSILON);
             assert!((glide_secs - 0.5).abs() < f32::EPSILON);
+            assert_eq!(*shape, GlideShape::default());
+            assert_eq!(*space, GlideSpace::default());
         }
         _ => panic!("Expected SetParamGlide event"),
     }
+}
+
+// ============================================================================
+// Glide Interpolation Shapes and Pitch-Space Glides
+// ============================================================================
+
+/// Arm a `Param`'s glide and render it to completion in a single block,
+/// returning the emitted samples. Sample `j` corresponds to phase
+/// `x = j / total_samples`. `total_samples` must fit in one block
+/// (`<= MAX_BLOCK_SIZE`).
+fn render_glide(
+    start: f32,
+    target: f32,
+    total_samples: usize,
+    shape: GlideShape,
+    space: GlideSpace,
+) -> Vec<f32> {
+    let sample_rate = 44100.0;
+    let context = ProcessContext::new(sample_rate, total_samples);
+    let mut param = ugens::Param::new(start);
+    param.init(&context);
+    // Add half a sample of headroom so the f32 round trip through glide_secs
+    // can't truncate to one sample short of `total_samples`.
+    let glide_secs = (total_samples as f32 + 0.5) / sample_rate;
+    assert!(param.set_target(target, glide_secs, shape, space));
+
+    let mut buffer = AudioBuffer::new(1, total_samples);
+    param.process(&context, &[], &mut buffer);
+    buffer.channel(0).samples().to_vec()
+}
+
+#[test]
+fn test_glide_default_shape_and_space_are_linear_and_raw() {
+    assert_eq!(GlideShape::default(), GlideShape::Linear);
+    assert_eq!(GlideSpace::default(), GlideSpace::Raw);
+}
+
+#[test]
+fn test_glide_shape_hold_is_a_step() {
+    let samples = render_glide(0.0, 10.0, 10, GlideShape::Hold, GlideSpace::Raw);
+    assert!(
+        samples.iter().all(|&s| s == 0.0),
+        "hold should not move at all during the glide, got {:?}",
+        samples
+    );
+
+    // Once the glide's duration has elapsed, the very next block jumps
+    // straight to the target — that's what makes it a step function.
+    let sample_rate = 44100.0;
+    let context = ProcessContext::new(sample_rate, 10);
+    let mut param = ugens::Param::new(0.0);
+    param.init(&context);
+    param.set_target(10.0, 10.5 / sample_rate, GlideShape::Hold, GlideSpace::Raw);
+    let mut during = AudioBuffer::new(1, 10);
+    param.process(&context, &[], &mut during);
+    let mut after = AudioBuffer::new(1, 4);
+    param.process(&context, &[], &mut after);
+    assert!(
+        after.channel(0).samples().iter().all(|&s| s == 10.0),
+        "value should jump to target once the glide's duration elapses, got {:?}",
+        after.channel(0).samples()
+    );
+}
+
+#[test]
+fn test_glide_shape_linear_is_constant_rate() {
+    let samples = render_glide(0.0, 10.0, 10, GlideShape::Linear, GlideSpace::Raw);
+    for (j, &s) in samples.iter().enumerate() {
+        let expected = 10.0 * (j as f32 / 10.0);
+        assert!(
+            (s - expected).abs() < 1e-4,
+            "sample {j}: expected {expected}, got {s}"
+        );
+    }
+}
+
+#[test]
+fn test_glide_shape_sine_matches_raised_cosine_formula() {
+    let total = 20;
+    let samples = render_glide(0.0, 100.0, total, GlideShape::Sine, GlideSpace::Raw);
+    for (j, &s) in samples.iter().enumerate() {
+        let x = j as f32 / total as f32;
+        let expected = 100.0 * glide_fraction(GlideShape::Sine, x);
+        assert!(
+            (s - expected).abs() < 1e-3,
+            "sample {j} (x={x}): expected {expected}, got {s}"
+        );
+    }
+    // Sanity check that this actually diverges from a linear ramp partway
+    // through — otherwise this test wouldn't be exercising the shape at all.
+    let quarter = samples[total / 4];
+    assert!(
+        (quarter - 25.0).abs() > 1.0,
+        "sine trajectory at x=0.25 should differ noticeably from the linear value 25.0, got {quarter}"
+    );
+}
+
+#[test]
+fn test_glide_shape_exponential_zero_tension_matches_linear() {
+    let total = 10;
+    let linear = render_glide(0.0, 10.0, total, GlideShape::Linear, GlideSpace::Raw);
+    let exp_zero = render_glide(
+        0.0,
+        10.0,
+        total,
+        GlideShape::Exponential(0.0),
+        GlideSpace::Raw,
+    );
+    assert_eq!(
+        linear, exp_zero,
+        "k=0 exponential should be numerically equivalent to linear"
+    );
+}
+
+#[test]
+fn test_glide_shape_exponential_positive_tension_is_slow_to_fast() {
+    let total = 20;
+    let samples = render_glide(
+        0.0,
+        100.0,
+        total,
+        GlideShape::Exponential(4.0),
+        GlideSpace::Raw,
+    );
+    // Slow-to-fast: less than a linear-proportional amount of ground covered
+    // by the midpoint.
+    let midpoint = samples[total / 2];
+    assert!(
+        midpoint < 50.0,
+        "k>0 should ease slow-to-fast (midpoint < 50.0), got {midpoint}"
+    );
+    for (j, &s) in samples.iter().enumerate() {
+        let x = j as f32 / total as f32;
+        let expected = 100.0 * glide_fraction(GlideShape::Exponential(4.0), x);
+        assert!(
+            (s - expected).abs() < 1e-3,
+            "sample {j} (x={x}): expected {expected}, got {s}"
+        );
+    }
+}
+
+#[test]
+fn test_glide_shape_exponential_negative_tension_is_fast_to_slow() {
+    let total = 20;
+    let samples = render_glide(
+        0.0,
+        100.0,
+        total,
+        GlideShape::Exponential(-4.0),
+        GlideSpace::Raw,
+    );
+    let midpoint = samples[total / 2];
+    assert!(
+        midpoint > 50.0,
+        "k<0 should ease fast-to-slow (midpoint > 50.0), got {midpoint}"
+    );
+}
+
+#[test]
+fn test_glide_default_is_bit_identical_to_pre_shape_behavior() {
+    // Regression test: a glide with no shape/space specified (the defaults)
+    // must produce exactly the same samples as the original linear-only
+    // increment-based ramp, bit for bit.
+    let total = 100usize;
+    let start = 0.0f32;
+    let target = 1.0f32;
+    let samples = render_glide(
+        start,
+        target,
+        total,
+        GlideShape::default(),
+        GlideSpace::default(),
+    );
+
+    let increment = (target - start) / total as f32;
+    let mut expected = Vec::with_capacity(total);
+    let mut value = start;
+    for _ in 0..total {
+        expected.push(value);
+        value += increment;
+    }
+
+    assert_eq!(
+        samples, expected,
+        "default glide output must be bit-identical to the original increment-based ramp"
+    );
+}
+
+#[test]
+fn test_pitch_space_octave_glide_is_perceptually_even() {
+    // A glide from 220 Hz to 440 Hz (one octave) in pitch space should reach
+    // its perceptual midpoint at the geometric mean (~311.13 Hz), not the
+    // arithmetic mean (330 Hz).
+    let total = 100;
+    let start_hz = 220.0;
+    let target_hz = 440.0;
+    let samples = render_glide(
+        start_hz,
+        target_hz,
+        total,
+        GlideShape::Linear,
+        GlideSpace::Pitch,
+    );
+
+    let midpoint = samples[total / 2];
+    let geometric_mean = (start_hz * target_hz).sqrt();
+    let arithmetic_mean = (start_hz + target_hz) / 2.0;
+
+    assert!(
+        (midpoint - geometric_mean).abs() < 0.5,
+        "pitch-space glide midpoint should be near the geometric mean {geometric_mean}, got {midpoint}"
+    );
+    assert!(
+        (midpoint - arithmetic_mean).abs() > 10.0,
+        "pitch-space glide midpoint should clearly differ from the arithmetic mean {arithmetic_mean}, got {midpoint}"
+    );
+}
+
+#[test]
+fn test_raw_space_octave_glide_is_linear_in_hz() {
+    // Contrast case: the same octave glide in raw (Hz) space is linear in
+    // Hz, so its midpoint is the arithmetic mean, not the geometric mean.
+    let total = 100;
+    let start_hz = 220.0;
+    let target_hz = 440.0;
+    let samples = render_glide(
+        start_hz,
+        target_hz,
+        total,
+        GlideShape::Linear,
+        GlideSpace::Raw,
+    );
+
+    let midpoint = samples[total / 2];
+    let arithmetic_mean = (start_hz + target_hz) / 2.0;
+    assert!(
+        (midpoint - arithmetic_mean).abs() < 0.5,
+        "raw-space glide midpoint should be near the arithmetic mean {arithmetic_mean}, got {midpoint}"
+    );
 }
