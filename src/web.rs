@@ -120,12 +120,17 @@ static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::Synt
 /// Master effect synth (inserted between bus and graph sink).
 static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(None);
 
+/// A registered SynthDef's mono/legato voice mode: (pitch parameter name,
+/// portamento seconds, tie-portamento shape, tie-portamento space — the
+/// last two default to `Linear`/`Pitch` when the declaration omits them,
+/// see `VoiceModeDecl`'s doc comment).
+type LegatoModeEntry = (AllocString, f32, GlideShape, GlideSpace);
+
 /// Mono/legato voice-mode metadata parsed from each registered SynthDef's
-/// `voice` declaration (see `src/dsl`), keyed by SynthDef name: (pitch
-/// parameter name, portamento seconds). Populated by `ms_register_def`;
-/// absent for any name whose DSL source had no `voice` declaration.
-static LEGATO_MODES: WasmCell<Option<BTreeMap<AllocString, (AllocString, f32)>>> =
-    WasmCell::new(None);
+/// `voice` declaration (see `src/dsl`), keyed by SynthDef name. Populated by
+/// `ms_register_def`; absent for any name whose DSL source had no `voice`
+/// declaration.
+static LEGATO_MODES: WasmCell<Option<BTreeMap<AllocString, LegatoModeEntry>>> = WasmCell::new(None);
 
 /// One [`LegatoVoice`] track per SynthDef name that has been played legato at
 /// least once via `ms_legato_note_on`, keyed by that name.
@@ -225,7 +230,12 @@ pub unsafe extern "C" fn ms_register_def(
     {
         modes.insert(
             AllocString::from(name),
-            (mode.pitch_param.clone(), mode.portamento_secs),
+            (
+                mode.pitch_param.clone(),
+                mode.portamento_secs,
+                mode.portamento_shape,
+                mode.portamento_space,
+            ),
         );
     }
 
@@ -706,20 +716,22 @@ pub unsafe extern "C" fn ms_legato_note_on(
         Some(d) => d,
         None => return 0,
     };
-    let (pitch_param, portamento_secs) = match unsafe { LEGATO_MODES.get_mut() }
-        .as_ref()
-        .and_then(|m| m.get(name))
-    {
-        Some(mode) => mode.clone(),
-        None => return 0,
-    };
+    let (pitch_param, portamento_secs, portamento_shape, portamento_space) =
+        match unsafe { LEGATO_MODES.get_mut() }
+            .as_ref()
+            .and_then(|m| m.get(name))
+        {
+            Some(mode) => mode.clone(),
+            None => return 0,
+        };
     let tracks = match unsafe { LEGATO_VOICES.get_mut() }.as_mut() {
         Some(t) => t,
         None => return 0,
     };
-    let track = tracks
-        .entry(AllocString::from(name))
-        .or_insert_with(|| LegatoVoice::new(pitch_param, portamento_secs));
+    let track = tracks.entry(AllocString::from(name)).or_insert_with(|| {
+        LegatoVoice::new(pitch_param, portamento_secs)
+            .with_glide(portamento_shape, portamento_space)
+    });
     let is_first_note = track.voice().is_none();
 
     let engine = match unsafe { ENGINE.get_mut() }.as_mut() {

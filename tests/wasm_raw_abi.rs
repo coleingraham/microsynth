@@ -301,6 +301,179 @@ fn test_ms_legato_note_on_unregistered_name_returns_zero() {
     }
 }
 
+// -- The legato tie portamento's shape/space --
+//
+// `LegatoVoice`'s tie branch used to glide with `GlideShape::default()` /
+// `GlideSpace::default()` (Linear/Raw) — a linear-in-Hz sweep on a parameter
+// explicitly identified as driving note pitch, the exact defect the shape
+// work fixed everywhere else. These three tests prove, through the raw
+// C-ABI, that a legato tie now (1) defaults to an equal-ratio (Pitch-space)
+// portamento, and (2)/(3) can be overridden to a different space/shape via
+// the `voice` declaration's optional trailing terms.
+//
+// Each uses a synthdef whose output *is* the pitch parameter directly (no
+// envelope in the way), so the rendered signal is the parameter's value.
+
+#[test]
+fn test_ms_legato_note_on_tie_defaults_to_pitch_space_portamento() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        let (sptr, slen) = alloc_str(
+            "synthdef lead freq=440.0 gate=0.0 = freq\n\nvoice lead mono legato freq 0.02",
+        );
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        // First note: fresh attack, instant set to 220.0 (no glide involved).
+        let voice = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(voice > 0);
+        for _ in 0..2 {
+            render_block();
+        }
+
+        // Overlapping note: gate is still open, so this ties — using the
+        // declaration's default shape/space (Linear/Pitch, since none was
+        // written in the source above).
+        let (nptr2, nlen2) = alloc_str("lead");
+        let tied = web::ms_legato_note_on(nptr2, nlen2, 440.0);
+        assert_eq!(tied, voice);
+        free_str(nptr2, nlen2);
+
+        let mut trace = Vec::new();
+        for _ in 0..10 {
+            trace.extend_from_slice(&render_block());
+        }
+
+        let total_samples = (0.02f32 * 44100.0) as usize;
+        let mid = total_samples / 2;
+        let expected_geometric_mid = (220.0f32 * 440.0).sqrt(); // ~311.13
+        let arithmetic_mid = (220.0 + 440.0) / 2.0; // 330.0 — what Raw space would give
+        assert!(
+            (trace[mid] - expected_geometric_mid).abs() < 3.0,
+            "default legato tie should be an equal-ratio (Pitch-space) portamento: \
+             expected ~{expected_geometric_mid} at the midpoint, got {}",
+            trace[mid]
+        );
+        assert!(
+            (trace[mid] - arithmetic_mid).abs() > 5.0,
+            "default legato tie should not be the old linear-in-Hz behavior \
+             (midpoint {}, which reads as Raw's {arithmetic_mid})",
+            trace[mid]
+        );
+        let last = *trace.last().unwrap();
+        assert!(
+            (last - 440.0).abs() < 1e-2,
+            "expected the tie to have reached its target, got {last}"
+        );
+
+        free_str(nptr, nlen);
+    }
+}
+
+#[test]
+fn test_ms_legato_note_on_tie_can_override_to_raw_space() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        let (sptr, slen) = alloc_str(
+            "synthdef lead freq=440.0 gate=0.0 = freq\n\n\
+             voice lead mono legato freq 0.02 linear raw",
+        );
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        let voice = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(voice > 0);
+        for _ in 0..2 {
+            render_block();
+        }
+
+        let (nptr2, nlen2) = alloc_str("lead");
+        let tied = web::ms_legato_note_on(nptr2, nlen2, 440.0);
+        assert_eq!(tied, voice);
+        free_str(nptr2, nlen2);
+
+        let mut trace = Vec::new();
+        for _ in 0..10 {
+            trace.extend_from_slice(&render_block());
+        }
+
+        let total_samples = (0.02f32 * 44100.0) as usize;
+        let mid = total_samples / 2;
+        let arithmetic_mid = (220.0f32 + 440.0) / 2.0; // 330.0
+        let geometric_mid = (220.0f32 * 440.0).sqrt(); // ~311.13 — what Pitch space would give
+        assert!(
+            (trace[mid] - arithmetic_mid).abs() < 3.0,
+            "explicit 'raw' should override the default to a linear-in-Hz sweep: \
+             expected ~{arithmetic_mid} at the midpoint, got {}",
+            trace[mid]
+        );
+        assert!(
+            (trace[mid] - geometric_mid).abs() > 5.0,
+            "explicit 'raw' should not still read as the Pitch-space default \
+             (midpoint {}, which reads as Pitch's {geometric_mid})",
+            trace[mid]
+        );
+
+        free_str(nptr, nlen);
+    }
+}
+
+#[test]
+fn test_ms_legato_note_on_tie_can_override_shape() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        // Raw space isolates the shape check from the space's own curve.
+        let (sptr, slen) = alloc_str(
+            "synthdef lead freq=440.0 gate=0.0 = freq\n\n\
+             voice lead mono legato freq 0.02 sine raw",
+        );
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        let voice = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(voice > 0);
+        for _ in 0..2 {
+            render_block();
+        }
+
+        let (nptr2, nlen2) = alloc_str("lead");
+        let tied = web::ms_legato_note_on(nptr2, nlen2, 440.0);
+        assert_eq!(tied, voice);
+        free_str(nptr2, nlen2);
+
+        let mut trace = Vec::new();
+        for _ in 0..10 {
+            trace.extend_from_slice(&render_block());
+        }
+
+        let total_samples = (0.02f32 * 44100.0) as usize;
+        let quarter = total_samples / 4;
+        let sine_frac = glide_fraction(GlideShape::Sine, 0.25);
+        let expected_sine_quarter = 220.0 + sine_frac * (440.0 - 220.0);
+        let expected_linear_quarter = 220.0 + 0.25 * (440.0 - 220.0); // 275.0
+        assert!(
+            (trace[quarter] - expected_sine_quarter).abs() < 3.0,
+            "explicit 'sine' should override the default Linear shape: \
+             expected ~{expected_sine_quarter} at x=0.25, got {}",
+            trace[quarter]
+        );
+        assert!(
+            (trace[quarter] - expected_linear_quarter).abs() > 5.0,
+            "explicit 'sine' should not read as Linear at x=0.25 \
+             (got {}, which is indistinguishable from linear {expected_linear_quarter})",
+            trace[quarter]
+        );
+
+        free_str(nptr, nlen);
+    }
+}
+
 // ============================================================================
 // Musical-time sequenced glide (`ms_schedule_musical_glides`)
 // ============================================================================
