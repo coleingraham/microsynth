@@ -1,5 +1,6 @@
 use crate::buffer::AudioBuffer;
 use crate::context::ProcessContext;
+use crate::curve::{GlideShape, GlideSpace};
 use crate::node::{NodeId, UGen};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -370,9 +371,16 @@ impl AudioGraph {
     /// Set a target value with glide on a node (e.g. smooth parameter transition).
     /// Returns true if the node accepted the target.
     /// This does NOT require `prepare()` — it's safe to call between renders.
-    pub fn set_node_target(&mut self, id: NodeId, target: f32, glide_secs: f32) -> bool {
+    pub fn set_node_target(
+        &mut self,
+        id: NodeId,
+        target: f32,
+        glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
+    ) -> bool {
         match self.nodes.get_mut(id.index()) {
-            Some(Some(slot)) => slot.ugen.set_target(target, glide_secs),
+            Some(Some(slot)) => slot.ugen.set_target(target, glide_secs, shape, space),
             _ => false,
         }
     }

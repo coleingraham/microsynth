@@ -418,4 +418,233 @@ fn test_schedule_note_aligned_pre_trigger() {
     );
 }
 
+// ============================================================================
+// Musical-time sequence scheduling tests
+// ============================================================================
+
+use microsynth::{GlideShape, GlideSpace, MusicalGlideSegment, schedule_musical_glides};
+
+#[test]
+fn test_sequence_to_samples_constructs_no_engine() {
+    // The conversion is pure: a TimeConfig and a slice of segments in, a
+    // Vec of sample-time events out, no Scheduler or Engine involved.
+    let tc = TimeConfig::new_4_4(120.0, 44100.0);
+    let segments = [MusicalGlideSegment::new(
+        MusicalPosition::new(0, 4, 0),
+        880.0,
+        2.0,
+        GlideShape::Linear,
+    )];
+
+    let events = tc.sequence_to_samples(&segments);
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].time, 22050); // 1 beat in at 120 BPM, 44.1kHz
+    assert_eq!(events[0].target, 880.0);
+    assert!((events[0].glide_secs - 0.25).abs() < 1e-6); // 2 steps = 1/8 note = 0.25s
+    assert_eq!(events[0].shape, GlideShape::Linear);
+}
+
+#[test]
+fn test_sequence_to_samples_is_deterministic() {
+    let tc = TimeConfig::new_4_4(133.0, 48000.0);
+    let segments = [
+        MusicalGlideSegment::new(MusicalPosition::new(0, 0, 0), 220.0, 1.0, GlideShape::Hold),
+        MusicalGlideSegment::new(
+            MusicalPosition::new(1, 3, 5),
+            440.0,
+            3.5,
+            GlideShape::Exponential(2.0),
+        ),
+    ];
+
+    let first = tc.sequence_to_samples(&segments);
+    let second = tc.sequence_to_samples(&segments);
+
+    assert_eq!(
+        first, second,
+        "identical inputs must produce identical output"
+    );
+}
+
+#[test]
+fn test_sequence_to_samples_scales_with_tempo() {
+    // Glide length is denominated in grid steps, not seconds, so doubling
+    // the tempo must halve both the event's position and its glide length
+    // in absolute (sample/second) terms.
+    let segments = [MusicalGlideSegment::new(
+        MusicalPosition::new(0, 4, 0),
+        660.0,
+        2.0,
+        GlideShape::Sine,
+    )];
+
+    let base = TimeConfig::new_4_4(120.0, 44100.0);
+    let double_tempo = TimeConfig::new_4_4(240.0, 44100.0);
+
+    let base_events = base.sequence_to_samples(&segments);
+    let fast_events = double_tempo.sequence_to_samples(&segments);
+
+    assert_eq!(base_events[0].time, fast_events[0].time * 2);
+    assert!((base_events[0].glide_secs - fast_events[0].glide_secs * 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_schedule_musical_glides_matches_pure_conversion() {
+    let config = TimeConfig::new_4_4(100.0, 48000.0);
+    let segments = [
+        MusicalGlideSegment::new(MusicalPosition::new(0, 0, 0), 440.0, 4.0, GlideShape::Sine),
+        MusicalGlideSegment::new(MusicalPosition::new(0, 8, 0), 880.0, 2.0, GlideShape::Hold)
+            .with_space(GlideSpace::Pitch),
+    ];
+    let expected = config.sequence_to_samples(&segments);
+
+    let mut scheduler = microsynth::Scheduler::new();
+    let voice = scheduler.alloc_voice_id();
+    schedule_musical_glides(&mut scheduler, &config, voice, "freq", &segments);
+
+    let events = scheduler.drain_before(u64::MAX);
+    assert_eq!(events.len(), expected.len());
+    for (event, want) in events.iter().zip(expected.iter()) {
+        assert_eq!(event.time, want.time);
+        match &event.action {
+            microsynth::EventAction::SetParamGlide {
+                voice: event_voice,
+                param,
+                target,
+                glide_secs,
+                shape,
+                space,
+            } => {
+                assert_eq!(*event_voice, voice);
+                assert_eq!(param, "freq");
+                assert_eq!(*target, want.target);
+                assert_eq!(*glide_secs, want.glide_secs);
+                assert_eq!(*shape, want.shape);
+                assert_eq!(
+                    *space, want.space,
+                    "each segment's own space must be preserved"
+                );
+            }
+            _ => panic!("expected SetParamGlide"),
+        }
+    }
+}
+
+#[test]
+fn test_musical_glide_segment_defaults_to_raw_space() {
+    let segment = MusicalGlideSegment::new(
+        MusicalPosition::new(0, 0, 0),
+        440.0,
+        1.0,
+        GlideShape::Linear,
+    );
+    assert_eq!(segment.space, GlideSpace::default());
+    assert_eq!(segment.space, GlideSpace::Raw);
+}
+
+#[test]
+fn test_schedule_musical_glides_preserves_pitch_space() {
+    // A pitch segment scheduled in raw space would glide linear-in-Hz
+    // instead of as an equal-ratio pitch sweep, so the space a caller sets
+    // on a segment must survive both the pure conversion and scheduling.
+    let config = TimeConfig::new_4_4(120.0, 44100.0);
+    let segments = [MusicalGlideSegment::new(
+        MusicalPosition::new(0, 0, 0),
+        880.0,
+        4.0,
+        GlideShape::Exponential(-2.0),
+    )
+    .with_space(GlideSpace::Pitch)];
+
+    let converted = config.sequence_to_samples(&segments);
+    assert_eq!(converted[0].space, GlideSpace::Pitch);
+
+    let mut scheduler = microsynth::Scheduler::new();
+    let voice = scheduler.alloc_voice_id();
+    schedule_musical_glides(&mut scheduler, &config, voice, "freq", &segments);
+
+    let events = scheduler.drain_before(u64::MAX);
+    assert_eq!(events.len(), 1);
+    match &events[0].action {
+        microsynth::EventAction::SetParamGlide { space, .. } => {
+            assert_eq!(
+                *space,
+                GlideSpace::Pitch,
+                "scheduled event must carry the segment's glide space"
+            );
+        }
+        _ => panic!("expected SetParamGlide"),
+    }
+}
+
+#[test]
+fn test_musical_glide_sub_block_boundary_lands_in_correct_block() {
+    // 16th-note grid at 120 BPM / 44.1kHz puts step 1 at 5512.5 samples,
+    // which rounds to 5513 — strictly inside the block [5504, 5632) for a
+    // 128-sample block size, not on either boundary. The scheduler dispatches
+    // an event scheduled for sample N at the start of the block containing
+    // N (see `crate::scheduler`), which the engine implements as draining
+    // with `deadline = block_start + block_size`. Confirm this event only
+    // surfaces once that block's deadline is reached, not the prior one.
+    const BLOCK_SIZE: u64 = 128;
+
+    let config = TimeConfig::new_4_4(120.0, 44100.0);
+    let segments = [MusicalGlideSegment::new(
+        MusicalPosition::new(0, 1, 0),
+        1.0,
+        0.5,
+        GlideShape::Linear,
+    )];
+    let events = config.sequence_to_samples(&segments);
+    let time = events[0].time;
+    assert_eq!(time, 5513);
+
+    let block_start = (time / BLOCK_SIZE) * BLOCK_SIZE;
+    assert_eq!(block_start, 5504);
+
+    let mut scheduler = microsynth::Scheduler::new();
+    let voice = scheduler.alloc_voice_id();
+    schedule_musical_glides(&mut scheduler, &config, voice, "freq", &segments);
+
+    // Draining up through the start of the containing block must not yet
+    // yield the event...
+    let too_early = scheduler.drain_before(block_start);
+    assert_eq!(
+        too_early.len(),
+        0,
+        "event must not surface before its block"
+    );
+
+    // ...but draining through that block's deadline must.
+    let mut scheduler = microsynth::Scheduler::new();
+    schedule_musical_glides(&mut scheduler, &config, voice, "freq", &segments);
+    let on_time = scheduler.drain_before(block_start + BLOCK_SIZE);
+    assert_eq!(on_time.len(), 1, "event must surface within its own block");
+}
+
+#[test]
+fn test_arrive_aligned_glide_completes_at_target_position() {
+    // MusicalGlideSegment::position is depart-aligned: it's where the glide
+    // starts, not where it ends. A caller wanting arrive-alignment (the
+    // glide completing AT a musical position) resolves that itself by
+    // building the segment at `arrival_position - glide_steps`.
+    let config = TimeConfig::new_4_4(120.0, 44100.0);
+    let glide_steps = 4.0;
+    let arrival = MusicalPosition::new(0, 8, 0);
+
+    let start = MusicalPosition::new(0, arrival.step - glide_steps as u16, 0);
+    let segment = MusicalGlideSegment::new(start, 880.0, glide_steps, GlideShape::Linear);
+
+    let events = config.sequence_to_samples(&[segment]);
+    let glide_samples = (events[0].glide_secs as f64 * config.sample_rate as f64).round() as u64;
+    let completion_time = events[0].time + glide_samples;
+
+    assert_eq!(
+        completion_time,
+        config.position_to_samples(arrival),
+        "a glide built with arrival - glide_steps as its position must complete at the arrival position"
+    );
+}
+
 extern crate alloc;

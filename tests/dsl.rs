@@ -330,6 +330,79 @@ fn test_parse_parentheses() {
     }
 }
 
+#[test]
+fn test_parse_voice_decl() {
+    use microsynth::dsl::lexer::tokenize;
+    use microsynth::dsl::parser::Parser;
+    use microsynth::{GlideShape, GlideSpace};
+
+    let source =
+        "synthdef lead freq=440.0 gate=0.0 = sinOsc freq 0.0\n\nvoice lead mono legato freq 0.05";
+    let tokens = tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    assert_eq!(program.voice_modes.len(), 1);
+    let decl = &program.voice_modes[0];
+    assert_eq!(decl.synth_name, "lead");
+    assert_eq!(decl.pitch_param, "freq");
+    assert!((decl.portamento_secs - 0.05).abs() < 1e-6);
+    // Shape/space are optional and default to Linear/Pitch when omitted —
+    // an equal-ratio portamento, not a linear-in-Hz one.
+    assert_eq!(decl.portamento_shape, GlideShape::Linear);
+    assert_eq!(decl.portamento_space, GlideSpace::Pitch);
+}
+
+#[test]
+fn test_parse_voice_decl_with_explicit_shape_and_space() {
+    use microsynth::dsl::lexer::tokenize;
+    use microsynth::dsl::parser::Parser;
+    use microsynth::{GlideShape, GlideSpace};
+
+    let source = "synthdef lead freq=440.0 = freq\n\nvoice lead mono legato freq 0.05 sine raw";
+    let tokens = tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let decl = &program.voice_modes[0];
+    assert_eq!(decl.portamento_shape, GlideShape::Sine);
+    assert_eq!(decl.portamento_space, GlideSpace::Raw);
+}
+
+#[test]
+fn test_parse_voice_decl_with_exponential_tension_and_default_space() {
+    use microsynth::dsl::lexer::tokenize;
+    use microsynth::dsl::parser::Parser;
+    use microsynth::{GlideShape, GlideSpace};
+
+    // Space omitted after an explicit shape: still defaults to Pitch.
+    let source =
+        "synthdef lead freq=440.0 = freq\n\nvoice lead mono legato freq 0.05 exponential -2.5";
+    let tokens = tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let decl = &program.voice_modes[0];
+    match decl.portamento_shape {
+        GlideShape::Exponential(k) => assert!((k + 2.5).abs() < 1e-6, "got tension {k}"),
+        other => panic!("expected Exponential, got {other:?}"),
+    }
+    assert_eq!(decl.portamento_space, GlideSpace::Pitch);
+}
+
+#[test]
+fn test_parse_voice_decl_requires_mono_legato_literal() {
+    use microsynth::dsl::lexer::tokenize;
+    use microsynth::dsl::parser::Parser;
+
+    // "poly" isn't recognized in this position — only "mono" is, for now.
+    let source = "synthdef lead freq=440.0 = freq\n\nvoice lead poly legato freq 0.05";
+    let tokens = tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let err = parser.parse_program().unwrap_err();
+    assert!(err.to_string().contains("expected 'mono'"), "got: {err}");
+}
+
 // -- Compiler tests ----------------------------------------------------------
 
 #[test]
@@ -616,6 +689,48 @@ fn test_expperc_compiles_and_concave() {
             "expPerc at decay midpoint should be > 0.3 (concave), got {mid_val}"
         );
     }
+}
+
+// -- Voice-mode declaration round-trip tests ---------------------------------
+
+#[test]
+fn test_compile_with_voice_modes_round_trip() {
+    let reg = make_registry();
+    let source = "synthdef lead freq=440.0 gate=0.0 = freq\n\nvoice lead mono legato freq 0.05";
+    let (defs, voice_modes) = dsl::compile_with_voice_modes(source, &reg).unwrap();
+
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].name(), "lead");
+    assert_eq!(voice_modes.len(), 1);
+    assert_eq!(voice_modes[0].synth_name, "lead");
+    assert_eq!(voice_modes[0].pitch_param, "freq");
+    assert!((voice_modes[0].portamento_secs - 0.05).abs() < 1e-6);
+    assert_eq!(voice_modes[0].portamento_shape, GlideShape::Linear);
+    assert_eq!(voice_modes[0].portamento_space, GlideSpace::Pitch);
+}
+
+#[test]
+fn test_compile_voice_modes_rejects_unknown_synthdef() {
+    let reg = make_registry();
+    let source = "synthdef lead freq=440.0 = freq\n\nvoice nope mono legato freq 0.05";
+    let result = dsl::compile_with_voice_modes(source, &reg);
+    let err = match result {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected error"),
+    };
+    assert!(err.contains("unknown synthdef"), "got: {err}");
+}
+
+#[test]
+fn test_compile_voice_modes_rejects_unknown_param() {
+    let reg = make_registry();
+    let source = "synthdef lead freq=440.0 = freq\n\nvoice lead mono legato bogus 0.05";
+    let result = dsl::compile_with_voice_modes(source, &reg);
+    let err = match result {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected error"),
+    };
+    assert!(err.contains("unknown parameter"), "got: {err}");
 }
 
 // -- Error tests -------------------------------------------------------------

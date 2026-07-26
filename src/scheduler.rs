@@ -10,6 +10,7 @@
 //! - **FreeSynth**: Remove a synth from the graph.
 //! - **SetGate**: Shorthand for setting the "gate" parameter (note-on/note-off).
 
+use crate::curve::{GlideShape, GlideSpace};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -33,6 +34,8 @@ pub enum EventAction {
         param: String,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     },
     /// Set the gate parameter (convenience for note-on/note-off).
     /// gate > 0 = note on, gate = 0 = note off.
@@ -106,7 +109,10 @@ impl Scheduler {
         });
     }
 
-    /// Schedule a parameter glide at a specific sample time.
+    /// Schedule a parameter glide at a specific sample time, with an
+    /// interpolation shape and space (pass `GlideShape::default()` and
+    /// `GlideSpace::default()` for the previous linear-in-raw-units behavior).
+    #[allow(clippy::too_many_arguments)] // Scheduling target, glide, and shape/space are each meaningful and independent.
     pub fn schedule_param_glide(
         &mut self,
         time: u64,
@@ -114,6 +120,8 @@ impl Scheduler {
         param: impl Into<String>,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) {
         self.schedule(Event {
             time,
@@ -122,6 +130,8 @@ impl Scheduler {
                 param: param.into(),
                 target,
                 glide_secs,
+                shape,
+                space,
             },
         });
     }

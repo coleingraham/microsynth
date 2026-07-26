@@ -1,5 +1,6 @@
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
+use crate::curve::{GlideShape, GlideSpace};
 
 /// Unique identifier for a node in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,9 +123,17 @@ pub trait UGen: Send {
     }
 
     /// Set a target value with a glide time in seconds.
+    ///
     /// The node smoothly transitions from its current value to `target`
-    /// over `glide_secs` seconds. Returns true if accepted.
-    fn set_target(&mut self, _target: f32, _glide_secs: f32) -> bool {
+    /// over `glide_secs` seconds, following `shape` and interpolating in
+    /// `space`. Returns true if accepted.
+    fn set_target(
+        &mut self,
+        _target: f32,
+        _glide_secs: f32,
+        _shape: GlideShape,
+        _space: GlideSpace,
+    ) -> bool {
         false
     }
 

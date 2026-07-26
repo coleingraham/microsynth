@@ -6,6 +6,9 @@
 //!
 //! This module is pure math with no dependency on the audio graph.
 
+use crate::curve::{GlideShape, GlideSpace};
+use alloc::vec::Vec;
+
 /// Musical time configuration for a piece or section.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeConfig {
@@ -25,7 +28,7 @@ pub struct TimeConfig {
 }
 
 /// A position in musical time.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MusicalPosition {
     /// Zero-indexed bar number.
     pub bar: u32,
@@ -134,4 +137,142 @@ impl TimeConfig {
     pub fn steps_to_secs(&self, steps: f32) -> f64 {
         steps as f64 * self.step_duration_secs()
     }
+
+    /// Convert a sequence of musical-time glide segments to absolute
+    /// sample-time terms, in the order given.
+    ///
+    /// This is the pure half of musical-time sequencing: it has no
+    /// dependency on a scheduler, voice, or the audio graph, so it can be
+    /// tested (and reasoned about) on its own. Turning the result into
+    /// scheduled events on a live voice is a separate step — see
+    /// [`crate::musical_sequence::schedule_musical_glides`].
+    ///
+    /// Rounding rule: each segment's position and glide length are rounded
+    /// to the nearest sample, exactly as [`TimeConfig::position_to_samples`]
+    /// and [`TimeConfig::steps_to_secs`] already do — this function performs
+    /// no additional rounding. Because the sample-based scheduler dispatches
+    /// an event scheduled for sample N at the start of the block *containing*
+    /// N (see `crate::scheduler`), a position that falls strictly between
+    /// two block boundaries is not truncated or pushed to a neighboring
+    /// block: it lands in whichever block's sample range contains its
+    /// rounded sample time.
+    ///
+    /// Determinism: identical `segments` and an identical `TimeConfig`
+    /// always produce an identical output sequence. Rendering the same
+    /// `segments` through two `TimeConfig`s that differ only in `bpm`
+    /// scales every position and every glide length proportionally, since
+    /// both derive from the same tempo-relative quarter-note duration.
+    ///
+    /// Alignment: a segment's `position` is where its glide *starts* —
+    /// there is no separate "arrives at" concept here. A caller that wants
+    /// a glide to instead *complete* at a musical position computes that
+    /// position's start themselves, before constructing the segment:
+    /// `start = arrival_position - glide_steps` (in grid steps). See
+    /// [`MusicalGlideSegment`] for the corresponding note.
+    ///
+    /// Validation: this function schedules whatever it is given. It does
+    /// not check that a segment's shape, glide length, or position are
+    /// musically meaningful (e.g. a negative or absurdly large
+    /// `glide_steps`) — that judgment belongs to the caller assembling the
+    /// sequence, not to this conversion.
+    pub fn sequence_to_samples(&self, segments: &[MusicalGlideSegment]) -> Vec<SampleTimeGlide> {
+        segments
+            .iter()
+            .map(|segment| SampleTimeGlide {
+                time: self.position_to_samples(segment.position),
+                target: segment.target,
+                glide_secs: self.steps_to_secs(segment.glide_steps) as f32,
+                shape: segment.shape,
+                space: segment.space,
+            })
+            .collect()
+    }
+}
+
+/// A single parameter update expressed in musical time: where it falls, what
+/// value it moves to, how long the glide there takes (in grid steps,
+/// fractional allowed, so the glide scales with tempo), and the
+/// interpolation shape and space the glide uses.
+///
+/// Shape and space are composed from [`crate::curve::GlideShape`] and
+/// [`crate::curve::GlideSpace`] rather than reimplemented here; this type
+/// only carries them through to the eventual scheduled event.
+///
+/// Alignment is depart-side: `position` is where the glide *starts*, not
+/// where it ends. There is no separate "arrives at" field. A caller that
+/// wants the glide to complete at a given musical position resolves that
+/// itself — set `position` to `arrival_position - glide_steps` (in grid
+/// steps) when building the segment. This module does not pick a default
+/// alignment on the caller's behalf.
+///
+/// Validation is also the caller's responsibility: constructing a segment
+/// with a shape/glide-length combination that doesn't make musical sense
+/// (for example a negative `glide_steps`) is not rejected here or by
+/// [`TimeConfig::sequence_to_samples`] — both schedule whatever they are
+/// given.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MusicalGlideSegment {
+    /// Where this update's glide *starts* in musical time (depart-aligned;
+    /// see the type-level note on arrive-alignment).
+    pub position: MusicalPosition,
+    /// The value the parameter glides to.
+    pub target: f32,
+    /// Glide length in grid steps (fractional allowed). Scales with tempo:
+    /// converted to seconds via [`TimeConfig::steps_to_secs`].
+    pub glide_steps: f32,
+    /// Interpolation shape for the glide.
+    pub shape: GlideShape,
+    /// Interpolation space for the glide (raw units vs. pitch space — see
+    /// [`crate::curve::GlideSpace`]). A pitch segment scheduled in raw space
+    /// glides linear-in-Hz rather than as an equal-ratio pitch sweep, so
+    /// this must be settable per segment, not just per shape.
+    pub space: GlideSpace,
+}
+
+impl MusicalGlideSegment {
+    /// Create a new musical-time glide segment with [`GlideSpace::default()`]
+    /// (raw units). Use [`MusicalGlideSegment::with_space`] to override.
+    pub fn new(
+        position: MusicalPosition,
+        target: f32,
+        glide_steps: f32,
+        shape: GlideShape,
+    ) -> Self {
+        MusicalGlideSegment {
+            position,
+            target,
+            glide_steps,
+            shape,
+            space: GlideSpace::default(),
+        }
+    }
+
+    /// Set this segment's glide space (e.g. [`GlideSpace::Pitch`] for an
+    /// equal-ratio pitch sweep instead of a linear-in-units ramp).
+    pub fn with_space(mut self, space: GlideSpace) -> Self {
+        self.space = space;
+        self
+    }
+}
+
+/// A [`MusicalGlideSegment`] converted to absolute sample-time terms by
+/// [`TimeConfig::sequence_to_samples`].
+///
+/// Carries no voice or parameter name — pairing this with a target voice and
+/// parameter to actually schedule it is a separate, non-pure step (see
+/// [`crate::musical_sequence::schedule_musical_glides`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampleTimeGlide {
+    /// Absolute sample offset at which the glide should begin, rounded to
+    /// the nearest sample.
+    pub time: u64,
+    /// The value the parameter glides to.
+    pub target: f32,
+    /// Glide duration in seconds (matches
+    /// `Scheduler::schedule_param_glide`'s `glide_secs`).
+    pub glide_secs: f32,
+    /// Interpolation shape for the glide.
+    pub shape: GlideShape,
+    /// Interpolation space for the glide.
+    pub space: GlideSpace,
 }

@@ -14,6 +14,33 @@
 //! - A ScriptProcessorNode fallback (if AudioWorklet is unavailable)
 //! - DSL compilation feedback (error messages)
 //!
+//! # Glide shape/space ABI encoding
+//!
+//! A handful of raw exports (`ms_voice_param_glide`, `ms_schedule_musical_glides`)
+//! carry a [`crate::curve::GlideShape`] and [`crate::curve::GlideSpace`] across
+//! the C boundary. Both cross as plain integers plus one float, decoded by
+//! [`decode_glide_shape`] / [`decode_glide_space`]:
+//!
+//! - `shape_kind: u32` — `0` = `Hold`, `1` = `Linear`, `2` = `Sine`,
+//!   `3` = `Exponential` (any other value falls back to `Linear`).
+//! - `tension: f32` — only meaningful when `shape_kind == 3`; ignored
+//!   otherwise.
+//! - `space_kind: u32` — `0` = `Raw`, `1` = `Pitch` (any other value falls
+//!   back to `Raw`).
+//!
+//! This encoding is the one place these enums are represented as integers;
+//! callers on the JS side should treat it as a stable contract, not
+//! reimplement the shape/space vocabulary itself (see [`crate::curve`]).
+//!
+//! # Contract vs. diagnostic exports
+//!
+//! `ms_voice_param_glide`, `ms_legato_note_on`, `ms_legato_note_off`, and
+//! `ms_schedule_musical_glides` are the stable contract: downstream
+//! consumers build against these signatures. `ms_legato_slot_for` is not —
+//! it's a read-only diagnostic accessor over internal bus-slot bookkeeping,
+//! added only to make that bookkeeping testable, and may change or be
+//! removed independently of the contract above.
+//!
 //! # Architecture
 //!
 //! ```text
@@ -34,12 +61,38 @@ use alloc::string::String as AllocString;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::curve::{GlideShape, GlideSpace};
 use crate::dsl::{self, UGenRegistry};
 use crate::engine::{Engine, EngineConfig};
+use crate::musical_sequence::schedule_musical_glides;
+use crate::musical_time::{MusicalGlideSegment, MusicalPosition, TimeConfig};
 use crate::ugens::register_builtins;
+use crate::voice::LegatoVoice;
 
 #[cfg(feature = "web")]
 use wasm_bindgen::prelude::*;
+
+/// Decode a [`GlideShape`] crossing the C-ABI — see the module docs for the
+/// full encoding table. Unrecognized `kind` values fall back to `Linear`
+/// rather than failing, since a raw export has no error channel for this
+/// argument (it always returns void, following the shape of `ms_voice_param`).
+fn decode_glide_shape(kind: u32, tension: f32) -> GlideShape {
+    match kind {
+        0 => GlideShape::Hold,
+        2 => GlideShape::Sine,
+        3 => GlideShape::Exponential(tension),
+        _ => GlideShape::Linear,
+    }
+}
+
+/// Decode a [`GlideSpace`] crossing the C-ABI — see the module docs for the
+/// full encoding table. Unrecognized `kind` values fall back to `Raw`.
+fn decode_glide_space(kind: u32) -> GlideSpace {
+    match kind {
+        1 => GlideSpace::Pitch,
+        _ => GlideSpace::Raw,
+    }
+}
 
 // ============================================================================
 // Raw C exports for AudioWorklet (no wasm-bindgen needed in worklet scope)
@@ -76,6 +129,29 @@ static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::Synt
 /// Master effect synth (inserted between bus and graph sink).
 static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(None);
 
+/// A registered SynthDef's mono/legato voice mode: (pitch parameter name,
+/// portamento seconds, tie-portamento shape, tie-portamento space — the
+/// last two default to `Linear`/`Pitch` when the declaration omits them,
+/// see `VoiceModeDecl`'s doc comment).
+type LegatoModeEntry = (AllocString, f32, GlideShape, GlideSpace);
+
+/// Mono/legato voice-mode metadata parsed from each registered SynthDef's
+/// `voice` declaration (see `src/dsl`), keyed by SynthDef name. Populated by
+/// `ms_register_def`; absent for any name whose DSL source had no `voice`
+/// declaration.
+static LEGATO_MODES: WasmCell<Option<BTreeMap<AllocString, LegatoModeEntry>>> = WasmCell::new(None);
+
+/// One [`LegatoVoice`] track per SynthDef name that has been played legato at
+/// least once via `ms_legato_note_on`, keyed by that name.
+static LEGATO_VOICES: WasmCell<Option<BTreeMap<AllocString, LegatoVoice>>> = WasmCell::new(None);
+
+/// The bus input slot reserved for each legato track's output, assigned once
+/// on first use. Slots are handed out counting down from the bus's last
+/// input index so they never collide with the low-to-high slots
+/// `ms_spawn_voice_named` (via `Engine::spawn_voice_on_bus`) hands out for
+/// ordinary polyphonic voices sharing the same bus.
+static LEGATO_SLOTS: WasmCell<Option<BTreeMap<AllocString, usize>>> = WasmCell::new(None);
+
 /// Initialize the engine with a Bus node as the graph sink.
 /// Call once before `ms_register_def` / `ms_spawn_voice_named`.
 #[unsafe(no_mangle)]
@@ -101,6 +177,9 @@ pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
         *BUS_NODE.get_mut() = Some(bus_id);
         *DEF_REGISTRY.get_mut() = Some(BTreeMap::new());
         *DEFS.get_mut() = None;
+        *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
     }
 }
 
@@ -134,8 +213,12 @@ pub unsafe extern "C" fn ms_register_def(
         None => return 1,
     };
 
-    let defs = match dsl::compile(source, ugen_registry) {
-        Ok(d) => d,
+    // Also parses this source's `voice` declarations (if any); this is
+    // additive over the plain `dsl::compile` used elsewhere in this file —
+    // it doesn't change what gets registered as the def, only what else gets
+    // recorded alongside it.
+    let (defs, voice_modes) = match dsl::compile_with_voice_modes(source, ugen_registry) {
+        Ok(result) => result,
         Err(_) => return 1,
     };
 
@@ -149,6 +232,22 @@ pub unsafe extern "C" fn ms_register_def(
     };
 
     def_registry.insert(AllocString::from(name), defs.into_iter().next().unwrap());
+
+    // Record this name's mono/legato voice mode, if its source declared one.
+    if let Some(mode) = voice_modes.iter().find(|m| m.synth_name == name)
+        && let Some(modes) = unsafe { LEGATO_MODES.get_mut() }.as_mut()
+    {
+        modes.insert(
+            AllocString::from(name),
+            (
+                mode.pitch_param.clone(),
+                mode.portamento_secs,
+                mode.portamento_shape,
+                mode.portamento_space,
+            ),
+        );
+    }
+
     0
 }
 
@@ -295,6 +394,21 @@ pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
 
 /// Initialize the engine with the given sample rate.
 /// Block size is fixed at 128 (WebAudio render quantum).
+///
+/// Resets every piece of graph-dependent session state this file tracks —
+/// the mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`)
+/// and `BUS_NODE` — the same way `ms_init_with_bus` does, so a re-init here
+/// can't leave either a stale legato track whose held `VoiceId` happens to
+/// alias one of the new engine's freshly-issued sequential ids, or a stale
+/// `BUS_NODE` pointing at a `NodeId` in the just-destroyed engine's graph
+/// (which `ms_spawn_voice_named` would otherwise feed to
+/// `Engine::spawn_voice_on_bus` — safe today only because the new, empty
+/// graph doesn't have that index yet; it becomes valid-and-wrong the moment
+/// a later call repopulates the graph past it).
+///
+/// `DEF_REGISTRY`/`DEFS` are deliberately left alone: they're graph-
+/// independent templates (compiled `SynthDef`s, not live node references),
+/// so a name registered before this call is still validly registered after.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
@@ -308,6 +422,10 @@ pub extern "C" fn ms_init(sample_rate: f32) {
     unsafe {
         *ENGINE.get_mut() = Some(Engine::new(config));
         *REGISTRY.get_mut() = Some(registry);
+        *BUS_NODE.get_mut() = None;
+        *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
     }
 }
 
@@ -518,6 +636,48 @@ pub unsafe extern "C" fn ms_voice_param(
     engine.set_voice_param(crate::scheduler::VoiceId(voice_id), param, value);
 }
 
+/// Set a named parameter on a voice with a shaped glide to `target` over
+/// `glide_secs` seconds, instead of jumping instantly like `ms_voice_param`.
+/// `shape_kind`/`tension`/`space_kind` encode the glide's interpolation
+/// shape and space — see the module docs for the exact encoding.
+///
+/// # Safety
+/// `param_ptr` must point to an initialized buffer of at least `param_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // Voice, param, target, glide, and shape/space are each meaningful and independent.
+pub unsafe extern "C" fn ms_voice_param_glide(
+    voice_id: u64,
+    param_ptr: *const u8,
+    param_len: usize,
+    target: f32,
+    glide_secs: f32,
+    shape_kind: u32,
+    tension: f32,
+    space_kind: u32,
+) {
+    let param_bytes = unsafe { core::slice::from_raw_parts(param_ptr, param_len) };
+    let param = match core::str::from_utf8(param_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    let shape = decode_glide_shape(shape_kind, tension);
+    let space = decode_glide_space(space_kind);
+    engine.set_voice_param_glide(
+        crate::scheduler::VoiceId(voice_id),
+        param,
+        target,
+        glide_secs,
+        shape,
+        space,
+    );
+}
+
 /// Free a voice by ID.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_free_voice(voice_id: u64) {
@@ -542,6 +702,300 @@ pub extern "C" fn ms_free_done() -> u32 {
         engine.prepare();
     }
     count as u32
+}
+
+// ============================================================================
+// Mono/legato voice-mode exports
+// ============================================================================
+//
+// A SynthDef played legato needs its own single-voice track (see
+// `crate::voice::LegatoVoice`) rather than the usual independent-voice-per-
+// spawn model `ms_spawn_voice_named` uses. `ms_register_def` records which
+// registered names asked for this (via a `voice` declaration in their DSL
+// source); these exports drive the resulting track by that same name.
+
+/// Start or continue a legato note at `pitch` on the named SynthDef's
+/// mono/legato track, creating the track (and wiring its output to the bus)
+/// on first use.
+///
+/// `name` must have been registered via `ms_register_def` with a `voice`
+/// declaration in its DSL source (see `src/dsl` module docs). Returns the
+/// voice ID (> 0), or 0 if `name` is unregistered or declared no voice mode.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_legato_note_on(
+    name_ptr: *const u8,
+    name_len: usize,
+    pitch: f32,
+) -> u64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let def = match unsafe { DEF_REGISTRY.get_mut() }
+        .as_ref()
+        .and_then(|r| r.get(name))
+    {
+        Some(d) => d,
+        None => return 0,
+    };
+    let (pitch_param, portamento_secs, portamento_shape, portamento_space) =
+        match unsafe { LEGATO_MODES.get_mut() }
+            .as_ref()
+            .and_then(|m| m.get(name))
+        {
+            Some(mode) => mode.clone(),
+            None => return 0,
+        };
+    let tracks = match unsafe { LEGATO_VOICES.get_mut() }.as_mut() {
+        Some(t) => t,
+        None => return 0,
+    };
+    let track = tracks.entry(AllocString::from(name)).or_insert_with(|| {
+        LegatoVoice::new(pitch_param, portamento_secs)
+            .with_glide(portamento_shape, portamento_space)
+    });
+    // Snapshot the voice held *before* the call, not just whether one was
+    // held at all: `LegatoVoice::note_on` can silently spawn a replacement
+    // voice for a track that still looks "held" from here, if the
+    // previously-held voice was reaped out from under it (e.g. by
+    // `Engine::free_done_synths` after a full release) — it clears its own
+    // `held` state and spawns fresh internally, after this function has
+    // already read it. A `track.voice().is_none()` check taken before the
+    // call cannot see that case, so it must be a value comparison taken
+    // after the call instead (see the comment below).
+    let prev_voice = track.voice();
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let voice_id = track.note_on(engine, def, pitch);
+
+    // A voice id changing from what was held before (including from "none
+    // held yet") means a brand-new synth was just spawned into the graph
+    // and needs wiring to the bus — this covers both the true first note
+    // and a reap-then-respawn, since `Engine::spawn_voice` always hands out
+    // a fresh, never-before-used id *within one engine's lifetime*
+    // (`Scheduler::alloc_voice_id` is monotonic, never reused). That
+    // monotonicity is what makes this comparison sound — but the counter
+    // resets to 1 whenever `ms_init`/`ms_init_with_bus` replaces the engine,
+    // so this is only correct because both of them also clear
+    // `LEGATO_VOICES`. If a future edit trims that reset list, a track
+    // surviving a re-init could hold a `prev_voice` that collides with a
+    // fresh id in the *new* engine and this comparison would wrongly see
+    // "unchanged," silently skipping wiring again.
+    if prev_voice != Some(voice_id)
+        && let Some(bus_id) = unsafe { BUS_NODE.get_mut() }
+        && let Some(slots) = unsafe { LEGATO_SLOTS.get_mut() }.as_mut()
+    {
+        // Reuse this track's already-reserved slot if it has one (a
+        // reap-then-respawn) rather than recomputing the counting-down
+        // formula, which depends on how many *other* tracks have reserved a
+        // slot since — recomputing now could collide with a slot a
+        // different track already claimed.
+        let slot = match slots.get(name).copied() {
+            Some(slot) => Some(slot),
+            None => engine
+                .graph()
+                .node_spec(*bus_id)
+                .map(|spec| spec.inputs.len())
+                .map(|bus_max| {
+                    let slot = bus_max.saturating_sub(1).saturating_sub(slots.len());
+                    slots.insert(AllocString::from(name), slot);
+                    slot
+                }),
+        };
+        if let Some(slot) = slot {
+            if let Some(synth) = engine.voice_synth(voice_id) {
+                let output_node = synth.output_node();
+                engine.graph_mut().connect(output_node, *bus_id, slot);
+            }
+            engine.prepare();
+        }
+    }
+
+    voice_id.0
+}
+
+/// Release the currently-held note on a legato track, if any (begins the
+/// held voice's release stage; the voice stays held for a following
+/// `ms_legato_note_on` call — see `LegatoVoice::note_off`).
+///
+/// A no-op if `name` has no legato track yet.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_legato_note_off(name_ptr: *const u8, name_len: usize) {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let track = match unsafe { LEGATO_VOICES.get_mut() }
+        .as_mut()
+        .and_then(|t| t.get_mut(name))
+    {
+        Some(t) => t,
+        None => return,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return,
+    };
+    track.note_off(engine);
+}
+
+/// The bus input slot reserved for the named legato track, or -1 if `name`
+/// has none yet (never played legato, or no engine initialized).
+///
+/// Purely a diagnostic accessor over `LEGATO_SLOTS` — normal playback never
+/// needs it. It exists so a caller (or a test) can confirm that a track's
+/// slot stays stable across a reap-then-respawn instead of drifting to a
+/// value that could collide with a different track's slot (see
+/// `ms_legato_note_on`'s doc comment).
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_legato_slot_for(name_ptr: *const u8, name_len: usize) -> i64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match unsafe { LEGATO_SLOTS.get_mut() }
+        .as_ref()
+        .and_then(|s| s.get(name))
+    {
+        Some(&slot) => slot as i64,
+        None => -1,
+    }
+}
+
+// ============================================================================
+// Musical-time sequenced glide export
+// ============================================================================
+
+/// Schedule a sequence of musical-time, shaped parameter glides on a voice in
+/// one call — the raw-C-ABI counterpart of
+/// [`crate::musical_sequence::schedule_musical_glides`]. Each segment `i` is
+/// read from the parallel arrays at index `i`; all arrays must have at least
+/// `count` elements.
+///
+/// `sample_rate` is **not** a parameter here, unlike the stateless
+/// `ms_position_to_samples`/`ms_steps_to_samples` (which have no engine to
+/// consult and so must take it): this export is engine-coupled — it
+/// dispatches through the live engine's own scheduler — so it reads the
+/// initialized engine's actual sample rate instead of taking a second,
+/// independently-supplied one that could silently drift from it and
+/// schedule everything at the wrong time with no error signal.
+///
+/// - `bars_ptr[i]`, `steps_ptr[i]`, `tick_offsets_ptr[i]`: the segment's
+///   musical position (see `MusicalPosition`).
+/// - `targets_ptr[i]`: the value `param` glides to.
+/// - `glide_steps_ptr[i]`: glide length in grid steps (fractional allowed).
+/// - `shape_kinds_ptr[i]`, `tensions_ptr[i]`, `space_kinds_ptr[i]`: the
+///   glide's shape and space — see the module docs for the encoding.
+///
+/// Returns 0 on success, 1 if no engine is initialized. `count == 0` is a
+/// valid no-op and returns 0 without touching any of the `*_ptr` arguments
+/// (so they may be null in that case). `voice_id` is not validated against
+/// currently-live voices either: if it names a voice that is gone by the
+/// time a segment's event fires (freed directly, or reaped after a legato
+/// track respawned under a new id), that segment is a silent no-op rather
+/// than an error, matching every other scheduled or targeted export in this
+/// file (`ms_voice_param`, `ms_voice_param_glide`, `ms_schedule_note`, …).
+///
+/// # Safety
+/// `param_ptr` must point to an initialized buffer of at least `param_len`
+/// bytes. If `count > 0`, each `*_ptr` array must point to at least `count`
+/// initialized elements of its element type; all must stay valid for the
+/// call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // Voice/param plus most of a musical TimeConfig (sample_rate comes from the engine) plus one array per segment field, all independently meaningful.
+pub unsafe extern "C" fn ms_schedule_musical_glides(
+    voice_id: u64,
+    param_ptr: *const u8,
+    param_len: usize,
+    bpm: f32,
+    numerator: u8,
+    denominator: u8,
+    grid_steps: u16,
+    ppqn: u16,
+    bars_ptr: *const u32,
+    steps_ptr: *const u16,
+    tick_offsets_ptr: *const i16,
+    targets_ptr: *const f32,
+    glide_steps_ptr: *const f32,
+    shape_kinds_ptr: *const u32,
+    tensions_ptr: *const f32,
+    space_kinds_ptr: *const u32,
+    count: usize,
+) -> u32 {
+    let param_bytes = unsafe { core::slice::from_raw_parts(param_ptr, param_len) };
+    let param = match core::str::from_utf8(param_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+
+    // An empty segment list is a valid no-op — return before touching any of
+    // the array pointers so a caller with nothing to schedule doesn't have
+    // to pass non-null (if still aligned) pointers just to satisfy
+    // `slice::from_raw_parts`'s never-null-even-when-empty requirement.
+    if count == 0 {
+        return 0;
+    }
+
+    let config = TimeConfig {
+        bpm,
+        numerator,
+        denominator,
+        grid_steps,
+        ppqn,
+        sample_rate: engine.context().sample_rate,
+    };
+
+    let bars = unsafe { core::slice::from_raw_parts(bars_ptr, count) };
+    let steps = unsafe { core::slice::from_raw_parts(steps_ptr, count) };
+    let tick_offsets = unsafe { core::slice::from_raw_parts(tick_offsets_ptr, count) };
+    let targets = unsafe { core::slice::from_raw_parts(targets_ptr, count) };
+    let glide_steps = unsafe { core::slice::from_raw_parts(glide_steps_ptr, count) };
+    let shape_kinds = unsafe { core::slice::from_raw_parts(shape_kinds_ptr, count) };
+    let tensions = unsafe { core::slice::from_raw_parts(tensions_ptr, count) };
+    let space_kinds = unsafe { core::slice::from_raw_parts(space_kinds_ptr, count) };
+
+    let segments: Vec<MusicalGlideSegment> = (0..count)
+        .map(|i| {
+            let shape = decode_glide_shape(shape_kinds[i], tensions[i]);
+            let space = decode_glide_space(space_kinds[i]);
+            let position = MusicalPosition::new(bars[i], steps[i], tick_offsets[i]);
+            MusicalGlideSegment::new(position, targets[i], glide_steps[i], shape).with_space(space)
+        })
+        .collect();
+
+    schedule_musical_glides(
+        engine.scheduler_mut(),
+        &config,
+        crate::scheduler::VoiceId(voice_id),
+        param,
+        &segments,
+    );
+    0
 }
 
 // ============================================================================
@@ -665,6 +1119,10 @@ pub struct WebSynth {
     engine: Engine,
     registry: UGenRegistry,
     num_channels: usize,
+    /// Handle to the currently loaded synth, so parameters can be addressed
+    /// by name after `compileAndLoad` (see `setParamGlide`). `None` before
+    /// the first successful load.
+    synth: Option<crate::synthdef::Synth>,
 }
 
 #[cfg(feature = "web")]
@@ -686,6 +1144,7 @@ impl WebSynth {
             engine,
             registry,
             num_channels: 0,
+            synth: None,
         }
     }
 
@@ -727,8 +1186,34 @@ impl WebSynth {
         let synth = self.engine.instantiate_synthdef(&defs[0]);
         self.engine.graph_mut().set_sink(synth.output_node());
         self.engine.prepare();
+        self.synth = Some(synth);
 
         Ok(())
+    }
+
+    /// Set a named parameter on the loaded synth with a shaped glide to
+    /// `target` over `glide_secs` seconds (see `ms_voice_param_glide`'s doc
+    /// comment and the module docs for the `shape_kind`/`space_kind`
+    /// encoding). Returns `false` if no synth is loaded or the name is
+    /// unknown.
+    #[wasm_bindgen(js_name = "setParamGlide")]
+    #[allow(clippy::too_many_arguments)] // Param, target, glide, and shape/space are each meaningful and independent.
+    pub fn set_param_glide(
+        &mut self,
+        name: &str,
+        target: f32,
+        glide_secs: f32,
+        shape_kind: u32,
+        tension: f32,
+        space_kind: u32,
+    ) -> bool {
+        let Some(synth) = &self.synth else {
+            return false;
+        };
+        let shape = decode_glide_shape(shape_kind, tension);
+        let space = decode_glide_space(space_kind);
+        self.engine
+            .set_param_glide(synth, name, target, glide_secs, shape, space)
     }
 
     /// Render audio into stereo Float32Arrays (ScriptProcessorNode fallback).

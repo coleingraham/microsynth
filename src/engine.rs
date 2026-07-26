@@ -1,11 +1,13 @@
 use crate::buffer::AudioBuffer;
 use crate::context::ProcessContext;
+use crate::curve::{GlideShape, GlideSpace};
 use crate::graph::AudioGraph;
 use crate::node::NodeId;
 use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
 use crate::synthdef::{Synth, SynthDef, SynthParam};
 use crate::ugens;
+use crate::voice::{Admission, VoiceAllocator};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -53,6 +55,12 @@ pub struct Engine {
     /// deterministic seed for each spawned voice's noise UGens (so repeated
     /// kick/snare/hat hits vary but stay reproducible run-to-run).
     noise_spawn_seq: u32,
+    /// Optional voice budget and stealing policy. `None` (the default)
+    /// leaves `spawn_voice`/`spawn_voice_on_bus`/`free_voice` exactly as
+    /// unconditional as before; attaching one only changes behavior for
+    /// callers that opt in through `spawn_voice_managed`/
+    /// `spawn_voice_on_bus_managed`.
+    voice_alloc: Option<VoiceAllocator>,
 }
 
 /// Derive a deterministic noise seed from the voice spawn order and the UGen's
@@ -75,7 +83,30 @@ impl Engine {
             voices: Vec::new(),
             scheduler: Scheduler::new(),
             noise_spawn_seq: 0,
+            voice_alloc: None,
         }
+    }
+
+    /// Attach a voice budget and stealing policy. Only `spawn_voice_managed`
+    /// / `spawn_voice_on_bus_managed` enforce it; the plain `spawn_voice` /
+    /// `spawn_voice_on_bus` remain unconditional.
+    pub fn set_voice_allocator(&mut self, alloc: VoiceAllocator) {
+        self.voice_alloc = Some(alloc);
+    }
+
+    /// Detach the current voice allocator, if any.
+    pub fn clear_voice_allocator(&mut self) {
+        self.voice_alloc = None;
+    }
+
+    /// The currently attached voice allocator, if any.
+    pub fn voice_allocator(&self) -> Option<&VoiceAllocator> {
+        self.voice_alloc.as_ref()
+    }
+
+    /// Mutably access the currently attached voice allocator, if any.
+    pub fn voice_allocator_mut(&mut self) -> Option<&mut VoiceAllocator> {
+        self.voice_alloc.as_mut()
     }
 
     /// Access the process context.
@@ -208,6 +239,56 @@ impl Engine {
         Some(id)
     }
 
+    /// Spawn a voice through the attached voice allocator, if any.
+    ///
+    /// Enforces its budget and stealing policy: may free an existing voice
+    /// first to make room, or decline the spawn entirely. Falls back to
+    /// `spawn_voice`'s unconditional behavior when no allocator is attached.
+    ///
+    /// Returns `None` only when an allocator is attached, its budget is
+    /// full, and its policy declines to make room (`StealPolicy::Reject`).
+    pub fn spawn_voice_managed(&mut self, def: &SynthDef) -> Option<VoiceId> {
+        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
+        match admission {
+            Some(Admission::Reject) => return None,
+            Some(Admission::Steal(victim)) => self.free_voice(victim),
+            Some(Admission::Admit) | None => {}
+        }
+        let id = self.spawn_voice(def);
+        if let Some(alloc) = self.voice_alloc.as_mut() {
+            alloc.record_spawn(id);
+        }
+        Some(id)
+    }
+
+    /// Like `spawn_voice_managed`, but connects the voice to a bus (see
+    /// `spawn_voice_on_bus`). Returns `None` either because the allocator's
+    /// policy declined the spawn, or because the bus had no free slot.
+    ///
+    /// These two `None` cases are not equivalent for side effects: if the
+    /// allocator's policy called for a steal, that victim voice is freed
+    /// *before* the bus is checked for a free slot. So a `None` return does
+    /// not mean nothing happened — a voice may already have been freed (the
+    /// steal succeeded) even though this call itself failed (the bus didn't
+    /// have room). Treating `None` as a no-op will silently lose that voice.
+    pub fn spawn_voice_on_bus_managed(
+        &mut self,
+        def: &SynthDef,
+        bus_node: NodeId,
+    ) -> Option<VoiceId> {
+        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
+        match admission {
+            Some(Admission::Reject) => return None,
+            Some(Admission::Steal(victim)) => self.free_voice(victim),
+            Some(Admission::Admit) | None => {}
+        }
+        let id = self.spawn_voice_on_bus(def, bus_node)?;
+        if let Some(alloc) = self.voice_alloc.as_mut() {
+            alloc.record_spawn(id);
+        }
+        Some(id)
+    }
+
     /// Set a named parameter on a voice by VoiceId.
     /// Returns true if the voice and parameter were found.
     pub fn set_voice_param(&mut self, voice_id: VoiceId, name: &str, value: f32) -> bool {
@@ -227,6 +308,11 @@ impl Engine {
         if let Some(pos) = self.voices.iter().position(|v| v.id == voice_id) {
             let voice = self.voices.remove(pos);
             self.remove_synth(&voice.synth);
+        }
+        // Keep the allocator's bookkeeping accurate regardless of whether
+        // this voice was spawned through the managed path.
+        if let Some(alloc) = self.voice_alloc.as_mut() {
+            alloc.record_free(voice_id);
         }
     }
 
@@ -292,8 +378,10 @@ impl Engine {
                     param,
                     target,
                     glide_secs,
+                    shape,
+                    space,
                 } => {
-                    self.set_voice_param_glide(voice, &param, target, glide_secs);
+                    self.set_voice_param_glide(voice, &param, target, glide_secs, shape, space);
                 }
                 EventAction::FreeSynth { voice } => {
                     self.free_voice(voice);
@@ -363,9 +451,12 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(node_id) = synth.param_node(name) {
-            self.graph.set_node_target(node_id, target, glide_secs)
+            self.graph
+                .set_node_target(node_id, target, glide_secs, shape, space)
         } else {
             false
         }
@@ -378,10 +469,13 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(voice) = self.voices.iter().find(|v| v.id == voice_id) {
             if let Some(node_id) = voice.synth.param_node(name) {
-                self.graph.set_node_target(node_id, target, glide_secs)
+                self.graph
+                    .set_node_target(node_id, target, glide_secs, shape, space)
             } else {
                 false
             }
@@ -410,9 +504,21 @@ impl Engine {
                 .any(|&id| self.graph.node_is_done(id));
             if is_done {
                 let synth = self.synths.remove(i);
-                // Also remove from voices list
+                // Also remove from voices list, keeping the allocator's
+                // bookkeeping in sync for any voice IDs it was tracking.
+                let freed_ids: Vec<VoiceId> = self
+                    .voices
+                    .iter()
+                    .filter(|v| v.synth.output_node() == synth.output_node())
+                    .map(|v| v.id)
+                    .collect();
                 self.voices
                     .retain(|v| v.synth.output_node() != synth.output_node());
+                if let Some(alloc) = self.voice_alloc.as_mut() {
+                    for id in freed_ids {
+                        alloc.record_free(id);
+                    }
+                }
                 for &id in synth.node_ids() {
                     self.graph.remove_node(id);
                 }
@@ -560,6 +666,7 @@ impl Engine {
 
     /// Set a named parameter on an effect with a smooth glide.
     /// Returns true if the effect and parameter were found.
+    #[allow(clippy::too_many_arguments)] // Routing target, glide, and shape/space are each meaningful and independent.
     pub fn set_effect_param_glide(
         &mut self,
         routing: &RoutingGraph,
@@ -567,11 +674,15 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(synth) = routing.effect_synth(effect_id)
             && let Some(node_id) = synth.param_node(name)
         {
-            return self.graph.set_node_target(node_id, target, glide_secs);
+            return self
+                .graph
+                .set_node_target(node_id, target, glide_secs, shape, space);
         }
         false
     }
