@@ -10,6 +10,7 @@ pub mod engine;
 pub mod graph;
 #[cfg(feature = "ir")]
 pub mod ir;
+pub mod musical_sequence;
 pub mod musical_time;
 pub mod node;
 pub mod routing;
@@ -29,7 +30,8 @@ pub use context::{ProcessContext, Rate};
 pub use curve::{GlideShape, GlideSpace, glide_fraction};
 pub use engine::{Engine, EngineConfig};
 pub use graph::AudioGraph;
-pub use musical_time::{MusicalPosition, TimeConfig};
+pub use musical_sequence::schedule_musical_glides;
+pub use musical_time::{MusicalGlideSegment, MusicalPosition, SampleTimeGlide, TimeConfig};
 pub use node::{InputSpec, NodeId, OutputSpec, UGen, UGenCategory, UGenSpec};
 pub use routing::{BusId, EffectId, RoutingGraph};
 pub use sample::{Sample, SampleBank, SampleId};
