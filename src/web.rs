@@ -385,6 +385,12 @@ pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
 
 /// Initialize the engine with the given sample rate.
 /// Block size is fixed at 128 (WebAudio render quantum).
+///
+/// Resets every piece of session state this file tracks — including the
+/// mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`) —
+/// the same way `ms_init_with_bus` does, so a re-init here can't leave a
+/// stale legato track whose held `VoiceId` happens to alias one of the new
+/// engine's freshly-issued sequential ids.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
@@ -398,6 +404,9 @@ pub extern "C" fn ms_init(sample_rate: f32) {
     unsafe {
         *ENGINE.get_mut() = Some(Engine::new(config));
         *REGISTRY.get_mut() = Some(registry);
+        *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
     }
 }
 
@@ -805,6 +814,14 @@ pub unsafe extern "C" fn ms_legato_note_off(name_ptr: *const u8, name_len: usize
 /// read from the parallel arrays at index `i`; all arrays must have at least
 /// `count` elements.
 ///
+/// `sample_rate` is **not** a parameter here, unlike the stateless
+/// `ms_position_to_samples`/`ms_steps_to_samples` (which have no engine to
+/// consult and so must take it): this export is engine-coupled — it
+/// dispatches through the live engine's own scheduler — so it reads the
+/// initialized engine's actual sample rate instead of taking a second,
+/// independently-supplied one that could silently drift from it and
+/// schedule everything at the wrong time with no error signal.
+///
 /// - `bars_ptr[i]`, `steps_ptr[i]`, `tick_offsets_ptr[i]`: the segment's
 ///   musical position (see `MusicalPosition`).
 /// - `targets_ptr[i]`: the value `param` glides to.
@@ -822,7 +839,7 @@ pub unsafe extern "C" fn ms_legato_note_off(name_ptr: *const u8, name_len: usize
 /// initialized elements of its element type; all must stay valid for the
 /// call.
 #[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)] // Voice/param plus a musical TimeConfig plus one array per segment field, all independently meaningful.
+#[allow(clippy::too_many_arguments)] // Voice/param plus most of a musical TimeConfig (sample_rate comes from the engine) plus one array per segment field, all independently meaningful.
 pub unsafe extern "C" fn ms_schedule_musical_glides(
     voice_id: u64,
     param_ptr: *const u8,
@@ -832,7 +849,6 @@ pub unsafe extern "C" fn ms_schedule_musical_glides(
     denominator: u8,
     grid_steps: u16,
     ppqn: u16,
-    sample_rate: f32,
     bars_ptr: *const u32,
     steps_ptr: *const u16,
     tick_offsets_ptr: *const i16,
@@ -868,7 +884,7 @@ pub unsafe extern "C" fn ms_schedule_musical_glides(
         denominator,
         grid_steps,
         ppqn,
-        sample_rate,
+        sample_rate: engine.context().sample_rate,
     };
 
     let bars = unsafe { core::slice::from_raw_parts(bars_ptr, count) };

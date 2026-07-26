@@ -623,4 +623,28 @@ fn test_musical_glide_sub_block_boundary_lands_in_correct_block() {
     assert_eq!(on_time.len(), 1, "event must surface within its own block");
 }
 
+#[test]
+fn test_arrive_aligned_glide_completes_at_target_position() {
+    // MusicalGlideSegment::position is depart-aligned: it's where the glide
+    // starts, not where it ends. A caller wanting arrive-alignment (the
+    // glide completing AT a musical position) resolves that itself by
+    // building the segment at `arrival_position - glide_steps`.
+    let config = TimeConfig::new_4_4(120.0, 44100.0);
+    let glide_steps = 4.0;
+    let arrival = MusicalPosition::new(0, 8, 0);
+
+    let start = MusicalPosition::new(0, arrival.step - glide_steps as u16, 0);
+    let segment = MusicalGlideSegment::new(start, 880.0, glide_steps, GlideShape::Linear);
+
+    let events = config.sequence_to_samples(&[segment]);
+    let glide_samples = (events[0].glide_secs as f64 * config.sample_rate as f64).round() as u64;
+    let completion_time = events[0].time + glide_samples;
+
+    assert_eq!(
+        completion_time,
+        config.position_to_samples(arrival),
+        "a glide built with arrival - glide_steps as its position must complete at the arrival position"
+    );
+}
+
 extern crate alloc;
