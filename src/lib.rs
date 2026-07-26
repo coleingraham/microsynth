@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod buffer;
 pub mod context;
+pub mod curve;
 pub mod dsl;
 pub mod engine;
 pub mod graph;
@@ -24,6 +25,7 @@ pub mod web;
 // Re-export core types for convenience.
 pub use buffer::{AudioBuffer, Block, MAX_BLOCK_SIZE};
 pub use context::{ProcessContext, Rate};
+pub use curve::{GlideShape, GlideSpace, glide_fraction};
 pub use engine::{Engine, EngineConfig};
 pub use graph::AudioGraph;
 pub use musical_time::{MusicalPosition, TimeConfig};
