@@ -18,6 +18,7 @@
 //! spawn API, and conflating them would make a legato run's sound depend on
 //! incidental allocator state elsewhere in the engine.
 
+use crate::curve::{GlideShape, GlideSpace};
 use crate::engine::Engine;
 use crate::scheduler::VoiceId;
 use crate::synthdef::SynthDef;
@@ -243,7 +244,14 @@ impl LegatoVoice {
                 voice
             }
             Some(voice) => {
-                engine.set_voice_param_glide(voice, &self.pitch_param, pitch, self.portamento_secs);
+                engine.set_voice_param_glide(
+                    voice,
+                    &self.pitch_param,
+                    pitch,
+                    self.portamento_secs,
+                    GlideShape::default(),
+                    GlideSpace::default(),
+                );
                 voice
             }
         }
