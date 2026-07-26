@@ -264,6 +264,12 @@ impl Engine {
     /// Like `spawn_voice_managed`, but connects the voice to a bus (see
     /// `spawn_voice_on_bus`). Returns `None` either because the allocator's
     /// policy declined the spawn, or because the bus had no free slot.
+    ///
+    /// These two `None` cases are not equivalent for side effects: if the
+    /// allocator's policy called for a steal, that victim voice is freed
+    /// *before* the bus is checked for a free slot. A bus-full failure after
+    /// a steal still returns `None`, but a voice was already freed — treating
+    /// `None` as "nothing happened" will silently lose that voice.
     pub fn spawn_voice_on_bus_managed(
         &mut self,
         def: &SynthDef,

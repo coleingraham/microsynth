@@ -247,8 +247,23 @@ impl LegatoVoice {
     ///   overlapping or back-to-back notes): glides to the new pitch and
     ///   leaves the gate open — a legato tie, with no new attack.
     ///
+    /// A held voice can disappear on its own between notes — for example a
+    /// host reaping finished voices with `Engine::free_done_synths` after a
+    /// full release. If the held voice no longer exists in `engine`, this is
+    /// treated the same as no voice being held at all: a fresh one is
+    /// spawned. The prior note had already released, so a new attack is the
+    /// musically correct outcome, not just a fallback — the alternative is
+    /// silently discarding the note.
+    ///
     /// Returns the (possibly newly spawned) held voice.
     pub fn note_on(&mut self, engine: &mut Engine, def: &SynthDef, pitch: f32) -> VoiceId {
+        if let Some(voice) = self.held
+            && engine.voice_synth(voice).is_none()
+        {
+            self.held = None;
+            self.gate_open = false;
+        }
+
         match self.held {
             None => {
                 let voice = engine.spawn_voice(def);
