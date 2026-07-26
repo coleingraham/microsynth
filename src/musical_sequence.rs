@@ -8,7 +8,6 @@
 //! so a caller can hand over a whole sequence of tempo-relative updates in
 //! one call instead of converting and scheduling each one by hand.
 
-use crate::curve::GlideSpace;
 use crate::musical_time::{MusicalGlideSegment, TimeConfig};
 use crate::scheduler::{Scheduler, VoiceId};
 
@@ -18,16 +17,12 @@ use crate::scheduler::{Scheduler, VoiceId};
 /// Each segment's position and glide length are converted to sample-time
 /// terms via `config` (the pure conversion — see
 /// [`TimeConfig::sequence_to_samples`]), then scheduled with
-/// [`Scheduler::schedule_param_glide`] in the order given. `config`'s
-/// conversion is pure and deterministic, so identical `segments` and
-/// `config` always produce an identical stream of scheduled events, and
-/// rendering the same `segments` at a different tempo (a different `bpm` on
-/// `config`) scales every position and every glide length proportionally.
-///
-/// All segments schedule in [`GlideSpace::default()`] (raw parameter
-/// units). If a caller needs a different or per-segment glide space, call
-/// [`TimeConfig::sequence_to_samples`] directly and schedule each resulting
-/// event individually.
+/// [`Scheduler::schedule_param_glide`] in the order given, carrying that
+/// segment's own shape and space through unchanged. `config`'s conversion is
+/// pure and deterministic, so identical `segments` and `config` always
+/// produce an identical stream of scheduled events, and rendering the same
+/// `segments` at a different tempo (a different `bpm` on `config`) scales
+/// every position and every glide length proportionally.
 pub fn schedule_musical_glides(
     scheduler: &mut Scheduler,
     config: &TimeConfig,
@@ -43,7 +38,7 @@ pub fn schedule_musical_glides(
             event.target,
             event.glide_secs,
             event.shape,
-            GlideSpace::default(),
+            event.space,
         );
     }
 }

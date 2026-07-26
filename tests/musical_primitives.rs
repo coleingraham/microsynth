@@ -494,7 +494,8 @@ fn test_schedule_musical_glides_matches_pure_conversion() {
     let config = TimeConfig::new_4_4(100.0, 48000.0);
     let segments = [
         MusicalGlideSegment::new(MusicalPosition::new(0, 0, 0), 440.0, 4.0, GlideShape::Sine),
-        MusicalGlideSegment::new(MusicalPosition::new(0, 8, 0), 880.0, 2.0, GlideShape::Hold),
+        MusicalGlideSegment::new(MusicalPosition::new(0, 8, 0), 880.0, 2.0, GlideShape::Hold)
+            .with_space(GlideSpace::Pitch),
     ];
     let expected = config.sequence_to_samples(&segments);
 
@@ -520,10 +521,60 @@ fn test_schedule_musical_glides_matches_pure_conversion() {
                 assert_eq!(*target, want.target);
                 assert_eq!(*glide_secs, want.glide_secs);
                 assert_eq!(*shape, want.shape);
-                assert_eq!(*space, GlideSpace::default());
+                assert_eq!(
+                    *space, want.space,
+                    "each segment's own space must be preserved"
+                );
             }
             _ => panic!("expected SetParamGlide"),
         }
+    }
+}
+
+#[test]
+fn test_musical_glide_segment_defaults_to_raw_space() {
+    let segment = MusicalGlideSegment::new(
+        MusicalPosition::new(0, 0, 0),
+        440.0,
+        1.0,
+        GlideShape::Linear,
+    );
+    assert_eq!(segment.space, GlideSpace::default());
+    assert_eq!(segment.space, GlideSpace::Raw);
+}
+
+#[test]
+fn test_schedule_musical_glides_preserves_pitch_space() {
+    // A pitch segment scheduled in raw space would glide linear-in-Hz
+    // instead of as an equal-ratio pitch sweep, so the space a caller sets
+    // on a segment must survive both the pure conversion and scheduling.
+    let config = TimeConfig::new_4_4(120.0, 44100.0);
+    let segments = [MusicalGlideSegment::new(
+        MusicalPosition::new(0, 0, 0),
+        880.0,
+        4.0,
+        GlideShape::Exponential(-2.0),
+    )
+    .with_space(GlideSpace::Pitch)];
+
+    let converted = config.sequence_to_samples(&segments);
+    assert_eq!(converted[0].space, GlideSpace::Pitch);
+
+    let mut scheduler = microsynth::Scheduler::new();
+    let voice = scheduler.alloc_voice_id();
+    schedule_musical_glides(&mut scheduler, &config, voice, "freq", &segments);
+
+    let events = scheduler.drain_before(u64::MAX);
+    assert_eq!(events.len(), 1);
+    match &events[0].action {
+        microsynth::EventAction::SetParamGlide { space, .. } => {
+            assert_eq!(
+                *space,
+                GlideSpace::Pitch,
+                "scheduled event must carry the segment's glide space"
+            );
+        }
+        _ => panic!("expected SetParamGlide"),
     }
 }
 

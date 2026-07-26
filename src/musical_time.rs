@@ -6,7 +6,7 @@
 //!
 //! This module is pure math with no dependency on the audio graph.
 
-use crate::curve::GlideShape;
+use crate::curve::{GlideShape, GlideSpace};
 use alloc::vec::Vec;
 
 /// Musical time configuration for a piece or section.
@@ -170,6 +170,7 @@ impl TimeConfig {
                 target: segment.target,
                 glide_secs: self.steps_to_secs(segment.glide_steps) as f32,
                 shape: segment.shape,
+                space: segment.space,
             })
             .collect()
     }
@@ -178,11 +179,11 @@ impl TimeConfig {
 /// A single parameter update expressed in musical time: where it falls, what
 /// value it moves to, how long the glide there takes (in grid steps,
 /// fractional allowed, so the glide scales with tempo), and the
-/// interpolation shape the glide follows.
+/// interpolation shape and space the glide uses.
 ///
-/// Shape is composed from [`crate::curve::GlideShape`] rather than
-/// reimplemented here; this type only carries it through to the eventual
-/// scheduled event.
+/// Shape and space are composed from [`crate::curve::GlideShape`] and
+/// [`crate::curve::GlideSpace`] rather than reimplemented here; this type
+/// only carries them through to the eventual scheduled event.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MusicalGlideSegment {
     /// Where this update falls in musical time.
@@ -194,10 +195,16 @@ pub struct MusicalGlideSegment {
     pub glide_steps: f32,
     /// Interpolation shape for the glide.
     pub shape: GlideShape,
+    /// Interpolation space for the glide (raw units vs. pitch space — see
+    /// [`crate::curve::GlideSpace`]). A pitch segment scheduled in raw space
+    /// glides linear-in-Hz rather than as an equal-ratio pitch sweep, so
+    /// this must be settable per segment, not just per shape.
+    pub space: GlideSpace,
 }
 
 impl MusicalGlideSegment {
-    /// Create a new musical-time glide segment.
+    /// Create a new musical-time glide segment with [`GlideSpace::default()`]
+    /// (raw units). Use [`MusicalGlideSegment::with_space`] to override.
     pub fn new(
         position: MusicalPosition,
         target: f32,
@@ -209,7 +216,15 @@ impl MusicalGlideSegment {
             target,
             glide_steps,
             shape,
+            space: GlideSpace::default(),
         }
+    }
+
+    /// Set this segment's glide space (e.g. [`GlideSpace::Pitch`] for an
+    /// equal-ratio pitch sweep instead of a linear-in-units ramp).
+    pub fn with_space(mut self, space: GlideSpace) -> Self {
+        self.space = space;
+        self
     }
 }
 
@@ -231,4 +246,6 @@ pub struct SampleTimeGlide {
     pub glide_secs: f32,
     /// Interpolation shape for the glide.
     pub shape: GlideShape,
+    /// Interpolation space for the glide.
+    pub space: GlideSpace,
 }
