@@ -1,5 +1,6 @@
 use crate::buffer::AudioBuffer;
 use crate::context::ProcessContext;
+use crate::curve::{GlideShape, GlideSpace};
 use crate::graph::AudioGraph;
 use crate::node::NodeId;
 use crate::routing::{BusId, EffectId, RoutingGraph};
@@ -292,8 +293,10 @@ impl Engine {
                     param,
                     target,
                     glide_secs,
+                    shape,
+                    space,
                 } => {
-                    self.set_voice_param_glide(voice, &param, target, glide_secs);
+                    self.set_voice_param_glide(voice, &param, target, glide_secs, shape, space);
                 }
                 EventAction::FreeSynth { voice } => {
                     self.free_voice(voice);
@@ -363,9 +366,12 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(node_id) = synth.param_node(name) {
-            self.graph.set_node_target(node_id, target, glide_secs)
+            self.graph
+                .set_node_target(node_id, target, glide_secs, shape, space)
         } else {
             false
         }
@@ -378,10 +384,13 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(voice) = self.voices.iter().find(|v| v.id == voice_id) {
             if let Some(node_id) = voice.synth.param_node(name) {
-                self.graph.set_node_target(node_id, target, glide_secs)
+                self.graph
+                    .set_node_target(node_id, target, glide_secs, shape, space)
             } else {
                 false
             }
@@ -560,6 +569,7 @@ impl Engine {
 
     /// Set a named parameter on an effect with a smooth glide.
     /// Returns true if the effect and parameter were found.
+    #[allow(clippy::too_many_arguments)] // Routing target, glide, and shape/space are each meaningful and independent.
     pub fn set_effect_param_glide(
         &mut self,
         routing: &RoutingGraph,
@@ -567,11 +577,15 @@ impl Engine {
         name: &str,
         target: f32,
         glide_secs: f32,
+        shape: GlideShape,
+        space: GlideSpace,
     ) -> bool {
         if let Some(synth) = routing.effect_synth(effect_id)
             && let Some(node_id) = synth.param_node(name)
         {
-            return self.graph.set_node_target(node_id, target, glide_secs);
+            return self
+                .graph
+                .set_node_target(node_id, target, glide_secs, shape, space);
         }
         false
     }
