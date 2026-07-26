@@ -145,8 +145,10 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     engine.prepare();
 
     // A managed, off-bus voice fills the budget; this is the steal victim.
+    // Oldest is a non-Reject policy, so a full budget really does steal.
     engine.set_voice_allocator(VoiceAllocator::new(1, StealPolicy::Oldest));
     let victim = engine.spawn_voice_managed(&defs[0]).unwrap();
+    let count_before = engine.synths().len();
 
     // Budget is full, so this must steal `victim` — but the bus still has no
     // free slot (all 64 are `bus_voices`, untouched by the steal), so the
@@ -156,6 +158,14 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     assert!(
         result.is_none(),
         "the bus has no free slot, so this must fail"
+    );
+    // The observable proof that the steal still happened despite the
+    // failure: the live voice count actually dropped by one (the victim),
+    // not just "the spawn produced nothing".
+    assert_eq!(
+        engine.synths().len(),
+        count_before - 1,
+        "the victim must have been freed even though the spawn returned None"
     );
     assert!(
         engine.voice_synth(victim).is_none(),
@@ -413,7 +423,9 @@ fn test_legato_respawns_after_release_and_reap() {
          not the stale id of the one that was just freed"
     );
 
-    let env2 = engine.voice_synth(voice2).unwrap().output_node();
+    let synth2 = engine.voice_synth(voice2).unwrap();
+    let env2 = synth2.output_node();
+    let freq2 = synth2.param_node("freq").unwrap();
     engine.graph_mut().set_sink(env2);
     engine.prepare();
 
@@ -428,6 +440,22 @@ fn test_legato_respawns_after_release_and_reap() {
         count_attacks(&trace2),
         1,
         "note_on after a reap must produce a fresh envelope attack, not silence"
+    );
+
+    // Not just *an* attack — the respawned voice must actually carry the
+    // pitch that was requested, not a leftover/default value.
+    let final_freq = engine
+        .graph()
+        .node_output(freq2)
+        .unwrap()
+        .channel(0)
+        .samples()
+        .last()
+        .copied()
+        .unwrap();
+    assert!(
+        (final_freq - 660.0).abs() < 0.01,
+        "respawned voice must carry the requested pitch (660), got {final_freq}"
     );
 }
 

@@ -267,26 +267,51 @@ impl LegatoVoice {
         match self.held {
             None => {
                 let voice = engine.spawn_voice(def);
-                engine.set_voice_param(voice, &self.pitch_param, pitch);
-                engine.set_voice_param(voice, "gate", 1.0);
+                let pitch_set = engine.set_voice_param(voice, &self.pitch_param, pitch);
+                let gate_set = engine.set_voice_param(voice, "gate", 1.0);
+                // `voice` was just spawned from `def`, so both params must
+                // exist unless `pitch_param`'s name doesn't match anything in
+                // `def` — a caller configuration error, not a race with the
+                // engine. Surfacing it here (rather than discarding the
+                // bools) is what would have caught the reap-and-silently-
+                // no-op failure mode this method now guards against above.
+                debug_assert!(
+                    pitch_set && gate_set,
+                    "freshly spawned voice {voice:?} is missing its pitch \
+                     (\"{}\") or gate param — check the SynthDef",
+                    self.pitch_param
+                );
                 self.held = Some(voice);
                 self.gate_open = true;
                 voice
             }
             Some(voice) if !self.gate_open => {
-                engine.set_voice_param(voice, &self.pitch_param, pitch);
-                engine.set_voice_param(voice, "gate", 1.0);
+                let pitch_set = engine.set_voice_param(voice, &self.pitch_param, pitch);
+                let gate_set = engine.set_voice_param(voice, "gate", 1.0);
+                debug_assert!(
+                    pitch_set && gate_set,
+                    "retriggering voice {voice:?}, confirmed live just above, \
+                     is missing its pitch (\"{}\") or gate param — check the \
+                     SynthDef",
+                    self.pitch_param
+                );
                 self.gate_open = true;
                 voice
             }
             Some(voice) => {
-                engine.set_voice_param_glide(
+                let glide_set = engine.set_voice_param_glide(
                     voice,
                     &self.pitch_param,
                     pitch,
                     self.portamento_secs,
                     self.portamento_shape,
                     self.portamento_space,
+                );
+                debug_assert!(
+                    glide_set,
+                    "tying voice {voice:?}, confirmed live just above, is \
+                     missing its pitch param (\"{}\") — check the SynthDef",
+                    self.pitch_param
                 );
                 voice
             }
