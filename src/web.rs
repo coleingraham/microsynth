@@ -386,11 +386,20 @@ pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
 /// Initialize the engine with the given sample rate.
 /// Block size is fixed at 128 (WebAudio render quantum).
 ///
-/// Resets every piece of session state this file tracks — including the
-/// mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`) —
-/// the same way `ms_init_with_bus` does, so a re-init here can't leave a
-/// stale legato track whose held `VoiceId` happens to alias one of the new
-/// engine's freshly-issued sequential ids.
+/// Resets every piece of graph-dependent session state this file tracks —
+/// the mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`)
+/// and `BUS_NODE` — the same way `ms_init_with_bus` does, so a re-init here
+/// can't leave either a stale legato track whose held `VoiceId` happens to
+/// alias one of the new engine's freshly-issued sequential ids, or a stale
+/// `BUS_NODE` pointing at a `NodeId` in the just-destroyed engine's graph
+/// (which `ms_spawn_voice_named` would otherwise feed to
+/// `Engine::spawn_voice_on_bus` — safe today only because the new, empty
+/// graph doesn't have that index yet; it becomes valid-and-wrong the moment
+/// a later call repopulates the graph past it).
+///
+/// `DEF_REGISTRY`/`DEFS` are deliberately left alone: they're graph-
+/// independent templates (compiled `SynthDef`s, not live node references),
+/// so a name registered before this call is still validly registered after.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
@@ -404,6 +413,7 @@ pub extern "C" fn ms_init(sample_rate: f32) {
     unsafe {
         *ENGINE.get_mut() = Some(Engine::new(config));
         *REGISTRY.get_mut() = Some(registry);
+        *BUS_NODE.get_mut() = None;
         *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
@@ -741,7 +751,16 @@ pub unsafe extern "C" fn ms_legato_note_on(
         LegatoVoice::new(pitch_param, portamento_secs)
             .with_glide(portamento_shape, portamento_space)
     });
-    let is_first_note = track.voice().is_none();
+    // Snapshot the voice held *before* the call, not just whether one was
+    // held at all: `LegatoVoice::note_on` can silently spawn a replacement
+    // voice for a track that still looks "held" from here, if the
+    // previously-held voice was reaped out from under it (e.g. by
+    // `Engine::free_done_synths` after a full release) — it clears its own
+    // `held` state and spawns fresh internally, after this function has
+    // already read it. A `track.voice().is_none()` check taken before the
+    // call cannot see that case, so it must be a value comparison taken
+    // after the call instead (see the comment below).
+    let prev_voice = track.voice();
 
     let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
         Some(e) => e,
@@ -749,19 +768,41 @@ pub unsafe extern "C" fn ms_legato_note_on(
     };
     let voice_id = track.note_on(engine, def, pitch);
 
-    if is_first_note {
-        // Freshly spawned: wire its output into a bus slot reserved for
-        // this track (see `LEGATO_SLOTS`'s docs for why it counts down
-        // rather than sharing `ms_spawn_voice_named`'s slot bookkeeping).
-        if let Some(bus_id) = unsafe { BUS_NODE.get_mut() }
-            && let Some(bus_max) = engine
+    // A voice id changing from what was held before (including from "none
+    // held yet") means a brand-new synth was just spawned into the graph
+    // and needs wiring to the bus — this covers both the true first note
+    // and a reap-then-respawn, since `Engine::spawn_voice` always hands out
+    // a fresh, never-before-used id *within one engine's lifetime*
+    // (`Scheduler::alloc_voice_id` is monotonic, never reused). That
+    // monotonicity is what makes this comparison sound — but the counter
+    // resets to 1 whenever `ms_init`/`ms_init_with_bus` replaces the engine,
+    // so this is only correct because both of them also clear
+    // `LEGATO_VOICES`. If a future edit trims that reset list, a track
+    // surviving a re-init could hold a `prev_voice` that collides with a
+    // fresh id in the *new* engine and this comparison would wrongly see
+    // "unchanged," silently skipping wiring again.
+    if prev_voice != Some(voice_id)
+        && let Some(bus_id) = unsafe { BUS_NODE.get_mut() }
+        && let Some(slots) = unsafe { LEGATO_SLOTS.get_mut() }.as_mut()
+    {
+        // Reuse this track's already-reserved slot if it has one (a
+        // reap-then-respawn) rather than recomputing the counting-down
+        // formula, which depends on how many *other* tracks have reserved a
+        // slot since — recomputing now could collide with a slot a
+        // different track already claimed.
+        let slot = match slots.get(name).copied() {
+            Some(slot) => Some(slot),
+            None => engine
                 .graph()
                 .node_spec(*bus_id)
                 .map(|spec| spec.inputs.len())
-            && let Some(slots) = unsafe { LEGATO_SLOTS.get_mut() }.as_mut()
-        {
-            let slot = bus_max.saturating_sub(1).saturating_sub(slots.len());
-            slots.insert(AllocString::from(name), slot);
+                .map(|bus_max| {
+                    let slot = bus_max.saturating_sub(1).saturating_sub(slots.len());
+                    slots.insert(AllocString::from(name), slot);
+                    slot
+                }),
+        };
+        if let Some(slot) = slot {
             if let Some(synth) = engine.voice_synth(voice_id) {
                 let output_node = synth.output_node();
                 engine.graph_mut().connect(output_node, *bus_id, slot);
@@ -802,6 +843,34 @@ pub unsafe extern "C" fn ms_legato_note_off(name_ptr: *const u8, name_len: usize
         None => return,
     };
     track.note_off(engine);
+}
+
+/// The bus input slot reserved for the named legato track, or -1 if `name`
+/// has none yet (never played legato, or no engine initialized).
+///
+/// Purely a diagnostic accessor over `LEGATO_SLOTS` — normal playback never
+/// needs it. It exists so a caller (or a test) can confirm that a track's
+/// slot stays stable across a reap-then-respawn instead of drifting to a
+/// value that could collide with a different track's slot (see
+/// `ms_legato_note_on`'s doc comment).
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_legato_slot_for(name_ptr: *const u8, name_len: usize) -> i64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match unsafe { LEGATO_SLOTS.get_mut() }
+        .as_ref()
+        .and_then(|s| s.get(name))
+    {
+        Some(&slot) => slot as i64,
+        None => -1,
+    }
 }
 
 // ============================================================================
