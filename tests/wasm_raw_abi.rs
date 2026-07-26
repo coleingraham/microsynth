@@ -301,6 +301,50 @@ fn test_ms_legato_note_on_unregistered_name_returns_zero() {
     }
 }
 
+#[test]
+fn test_ms_init_resets_legato_bookkeeping() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        let (sptr, slen) = alloc_str(
+            "synthdef lead freq=440.0 gate=0.0 = freq\n\nvoice lead mono legato freq 0.02",
+        );
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        // Leave the track in a "tie-capable" state (held + gate open) —
+        // exactly the state a surviving stale entry would misuse after a
+        // fresh engine replaces the one it was recorded against.
+        let voice = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(voice > 0);
+        for _ in 0..2 {
+            render_block();
+        }
+
+        // Re-init via the plain path (paired with ms_compile/ms_render, not
+        // ms_register_def/ms_legato_note_on) — this replaces the engine
+        // with a fresh one whose VoiceIds restart at 1, so any surviving
+        // legato bookkeeping from before would alias the new engine's ids.
+        web::ms_init(44100.0);
+
+        // DEF_REGISTRY is untouched by ms_init (by design — it belongs to
+        // the ms_register_def/ms_spawn_voice_named workflow, not ms_init's),
+        // so "lead" is technically still registered. But its *voice mode*
+        // must be gone: ms_legato_note_on has nothing left to key a track
+        // off of and must fail cleanly (0), not resurrect the stale track
+        // and silently glide/gate an unrelated voice under the new engine.
+        let second = web::ms_legato_note_on(nptr, nlen, 440.0);
+        assert_eq!(
+            second, 0,
+            "ms_init must clear legato voice-mode state, not leave a stale \
+             track whose held VoiceId could alias the new engine's ids"
+        );
+
+        free_str(nptr, nlen);
+    }
+}
+
 // -- The legato tie portamento's shape/space --
 //
 // `LegatoVoice`'s tie branch used to glide with `GlideShape::default()` /
@@ -520,7 +564,6 @@ fn test_ms_schedule_musical_glides_lands_at_expected_sample_time() {
             config.denominator,
             config.grid_steps,
             config.ppqn,
-            config.sample_rate,
             bars.as_ptr(),
             steps.as_ptr(),
             ticks.as_ptr(),
@@ -558,6 +601,89 @@ fn test_ms_schedule_musical_glides_lands_at_expected_sample_time() {
     }
 }
 
+/// `ms_schedule_musical_glides` takes no `sample_rate` argument — it reads
+/// the initialized engine's own rate instead (see the export's doc comment).
+/// Uses a rate distinct from every other test in this file (44100 Hz) so a
+/// regression back to some hardcoded/wrong rate would place the scheduled
+/// event at the wrong sample and be caught here rather than passing by
+/// coincidence.
+#[test]
+fn test_ms_schedule_musical_glides_uses_the_engines_own_sample_rate() {
+    let _guard = lock();
+    unsafe {
+        let engine_sample_rate = 22050.0f32;
+        web::ms_init_with_bus(engine_sample_rate);
+        let (nptr, nlen) = alloc_str("test");
+        let (sptr, slen) = alloc_str("synthdef test val=0.0 = val");
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        let voice = web::ms_spawn_voice_named(nptr, nlen);
+        assert!(voice > 0);
+        free_str(nptr, nlen);
+
+        let config = TimeConfig::new_4_4(120.0, engine_sample_rate);
+        let position = MusicalPosition::new(0, 4, 0);
+        let expected_time = config.position_to_samples(position);
+        let expected_glide_secs = config.steps_to_secs(2.0) as f32;
+
+        let (pptr, plen) = alloc_str("val");
+        let bars = [0u32];
+        let steps = [4u16];
+        let ticks = [0i16];
+        let targets = [1.0f32];
+        let glide_steps = [2.0f32];
+        let shape_kinds = [1u32];
+        let tensions = [0.0f32];
+        let space_kinds = [0u32];
+
+        let result = web::ms_schedule_musical_glides(
+            voice,
+            pptr,
+            plen,
+            config.bpm,
+            config.numerator,
+            config.denominator,
+            config.grid_steps,
+            config.ppqn,
+            bars.as_ptr(),
+            steps.as_ptr(),
+            ticks.as_ptr(),
+            targets.as_ptr(),
+            glide_steps.as_ptr(),
+            shape_kinds.as_ptr(),
+            tensions.as_ptr(),
+            space_kinds.as_ptr(),
+            1,
+        );
+        assert_eq!(result, 0);
+        free_str(pptr, plen);
+
+        let total_end_sample =
+            expected_time + (expected_glide_secs * engine_sample_rate).round() as u64;
+        let mut trace = Vec::new();
+        let mut sample_offset: u64 = 0;
+        while sample_offset < total_end_sample + 256 {
+            trace.extend_from_slice(&render_block());
+            sample_offset += 128;
+        }
+
+        assert!(
+            (trace[(expected_time.saturating_sub(64)) as usize] - 0.0).abs() < 1e-6,
+            "value should be unchanged before the position computed at the \
+             engine's actual {engine_sample_rate} Hz rate — a stale/wrong \
+             rate would place this either too early or too late"
+        );
+        let after = (total_end_sample + 64) as usize;
+        assert!(
+            (trace[after.min(trace.len() - 1)] - 1.0).abs() < 1e-3,
+            "expected the glide to reach target by sample {total_end_sample} \
+             (computed at the engine's {engine_sample_rate} Hz rate), got {} at {after}",
+            trace[after.min(trace.len() - 1)]
+        );
+    }
+}
+
 #[test]
 fn test_ms_schedule_musical_glides_empty_segment_list_is_a_safe_no_op() {
     let _guard = lock();
@@ -579,7 +705,6 @@ fn test_ms_schedule_musical_glides_empty_segment_list_is_a_safe_no_op() {
             4,
             16,
             96,
-            44100.0,
             core::ptr::null(),
             core::ptr::null(),
             core::ptr::null(),
