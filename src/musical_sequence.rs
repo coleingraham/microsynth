@@ -23,6 +23,11 @@ use crate::scheduler::{Scheduler, VoiceId};
 /// produce an identical stream of scheduled events, and rendering the same
 /// `segments` at a different tempo (a different `bpm` on `config`) scales
 /// every position and every glide length proportionally.
+///
+/// Each segment's `position` is where its glide starts, not where it ends,
+/// and neither this function nor the conversion it calls validates that a
+/// segment's shape or glide length are musically sensible — see
+/// [`MusicalGlideSegment`] for both notes.
 pub fn schedule_musical_glides(
     scheduler: &mut Scheduler,
     config: &TimeConfig,

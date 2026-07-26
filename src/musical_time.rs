@@ -162,6 +162,19 @@ impl TimeConfig {
     /// `segments` through two `TimeConfig`s that differ only in `bpm`
     /// scales every position and every glide length proportionally, since
     /// both derive from the same tempo-relative quarter-note duration.
+    ///
+    /// Alignment: a segment's `position` is where its glide *starts* —
+    /// there is no separate "arrives at" concept here. A caller that wants
+    /// a glide to instead *complete* at a musical position computes that
+    /// position's start themselves, before constructing the segment:
+    /// `start = arrival_position - glide_steps` (in grid steps). See
+    /// [`MusicalGlideSegment`] for the corresponding note.
+    ///
+    /// Validation: this function schedules whatever it is given. It does
+    /// not check that a segment's shape, glide length, or position are
+    /// musically meaningful (e.g. a negative or absurdly large
+    /// `glide_steps`) — that judgment belongs to the caller assembling the
+    /// sequence, not to this conversion.
     pub fn sequence_to_samples(&self, segments: &[MusicalGlideSegment]) -> Vec<SampleTimeGlide> {
         segments
             .iter()
@@ -184,9 +197,23 @@ impl TimeConfig {
 /// Shape and space are composed from [`crate::curve::GlideShape`] and
 /// [`crate::curve::GlideSpace`] rather than reimplemented here; this type
 /// only carries them through to the eventual scheduled event.
+///
+/// Alignment is depart-side: `position` is where the glide *starts*, not
+/// where it ends. There is no separate "arrives at" field. A caller that
+/// wants the glide to complete at a given musical position resolves that
+/// itself — set `position` to `arrival_position - glide_steps` (in grid
+/// steps) when building the segment. This module does not pick a default
+/// alignment on the caller's behalf.
+///
+/// Validation is also the caller's responsibility: constructing a segment
+/// with a shape/glide-length combination that doesn't make musical sense
+/// (for example a negative `glide_steps`) is not rejected here or by
+/// [`TimeConfig::sequence_to_samples`] — both schedule whatever they are
+/// given.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MusicalGlideSegment {
-    /// Where this update falls in musical time.
+    /// Where this update's glide *starts* in musical time (depart-aligned;
+    /// see the type-level note on arrive-alignment).
     pub position: MusicalPosition,
     /// The value the parameter glides to.
     pub target: f32,
