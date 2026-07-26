@@ -1002,3 +1002,190 @@ fn test_ms_schedule_musical_glides_empty_segment_list_is_a_safe_no_op() {
         free_str(pptr, plen);
     }
 }
+
+// ============================================================================
+// Composite: legato + musical-time scheduling on the same voice
+// ============================================================================
+//
+// Every export above is exercised on its own; this is the one test that
+// composes two of them the way an actual caller would — declare a
+// mono/legato instrument, start it, and schedule a shaped, musical-time
+// pitch sequence directly on the voice id `ms_legato_note_on` returned —
+// proving the raw C-ABI surfaces work *together*, not just individually.
+
+// Output is the raw envelope, not an audible tone modulated by it: an
+// oscillating `sinOsc * envelope` signal crosses zero on every cycle of the
+// tone itself, which would make a 0->positive zero-crossing counter count
+// hundreds of "attacks" instead of the one real envelope attack (a mistake
+// caught while adapting this test — see the module docs' precedent of using
+// a bare envelope output for exactly this reason). "Audible" here means
+// "reaches the bus and stays nonzero," which a raw envelope still proves.
+const COMPOSITE_LEGATO_SOURCE: &str = "synthdef lead freq=440.0 gate=0.0 = asr gate 0.005 0.5\n\n\
+     voice lead mono legato freq 0.01";
+
+#[test]
+fn test_legato_voice_accepts_a_scheduled_musical_time_sequence() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        let (sptr, slen) = alloc_str(COMPOSITE_LEGATO_SOURCE);
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        // Declare + start the legato instrument through the raw C-ABI.
+        let voice = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(voice > 0, "legato instrument must start");
+        free_str(nptr, nlen);
+
+        // Schedule a shaped, musical-time pitch sequence directly on that
+        // voice id: two segments mixing shapes (Sine, then Exponential) and
+        // both in pitch space, at 120bpm on a 16th-note grid.
+        let (pptr, plen) = alloc_str("freq");
+        let bars = [0u32, 0];
+        let steps = [4u16, 8];
+        let ticks = [0i16, 0];
+        let targets = [440.0f32, 330.0];
+        let glide_steps = [2.0f32, 2.0];
+        let shape_kinds = [2u32, 3]; // Sine, Exponential
+        let tensions = [0.0f32, 3.0];
+        let space_kinds = [1u32, 1]; // Pitch, Pitch
+
+        let result = web::ms_schedule_musical_glides(
+            voice,
+            pptr,
+            plen,
+            120.0,
+            4,
+            4,
+            16,
+            96,
+            bars.as_ptr(),
+            steps.as_ptr(),
+            ticks.as_ptr(),
+            targets.as_ptr(),
+            glide_steps.as_ptr(),
+            shape_kinds.as_ptr(),
+            tensions.as_ptr(),
+            space_kinds.as_ptr(),
+            2,
+        );
+        assert_eq!(result, 0, "scheduling on a legato voice must succeed");
+        free_str(pptr, plen);
+
+        // Render across the whole scheduled span (step 8 at 120bpm/16 steps
+        // lands at ~44100 samples; its own glide adds ~11025 more) with
+        // generous margin, capturing the bus output from the very first
+        // render after note_on so the attack itself is included in the trace.
+        let mut trace = Vec::new();
+        for _ in 0..450 {
+            trace.extend_from_slice(&render_block());
+        }
+
+        let peak = trace.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+        assert!(
+            peak > 0.1,
+            "the legato voice must still be sounding across the scheduled span, got peak {peak}"
+        );
+
+        assert_eq!(
+            count_attacks(&trace),
+            1,
+            "a musical-time glide sequence scheduled on a legato voice must \
+             not re-attack its envelope — this must be a pitch sequence \
+             layered on the held note, not a series of new notes"
+        );
+    }
+}
+
+/// A caller can hold a voice id from before a reap (e.g. it scheduled a
+/// sequence, then the note fully released and was reaped, then the track
+/// respawned under a new id before the schedule's own segments were all
+/// due). This confirms that composition stays harmless: scheduling against
+/// the retired id still succeeds (matching every other `ms_schedule_*`/
+/// `ms_voice_param_glide` export — none of them validate voice liveness at
+/// schedule time), and when the event's time arrives it is a silent no-op
+/// rather than landing on the *new* voice, because `Engine::spawn_voice`
+/// never reuses a `VoiceId` within one engine's lifetime.
+#[test]
+fn test_scheduling_on_a_reaped_voice_id_does_not_affect_its_replacement() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead2");
+        // Output is `freq` directly so the respawned voice's pitch can be
+        // read straight off the bus; the envelope exists only so the synth
+        // can report is_done() and be reaped — multiplying its value by 0.0
+        // keeps it out of the observed output.
+        let (sptr, slen) = alloc_str(
+            "synthdef lead2 freq=440.0 gate=0.0 = freq + asr gate 0.005 0.02 * 0.0\n\n\
+             voice lead2 mono legato freq 0.02",
+        );
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        let v1 = web::ms_legato_note_on(nptr, nlen, 220.0);
+        assert!(v1 > 0);
+        for _ in 0..5 {
+            render_block();
+        }
+        web::ms_legato_note_off(nptr, nlen);
+        for _ in 0..15 {
+            render_block();
+        }
+        assert!(web::ms_free_done() > 0, "expected lead2 to be reaped");
+
+        let v2 = web::ms_legato_note_on(nptr, nlen, 440.0);
+        assert!(v2 > 0);
+        assert_ne!(v2, v1, "respawn must get a genuinely new voice id");
+        free_str(nptr, nlen);
+
+        // Schedule against the STALE id v1, as a caller still holding it
+        // from before the reap would.
+        let (pptr, plen) = alloc_str("freq");
+        let bars = [0u32];
+        let steps = [1u16];
+        let ticks = [0i16];
+        let targets = [880.0f32];
+        let glide_steps = [1.0f32];
+        let shape_kinds = [1u32];
+        let tensions = [0.0f32];
+        let space_kinds = [0u32];
+        let result = web::ms_schedule_musical_glides(
+            v1,
+            pptr,
+            plen,
+            120.0,
+            4,
+            4,
+            16,
+            96,
+            bars.as_ptr(),
+            steps.as_ptr(),
+            ticks.as_ptr(),
+            targets.as_ptr(),
+            glide_steps.as_ptr(),
+            shape_kinds.as_ptr(),
+            tensions.as_ptr(),
+            space_kinds.as_ptr(),
+            1,
+        );
+        assert_eq!(
+            result, 0,
+            "scheduling against a stale voice id still succeeds — the engine \
+             has no way to know it's stale until dispatch time"
+        );
+        free_str(pptr, plen);
+
+        // Render well past the scheduled position and its glide.
+        let mut last = 0.0f32;
+        for _ in 0..100 {
+            last = *render_block().last().unwrap();
+        }
+        assert!(
+            (last - 440.0).abs() < 1e-3,
+            "the schedule aimed at the retired voice must not have reached \
+             v2's freq (still expected 440.0, got {last})"
+        );
+    }
+}

@@ -909,7 +909,12 @@ pub unsafe extern "C" fn ms_legato_slot_for(name_ptr: *const u8, name_len: usize
 ///
 /// Returns 0 on success, 1 if no engine is initialized. `count == 0` is a
 /// valid no-op and returns 0 without touching any of the `*_ptr` arguments
-/// (so they may be null in that case).
+/// (so they may be null in that case). `voice_id` is not validated against
+/// currently-live voices either: if it names a voice that is gone by the
+/// time a segment's event fires (freed directly, or reaped after a legato
+/// track respawned under a new id), that segment is a silent no-op rather
+/// than an error, matching every other scheduled or targeted export in this
+/// file (`ms_voice_param`, `ms_voice_param_glide`, `ms_schedule_note`, …).
 ///
 /// # Safety
 /// `param_ptr` must point to an initialized buffer of at least `param_len`
