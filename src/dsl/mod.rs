@@ -609,8 +609,10 @@ pub mod compiler;
 pub mod lexer;
 pub mod parser;
 
+pub use ast::VoiceModeDecl;
 pub use compiler::{
     CompileError, UGenEntry, UGenRegistry, compile_program, compile_routing, compile_synthdef,
+    compile_voice_modes,
 };
 pub use lexer::LexError;
 pub use parser::ParseError;
@@ -684,4 +686,21 @@ pub fn compile_with_routing(
     let defs = compile_program(&program, registry)?;
     let routing = compile_routing(&program, &defs)?;
     Ok((defs, routing))
+}
+
+/// Parse and compile DSL source into SynthDefs and its voice-mode
+/// declarations (`voice NAME mono legato PITCH_PARAM PORTAMENTO_SECS`).
+///
+/// Returns `(synthdefs, voice_modes)`, with each declaration validated
+/// against the compiled SynthDefs (see [`compile_voice_modes`]).
+pub fn compile_with_voice_modes(
+    source: &str,
+    registry: &UGenRegistry,
+) -> Result<(Vec<SynthDef>, Vec<VoiceModeDecl>), DslError> {
+    let tokens = lexer::tokenize(source)?;
+    let mut parser = parser::Parser::new(tokens);
+    let program = parser.parse_program()?;
+    let defs = compile_program(&program, registry)?;
+    let voice_modes = compile_voice_modes(&program, &defs)?;
+    Ok((defs, voice_modes))
 }

@@ -1,6 +1,6 @@
 //! Compiles DSL AST into SynthDef templates.
 
-use crate::dsl::ast::{Expr, SynthDefDecl};
+use crate::dsl::ast::{Expr, SynthDefDecl, VoiceModeDecl};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory};
 use crate::synthdef::{SynthDef, SynthDefBuilder};
 use crate::ugens;
@@ -331,6 +331,44 @@ pub fn compile_routing(
     }
 
     Ok(routing)
+}
+
+/// Validate a program's voice-mode declarations against its compiled
+/// SynthDefs.
+///
+/// Each declaration must name an existing SynthDef and an existing parameter
+/// on it — the same kind of cross-reference check `compile_routing` already
+/// does for bus/effect names, so a typo in either name is caught at compile
+/// time instead of silently doing nothing at spawn time.
+pub fn compile_voice_modes(
+    program: &crate::dsl::ast::Program,
+    defs: &[crate::synthdef::SynthDef],
+) -> Result<Vec<VoiceModeDecl>, CompileError> {
+    for decl in &program.voice_modes {
+        let def = defs
+            .iter()
+            .find(|d| d.name() == decl.synth_name)
+            .ok_or_else(|| CompileError {
+                message: alloc::format!(
+                    "unknown synthdef in voice declaration: {}",
+                    decl.synth_name
+                ),
+            })?;
+        if !def
+            .param_names()
+            .iter()
+            .any(|(name, _, _)| name == &decl.pitch_param)
+        {
+            return Err(CompileError {
+                message: alloc::format!(
+                    "voice declaration for {} references unknown parameter: {}",
+                    decl.synth_name,
+                    decl.pitch_param
+                ),
+            });
+        }
+    }
+    Ok(program.voice_modes.clone())
 }
 
 /// A compilation error.

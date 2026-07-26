@@ -3,9 +3,10 @@
 //! Grammar (Haskell-inspired):
 //!
 //! ```text
-//! program     = synthdef*
+//! program     = (synthdef | bus_decl | route_decl | voice_decl)*
 //! synthdef    = 'synthdef' IDENT param* '=' body
 //! param       = IDENT '=' NUMBER
+//! voice_decl  = 'voice' IDENT 'mono' 'legato' IDENT NUMBER
 //! body        = statement* expr
 //! statement   = 'let' IDENT '=' expr (NEWLINE | ';')
 //! expr        = add_expr
@@ -37,12 +38,14 @@ impl Parser {
         Parser { tokens, pos: 0 }
     }
 
-    /// Parse a complete program (synthdefs, bus declarations, and route declarations).
+    /// Parse a complete program (synthdefs, bus declarations, route
+    /// declarations, and voice-mode declarations).
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         self.skip_newlines();
         let mut defs = Vec::new();
         let mut buses = Vec::new();
         let mut routes = Vec::new();
+        let mut voice_modes = Vec::new();
         while !self.at_eof() {
             if self.check(&Token::SynthDef) {
                 defs.push(self.parse_synthdef()?);
@@ -50,21 +53,24 @@ impl Parser {
                 buses.push(self.parse_bus_decl()?);
             } else if self.check(&Token::Route) {
                 routes.push(self.parse_route_decl()?);
+            } else if self.check_keyword_ident("voice") {
+                voice_modes.push(self.parse_voice_decl()?);
             } else {
                 return Err(self.error(&alloc::format!(
-                    "expected 'synthdef', 'bus', or 'route', got {}",
+                    "expected 'synthdef', 'bus', 'route', or 'voice', got {}",
                     self.current().token
                 )));
             }
             self.skip_newlines();
         }
-        if defs.is_empty() && buses.is_empty() && routes.is_empty() {
+        if defs.is_empty() && buses.is_empty() && routes.is_empty() && voice_modes.is_empty() {
             return Err(self.error("expected at least one declaration"));
         }
         Ok(Program {
             defs,
             buses,
             routes,
+            voice_modes,
         })
     }
 
@@ -160,6 +166,30 @@ impl Parser {
         }
 
         Ok(RouteDecl { chain })
+    }
+
+    /// Parse a mono/legato voice-mode declaration:
+    /// `voice NAME mono legato PITCH_PARAM PORTAMENTO_SECS`
+    ///
+    /// `voice` is deliberately not a reserved lexer keyword like `bus`/
+    /// `route` — an existing SynthDef could plausibly be named `voice`, and
+    /// unlike `bus`/`route` (which only ever appear as the leading token of
+    /// a declaration), reserving the word globally would break any such
+    /// program. No other top-level declaration can begin with a bare
+    /// identifier, so checking for the literal word `voice` only here, at
+    /// the start of a top-level statement, is unambiguous.
+    fn parse_voice_decl(&mut self) -> Result<VoiceModeDecl, ParseError> {
+        self.expect_keyword_ident("voice")?;
+        let synth_name = self.expect_ident()?;
+        self.expect_keyword_ident("mono")?;
+        self.expect_keyword_ident("legato")?;
+        let pitch_param = self.expect_ident()?;
+        let portamento_secs = self.expect_number()?;
+        Ok(VoiceModeDecl {
+            synth_name,
+            pitch_param,
+            portamento_secs,
+        })
     }
 
     /// Parse the body of a synthdef: delegates to parse_expr which handles
@@ -390,6 +420,29 @@ impl Parser {
                 self.current().token
             )))
         }
+    }
+
+    /// Whether the current token is exactly the identifier `word`, without
+    /// consuming it (see `expect_keyword_ident` for the consuming form).
+    fn check_keyword_ident(&self, word: &str) -> bool {
+        matches!(&self.current().token, Token::Ident(name) if name == word)
+    }
+
+    /// Expect the current token to be exactly the identifier `word` (a
+    /// literal keyword-like word in a fixed grammar position, such as `mono`
+    /// or `legato` in a voice-mode declaration, without reserving it as a
+    /// lexer keyword everywhere else in the language).
+    fn expect_keyword_ident(&mut self, word: &str) -> Result<(), ParseError> {
+        if let Token::Ident(name) = &self.current().token
+            && name == word
+        {
+            self.advance();
+            return Ok(());
+        }
+        Err(self.error(&alloc::format!(
+            "expected '{word}', got {}",
+            self.current().token
+        )))
     }
 
     fn expect_number(&mut self) -> Result<f32, ParseError> {
