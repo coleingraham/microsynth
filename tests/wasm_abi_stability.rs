@@ -59,6 +59,7 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_voice_param_glide",
         "ms_legato_note_on",
         "ms_legato_note_off",
+        "ms_legato_slot_for",
         "ms_schedule_musical_glides",
     ];
     for name in new_names {

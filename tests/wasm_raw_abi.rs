@@ -345,6 +345,128 @@ fn test_ms_init_resets_legato_bookkeeping() {
     }
 }
 
+#[test]
+fn test_ms_legato_note_on_rewires_bus_after_reap_and_respawn() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+
+        // "lead": will be brought to a full release, reaped via
+        // ms_free_done, and then respawned by a second note_on.
+        let (lead_nptr, lead_nlen) = alloc_str("lead");
+        let (lead_sptr, lead_slen) = alloc_str(
+            "synthdef lead freq=440.0 gate=0.0 = sinOsc freq 0.0 * asr gate 0.005 0.02\n\n\
+             voice lead mono legato freq 0.02",
+        );
+        assert_eq!(
+            web::ms_register_def(lead_nptr, lead_nlen, lead_sptr, lead_slen),
+            0
+        );
+        free_str(lead_sptr, lead_slen);
+
+        let lead_voice_1 = web::ms_legato_note_on(lead_nptr, lead_nlen, 440.0);
+        assert!(lead_voice_1 > 0);
+
+        let (slot_ptr, slot_len) = alloc_str("lead");
+        let lead_slot_before = web::ms_legato_slot_for(slot_ptr, slot_len);
+        free_str(slot_ptr, slot_len);
+        assert!(
+            lead_slot_before >= 0,
+            "expected lead to be wired to a bus slot on its first note"
+        );
+
+        // A second, independent legato track, registered and wired to its
+        // own slot *before* lead's reap+respawn. Its gate is set then
+        // immediately cleared without an intervening render, so its ASR
+        // never observes a rendered "on" sample and stays silently Idle
+        // forever — it never makes a sound, but it did occupy a slot, which
+        // is exactly what makes "recompute the counting-down formula on
+        // respawn" (the bug) diverge from "reuse the stored slot" (the fix):
+        // recomputing after a second track has registered a slot would
+        // collide with that track's slot instead of returning to lead's own.
+        let (second_nptr, second_nlen) = alloc_str("second");
+        let (second_sptr, second_slen) = alloc_str(
+            "synthdef second freq=220.0 gate=0.0 = sinOsc freq 0.0 * asr gate 0.005 0.02\n\n\
+             voice second mono legato freq 0.02",
+        );
+        assert_eq!(
+            web::ms_register_def(second_nptr, second_nlen, second_sptr, second_slen),
+            0
+        );
+        free_str(second_sptr, second_slen);
+        let second_voice = web::ms_legato_note_on(second_nptr, second_nlen, 220.0);
+        assert!(second_voice > 0);
+        web::ms_legato_note_off(second_nptr, second_nlen);
+
+        let (slot_ptr2, slot_len2) = alloc_str("second");
+        let second_slot = web::ms_legato_slot_for(slot_ptr2, slot_len2);
+        free_str(slot_ptr2, slot_len2);
+        assert!(
+            second_slot >= 0 && second_slot != lead_slot_before,
+            "expected second to occupy a distinct slot from lead"
+        );
+
+        // Bring lead through attack, release, and full decay to Idle.
+        for _ in 0..10 {
+            render_block();
+        }
+        web::ms_legato_note_off(lead_nptr, lead_nlen);
+        for _ in 0..15 {
+            render_block();
+        }
+
+        let freed = web::ms_free_done();
+        assert!(
+            freed > 0,
+            "expected lead's fully-released envelope to be reaped"
+        );
+
+        // The respawn: this is the exact call the fix is about.
+        let lead_voice_2 = web::ms_legato_note_on(lead_nptr, lead_nlen, 660.0);
+        assert!(lead_voice_2 > 0);
+        assert_ne!(
+            lead_voice_2, lead_voice_1,
+            "a reap must produce a genuinely fresh voice id, not reuse the dead one"
+        );
+
+        let (slot_ptr3, slot_len3) = alloc_str("lead");
+        let lead_slot_after = web::ms_legato_slot_for(slot_ptr3, slot_len3);
+        free_str(slot_ptr3, slot_len3);
+        assert_eq!(
+            lead_slot_after, lead_slot_before,
+            "the respawned voice must reuse lead's original bus slot rather \
+             than recomputing one that could collide with second's"
+        );
+
+        let (slot_ptr4, slot_len4) = alloc_str("second");
+        let second_slot_after = web::ms_legato_slot_for(slot_ptr4, slot_len4);
+        free_str(slot_ptr4, slot_len4);
+        assert_eq!(
+            second_slot_after, second_slot,
+            "lead's respawn must not disturb second's slot"
+        );
+
+        // The decisive check: the respawned voice's audio must actually
+        // reach the bus output. A wiring-skip bug leaves this silent even
+        // though the voice exists and its envelope is genuinely running —
+        // second stays silent throughout (see above), so any energy here
+        // can only be lead's.
+        let mut trace = Vec::new();
+        for _ in 0..10 {
+            trace.extend_from_slice(&render_block());
+        }
+        let peak = trace.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+        assert!(
+            peak > 0.1,
+            "expected the respawned legato voice to be audible at the bus \
+             output after reap+respawn, got peak {peak}"
+        );
+
+        free_str(lead_nptr, lead_nlen);
+        free_str(second_nptr, second_nlen);
+    }
+}
+
 // -- The legato tie portamento's shape/space --
 //
 // `LegatoVoice`'s tie branch used to glide with `GlideShape::default()` /
