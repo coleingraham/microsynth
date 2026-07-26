@@ -125,6 +125,61 @@ fn test_allocator_newest_policy_steals_lifo() {
 }
 
 #[test]
+fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
+    // A steal and the bus-slot check are two separate decisions: the steal
+    // can succeed (a voice really is freed) even though the bus spawn that
+    // triggered it still fails for an unrelated reason (no free slot). A
+    // caller must not read a `None` return as "nothing happened".
+    let registry = builtin_registry();
+    let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
+
+    let mut engine = make_engine(64);
+    // A bus's input-slot count is a fixed 64 regardless of the channel count
+    // passed to `Bus::new` — fill every slot with voices the allocator never
+    // sees, so there is truly no room left.
+    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(2)));
+    engine.graph_mut().set_sink(bus);
+    let bus_voices: Vec<_> = (0..64)
+        .map(|_| engine.spawn_voice_on_bus(&defs[0], bus).unwrap())
+        .collect();
+    engine.prepare();
+
+    // A managed, off-bus voice fills the budget; this is the steal victim.
+    engine.set_voice_allocator(VoiceAllocator::new(1, StealPolicy::Oldest));
+    let victim = engine.spawn_voice_managed(&defs[0]).unwrap();
+
+    // Budget is full, so this must steal `victim` — but the bus still has no
+    // free slot (all 64 are `bus_voices`, untouched by the steal), so the
+    // spawn itself fails.
+    let result = engine.spawn_voice_on_bus_managed(&defs[0], bus);
+
+    assert!(
+        result.is_none(),
+        "the bus has no free slot, so this must fail"
+    );
+    assert!(
+        engine.voice_synth(victim).is_none(),
+        "the steal must have already freed the victim, even though the spawn failed"
+    );
+    assert_eq!(
+        engine.voice_allocator().unwrap().len(),
+        0,
+        "the allocator's bookkeeping should reflect the freed victim"
+    );
+    for bus_voice in &bus_voices {
+        assert!(
+            engine.voice_synth(*bus_voice).is_some(),
+            "the unrelated bus occupants must be untouched"
+        );
+    }
+    assert_eq!(
+        engine.synths().len(),
+        64,
+        "only the original bus voices should remain"
+    );
+}
+
+#[test]
 fn test_direct_free_voice_updates_allocator_bookkeeping() {
     let registry = builtin_registry();
     let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
@@ -304,6 +359,75 @@ fn test_legato_gap_retriggers_same_voice() {
         engine.synths().len(),
         1,
         "only ever one synth for the whole mono track"
+    );
+}
+
+#[test]
+fn test_legato_respawns_after_release_and_reap() {
+    // A full release can end with the voice being reaped by
+    // `Engine::free_done_synths` (e.g. a host polling for finished envelopes)
+    // before the next note arrives. `held` must not go on pointing at a voice
+    // that no longer exists: the next `note_on` has to notice and start a
+    // fresh one, not silently no-op while claiming success.
+    let def = mono_def();
+    let mut engine = make_engine(64);
+    let mut legato = LegatoVoice::new("freq", 0.0);
+
+    let voice1 = legato.note_on(&mut engine, &def, 440.0);
+    let env1 = engine.voice_synth(voice1).unwrap().output_node();
+    engine.graph_mut().set_sink(env1);
+    engine.prepare();
+
+    let mut trace1 = Vec::new();
+    for _ in 0..15 {
+        engine.render();
+        if let Some(buf) = engine.graph().node_output(env1) {
+            trace1.extend_from_slice(buf.channel(0).samples());
+        }
+    }
+    assert_eq!(count_attacks(&trace1), 1);
+
+    legato.note_off(&mut engine);
+    // 0.02s release is well under 40 blocks at 64 samples: render past it so
+    // the envelope actually reports done.
+    for _ in 0..40 {
+        engine.render();
+        if let Some(buf) = engine.graph().node_output(env1) {
+            trace1.extend_from_slice(buf.channel(0).samples());
+        }
+    }
+
+    let removed = engine.free_done_synths();
+    assert!(removed > 0, "expected the released voice to be reaped");
+    assert!(
+        engine.voice_synth(voice1).is_none(),
+        "sanity check: the reap should have actually removed the voice"
+    );
+
+    // The next note_on must produce a genuinely live, sounding voice — not
+    // silently return the id of a voice that's already gone.
+    let voice2 = legato.note_on(&mut engine, &def, 660.0);
+    assert!(
+        engine.voice_synth(voice2).is_some(),
+        "note_on after the held voice was reaped must return a live voice, \
+         not the stale id of the one that was just freed"
+    );
+
+    let env2 = engine.voice_synth(voice2).unwrap().output_node();
+    engine.graph_mut().set_sink(env2);
+    engine.prepare();
+
+    let mut trace2 = Vec::new();
+    for _ in 0..15 {
+        engine.render();
+        if let Some(buf) = engine.graph().node_output(env2) {
+            trace2.extend_from_slice(buf.channel(0).samples());
+        }
+    }
+    assert_eq!(
+        count_attacks(&trace2),
+        1,
+        "note_on after a reap must produce a fresh envelope attack, not silence"
     );
 }
 
