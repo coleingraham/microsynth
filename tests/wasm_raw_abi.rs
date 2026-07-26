@@ -346,6 +346,51 @@ fn test_ms_init_resets_legato_bookkeeping() {
 }
 
 #[test]
+fn test_ms_init_resets_bus_node() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("test");
+        let (sptr, slen) = alloc_str("synthdef test freq=440.0 = sinOsc freq 0.0");
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        // Re-init via the plain path — destroys the engine (and its graph)
+        // that BUS_NODE's NodeId pointed into. In `ms_init_with_bus`, the
+        // Bus is always the very first node added, so its NodeId's index is
+        // 0 — a stale BUS_NODE would look exactly like this after re-init.
+        web::ms_init(44100.0);
+
+        // Immediately after `ms_init`, the new engine's graph is empty, so
+        // a stale BUS_NODE would fail safe on its own (index 0 wouldn't
+        // exist yet) — that's *why* this is latent rather than an
+        // immediate crash, and a test stopping here wouldn't distinguish
+        // fixed from broken. `ms_compile` is the "later call [that]
+        // repopulates the graph" the doc comment warns about: it resets
+        // the engine yet again and compiles a synthdef whose first node
+        // (index 0, same as the old Bus) is a UGen with real input ports
+        // (`sinOsc`, not a zero-input `Param`/`Const`) — index 0 is now a
+        // live, unrelated node with slots a stale BUS_NODE could wire into.
+        let (dptr, dlen) = alloc_str("synthdef dummy = sinOsc 440.0 0.0");
+        assert_eq!(web::ms_compile(dptr, dlen), 0);
+        free_str(dptr, dlen);
+
+        // DEF_REGISTRY is untouched by ms_init (by design, see its doc
+        // comment), so "test" is still registered — but BUS_NODE must be
+        // cleared, or this wires the spawned voice into `dummy`'s sinOsc
+        // node (index 0, now valid) instead of failing.
+        let voice = web::ms_spawn_voice_named(nptr, nlen);
+        assert_eq!(
+            voice, 0,
+            "ms_init must clear BUS_NODE — got a voice wired into whatever \
+             now occupies the stale NodeId's index in the new graph"
+        );
+
+        free_str(nptr, nlen);
+    }
+}
+
+#[test]
 fn test_ms_legato_note_on_rewires_bus_after_reap_and_respawn() {
     let _guard = lock();
     unsafe {
@@ -464,6 +509,119 @@ fn test_ms_legato_note_on_rewires_bus_after_reap_and_respawn() {
 
         free_str(lead_nptr, lead_nlen);
         free_str(second_nptr, second_nlen);
+    }
+}
+
+/// The specific ordering that makes "reuse the stored slot" and "recompute
+/// the counting-down formula" diverge: track A's full note/release/reap/
+/// respawn cycle happens *before* track B's very first note. If A's
+/// respawn recomputed instead of reusing, it would land on the same slot
+/// value B's first-ever computation would independently derive right
+/// after (both read `slots.len()` as "1 other track registered") — a real
+/// bus-slot collision between two unrelated tracks, not just A losing its
+/// own slot. Each track's audibility is checked in isolation (A silenced
+/// again before B ever starts) so a collision would show up as either a
+/// wrong slot value or corrupted/missing audio, not just "some energy
+/// somewhere."
+#[test]
+fn test_ms_legato_note_on_reap_respawn_then_new_track_get_distinct_slots() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+
+        // -- Track A: full note / release / reap / respawn cycle --
+        let (a_nptr, a_nlen) = alloc_str("trackA");
+        let (a_sptr, a_slen) = alloc_str(
+            "synthdef trackA freq=440.0 gate=0.0 = sinOsc freq 0.0 * asr gate 0.005 0.02\n\n\
+             voice trackA mono legato freq 0.02",
+        );
+        assert_eq!(web::ms_register_def(a_nptr, a_nlen, a_sptr, a_slen), 0);
+        free_str(a_sptr, a_slen);
+
+        let a_voice_1 = web::ms_legato_note_on(a_nptr, a_nlen, 440.0);
+        assert!(a_voice_1 > 0);
+        let (slot_ptr, slot_len) = alloc_str("trackA");
+        let a_slot_before = web::ms_legato_slot_for(slot_ptr, slot_len);
+        free_str(slot_ptr, slot_len);
+        assert!(a_slot_before >= 0);
+
+        for _ in 0..10 {
+            render_block();
+        }
+        web::ms_legato_note_off(a_nptr, a_nlen);
+        for _ in 0..15 {
+            render_block();
+        }
+        assert!(web::ms_free_done() > 0, "expected trackA to be reaped");
+
+        let a_voice_2 = web::ms_legato_note_on(a_nptr, a_nlen, 660.0);
+        assert!(a_voice_2 > 0);
+        assert_ne!(
+            a_voice_2, a_voice_1,
+            "respawn must get a genuinely new voice id"
+        );
+
+        let (slot_ptr2, slot_len2) = alloc_str("trackA");
+        let a_slot_after = web::ms_legato_slot_for(slot_ptr2, slot_len2);
+        free_str(slot_ptr2, slot_len2);
+        assert_eq!(
+            a_slot_after, a_slot_before,
+            "trackA's respawn must reuse its original slot"
+        );
+
+        // Confirm A's respawn is audible in isolation (trackB doesn't exist
+        // yet, so any energy here can only be A's).
+        let mut trace_a = Vec::new();
+        for _ in 0..10 {
+            trace_a.extend_from_slice(&render_block());
+        }
+        let peak_a = trace_a.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+        assert!(
+            peak_a > 0.1,
+            "expected trackA's respawned voice to be audible, got peak {peak_a}"
+        );
+
+        // Silence A again before starting B, so B's audibility check below
+        // isn't confounded by A's still-sounding tone.
+        web::ms_legato_note_off(a_nptr, a_nlen);
+        for _ in 0..15 {
+            render_block();
+        }
+
+        // -- Track B: registered and given its first-ever note *after* A's
+        // full cycle above. This is the exact ordering where a recompute
+        // (instead of reuse) on A's respawn would have collided with B. --
+        let (b_nptr, b_nlen) = alloc_str("trackB");
+        let (b_sptr, b_slen) = alloc_str(
+            "synthdef trackB freq=330.0 gate=0.0 = sinOsc freq 0.0 * asr gate 0.005 0.02\n\n\
+             voice trackB mono legato freq 0.02",
+        );
+        assert_eq!(web::ms_register_def(b_nptr, b_nlen, b_sptr, b_slen), 0);
+        free_str(b_sptr, b_slen);
+
+        let b_voice = web::ms_legato_note_on(b_nptr, b_nlen, 330.0);
+        assert!(b_voice > 0);
+
+        let (slot_ptr3, slot_len3) = alloc_str("trackB");
+        let b_slot = web::ms_legato_slot_for(slot_ptr3, slot_len3);
+        free_str(slot_ptr3, slot_len3);
+        assert!(
+            b_slot >= 0 && b_slot != a_slot_after,
+            "trackB must get a slot distinct from trackA's (got trackA={a_slot_after}, trackB={b_slot})"
+        );
+
+        let mut trace_b = Vec::new();
+        for _ in 0..10 {
+            trace_b.extend_from_slice(&render_block());
+        }
+        let peak_b = trace_b.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+        assert!(
+            peak_b > 0.1,
+            "expected trackB's first note to be audible, got peak {peak_b}"
+        );
+
+        free_str(a_nptr, a_nlen);
+        free_str(b_nptr, b_nlen);
     }
 }
 

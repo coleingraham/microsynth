@@ -386,11 +386,20 @@ pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
 /// Initialize the engine with the given sample rate.
 /// Block size is fixed at 128 (WebAudio render quantum).
 ///
-/// Resets every piece of session state this file tracks — including the
-/// mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`) —
-/// the same way `ms_init_with_bus` does, so a re-init here can't leave a
-/// stale legato track whose held `VoiceId` happens to alias one of the new
-/// engine's freshly-issued sequential ids.
+/// Resets every piece of graph-dependent session state this file tracks —
+/// the mono/legato bookkeeping (`LEGATO_MODES`/`LEGATO_VOICES`/`LEGATO_SLOTS`)
+/// and `BUS_NODE` — the same way `ms_init_with_bus` does, so a re-init here
+/// can't leave either a stale legato track whose held `VoiceId` happens to
+/// alias one of the new engine's freshly-issued sequential ids, or a stale
+/// `BUS_NODE` pointing at a `NodeId` in the just-destroyed engine's graph
+/// (which `ms_spawn_voice_named` would otherwise feed to
+/// `Engine::spawn_voice_on_bus` — safe today only because the new, empty
+/// graph doesn't have that index yet; it becomes valid-and-wrong the moment
+/// a later call repopulates the graph past it).
+///
+/// `DEF_REGISTRY`/`DEFS` are deliberately left alone: they're graph-
+/// independent templates (compiled `SynthDef`s, not live node references),
+/// so a name registered before this call is still validly registered after.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
@@ -404,6 +413,7 @@ pub extern "C" fn ms_init(sample_rate: f32) {
     unsafe {
         *ENGINE.get_mut() = Some(Engine::new(config));
         *REGISTRY.get_mut() = Some(registry);
+        *BUS_NODE.get_mut() = None;
         *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
@@ -762,7 +772,15 @@ pub unsafe extern "C" fn ms_legato_note_on(
     // held yet") means a brand-new synth was just spawned into the graph
     // and needs wiring to the bus — this covers both the true first note
     // and a reap-then-respawn, since `Engine::spawn_voice` always hands out
-    // a fresh, never-before-used id.
+    // a fresh, never-before-used id *within one engine's lifetime*
+    // (`Scheduler::alloc_voice_id` is monotonic, never reused). That
+    // monotonicity is what makes this comparison sound — but the counter
+    // resets to 1 whenever `ms_init`/`ms_init_with_bus` replaces the engine,
+    // so this is only correct because both of them also clear
+    // `LEGATO_VOICES`. If a future edit trims that reset list, a track
+    // surviving a re-init could hold a `prev_voice` that collides with a
+    // fresh id in the *new* engine and this comparison would wrongly see
+    // "unchanged," silently skipping wiring again.
     if prev_voice != Some(voice_id)
         && let Some(bus_id) = unsafe { BUS_NODE.get_mut() }
         && let Some(slots) = unsafe { LEGATO_SLOTS.get_mut() }.as_mut()
