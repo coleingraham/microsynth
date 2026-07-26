@@ -185,6 +185,14 @@ pub fn classify_transition(prev_off: u64, next_on: u64) -> Transition {
 pub struct LegatoVoice {
     pitch_param: String,
     portamento_secs: f32,
+    /// Interpolation shape/space used for the tie-portamento glide (see
+    /// `note_on`'s tie branch). Defaults to `Linear`/`Pitch` — an
+    /// equal-ratio sweep, the musically conventional reading of "glide this
+    /// pitch parameter" (see `crate::curve::GlideSpace::Pitch`'s doc
+    /// comment). Override with `with_glide` for a different reading, e.g.
+    /// `GlideSpace::Raw` for a linear-in-units sweep instead.
+    portamento_shape: GlideShape,
+    portamento_space: GlideSpace,
     held: Option<VoiceId>,
     gate_open: bool,
 }
@@ -192,14 +200,27 @@ pub struct LegatoVoice {
 impl LegatoVoice {
     /// `pitch_param` is the name of the `SynthDef` parameter driven by note
     /// pitch (for example `"freq"`). `portamento_secs` is the glide time
-    /// used when tying two notes together.
+    /// used when tying two notes together, with the tie glide itself
+    /// defaulting to `GlideShape::Linear`/`GlideSpace::Pitch` (see
+    /// `with_glide` to configure a different shape/space).
     pub fn new(pitch_param: impl Into<String>, portamento_secs: f32) -> Self {
         LegatoVoice {
             pitch_param: pitch_param.into(),
             portamento_secs,
+            portamento_shape: GlideShape::Linear,
+            portamento_space: GlideSpace::Pitch,
             held: None,
             gate_open: false,
         }
+    }
+
+    /// Configure the interpolation shape/space used for the tie-portamento
+    /// glide (see `note_on`'s tie branch), overriding the `Linear`/`Pitch`
+    /// default.
+    pub fn with_glide(mut self, shape: GlideShape, space: GlideSpace) -> Self {
+        self.portamento_shape = shape;
+        self.portamento_space = space;
+        self
     }
 
     /// The voice held by this track, if any note has been started yet.
@@ -249,8 +270,8 @@ impl LegatoVoice {
                     &self.pitch_param,
                     pitch,
                     self.portamento_secs,
-                    GlideShape::default(),
-                    GlideSpace::default(),
+                    self.portamento_shape,
+                    self.portamento_space,
                 );
                 voice
             }

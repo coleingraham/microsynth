@@ -6,7 +6,9 @@
 //! program     = (synthdef | bus_decl | route_decl | voice_decl)*
 //! synthdef    = 'synthdef' IDENT param* '=' body
 //! param       = IDENT '=' NUMBER
-//! voice_decl  = 'voice' IDENT 'mono' 'legato' IDENT NUMBER
+//! voice_decl  = 'voice' IDENT 'mono' 'legato' IDENT NUMBER glide_shape? glide_space?
+//! glide_shape = 'hold' | 'linear' | 'sine' | 'exponential' NUMBER
+//! glide_space = 'raw' | 'pitch'
 //! body        = statement* expr
 //! statement   = 'let' IDENT '=' expr (NEWLINE | ';')
 //! expr        = add_expr
@@ -20,6 +22,7 @@
 //! Newlines separate `let` statements. Within expressions, newlines are ignored.
 //! The last expression in a body (not preceded by `let`) is the output.
 
+use crate::curve::{GlideShape, GlideSpace};
 use crate::dsl::ast::*;
 use crate::dsl::lexer::{Span, Spanned, Token};
 use alloc::boxed::Box;
@@ -169,7 +172,7 @@ impl Parser {
     }
 
     /// Parse a mono/legato voice-mode declaration:
-    /// `voice NAME mono legato PITCH_PARAM PORTAMENTO_SECS`
+    /// `voice NAME mono legato PITCH_PARAM PORTAMENTO_SECS [SHAPE] [SPACE]`
     ///
     /// `voice` is deliberately not a reserved lexer keyword like `bus`/
     /// `route` — an existing SynthDef could plausibly be named `voice`, and
@@ -185,11 +188,56 @@ impl Parser {
         self.expect_keyword_ident("legato")?;
         let pitch_param = self.expect_ident()?;
         let portamento_secs = self.expect_number()?;
+        let portamento_shape = self.parse_optional_glide_shape()?;
+        let portamento_space = self.parse_optional_glide_space()?;
         Ok(VoiceModeDecl {
             synth_name,
             pitch_param,
             portamento_secs,
+            portamento_shape,
+            portamento_space,
         })
+    }
+
+    /// Parse an optional trailing glide shape word (`hold`, `linear`,
+    /// `sine`, or `exponential TENSION`), defaulting to `Linear` if none of
+    /// these words is present (consuming nothing in that case).
+    fn parse_optional_glide_shape(&mut self) -> Result<GlideShape, ParseError> {
+        if self.check_keyword_ident("hold") {
+            self.advance();
+            return Ok(GlideShape::Hold);
+        }
+        if self.check_keyword_ident("sine") {
+            self.advance();
+            return Ok(GlideShape::Sine);
+        }
+        if self.check_keyword_ident("exponential") {
+            self.advance();
+            let tension = self.expect_signed_number()?;
+            return Ok(GlideShape::Exponential(tension));
+        }
+        // "linear" spelled out explicitly is a no-op — it's already the
+        // default this function returns when no shape word is present.
+        if self.check_keyword_ident("linear") {
+            self.advance();
+        }
+        Ok(GlideShape::Linear)
+    }
+
+    /// Parse an optional trailing glide space word (`raw` or `pitch`),
+    /// defaulting to `Pitch` if neither is present (consuming nothing in
+    /// that case) — see `VoiceModeDecl`'s doc comment for why.
+    fn parse_optional_glide_space(&mut self) -> Result<GlideSpace, ParseError> {
+        if self.check_keyword_ident("raw") {
+            self.advance();
+            return Ok(GlideSpace::Raw);
+        }
+        // "pitch" spelled out explicitly is a no-op — it's already the
+        // default this function returns when no space word is present.
+        if self.check_keyword_ident("pitch") {
+            self.advance();
+        }
+        Ok(GlideSpace::Pitch)
     }
 
     /// Parse the body of a synthdef: delegates to parse_expr which handles
@@ -455,6 +503,16 @@ impl Parser {
                 self.current().token
             )))
         }
+    }
+
+    /// Like `expect_number`, but also accepts a leading `-` (for a signed
+    /// tension value, e.g. `exponential -3.0`).
+    fn expect_signed_number(&mut self) -> Result<f32, ParseError> {
+        if self.check(&Token::Minus) {
+            self.advance();
+            return Ok(-self.expect_number()?);
+        }
+        self.expect_number()
     }
 
     fn skip_newlines(&mut self) {
