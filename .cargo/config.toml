@@ -1,0 +1,21 @@
+# If you just cloned this repository: build output is written OUTSIDE this
+# checkout, into a directory SIBLING to it (../microsynth-target relative to
+# the directory containing this file), not into the conventional in-repo
+# ./target. `cargo build` will create <parent-of-your-clone>/microsynth-target/
+# next to wherever you cloned this repo — that is expected, and safe to
+# delete any time (it holds nothing but rebuildable compiler output).
+#
+# Why: this repo is developed alongside sibling checkouts of the same code
+# (multiple git worktrees), and a relative target-dir lets every worktree
+# under one parent directory share a single build cache instead of each
+# paying a full rebuild. A relative path (rather than an absolute one or a
+# machine-specific env var) is what makes this safe to commit — see
+# https://doc.rust-lang.org/cargo/reference/config.html#buildtarget-dir.
+#
+# This only applies to a `cargo build`/`cargo run`/etc. started from a
+# working directory INSIDE this checkout — Cargo resolves config relative to
+# the current working directory, not the manifest path. Building via
+# `cargo build --manifest-path <this-repo>/Cargo.toml` from OUTSIDE the
+# checkout falls back to the ordinary in-repo ./target (still gitignored).
+[build]
+target-dir = "../microsynth-target"

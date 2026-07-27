@@ -21,7 +21,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-WASM_OUTPUT="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/microsynth.wasm"
+
+# Resolve the shared cargo target-dir (.cargo/config.toml) by asking cargo,
+# rather than assuming the conventional in-repo ./target. `cargo metadata`'s
+# config discovery is CWD-based, exactly like `cargo build`'s (a
+# --manifest-path alone does not pick it up from a working directory outside
+# the checkout) -- so this shells into PROJECT_ROOT before asking, and the
+# actual build calls below pass --target-dir explicitly rather than relying
+# on this script's own (possibly foreign) working directory to resolve the
+# same config on their own.
+TARGET_DIR="$(cd "$PROJECT_ROOT" && cargo metadata --manifest-path "$PROJECT_ROOT/Cargo.toml" \
+    --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+if [ -z "$TARGET_DIR" ]; then
+  echo "error: could not resolve the cargo target directory via 'cargo metadata'" >&2
+  exit 1
+fi
+WASM_OUTPUT="$TARGET_DIR/wasm32-unknown-unknown/release/microsynth.wasm"
 
 # Use rustup-managed cargo if available (handles cross-compilation targets).
 # Homebrew's cargo doesn't support rustup-installed targets.
@@ -45,6 +60,7 @@ echo ""
 echo "==> Building raw WASM for AudioWorklet (std, no wasm-bindgen)..."
 "$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
+    --target-dir "$TARGET_DIR" \
     --target wasm32-unknown-unknown \
     --release \
     --features std \
@@ -59,6 +75,7 @@ echo ""
 echo "==> Building wasm-bindgen module for main thread (web feature)..."
 "$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
+    --target-dir "$TARGET_DIR" \
     --target wasm32-unknown-unknown \
     --release \
     --features web \
