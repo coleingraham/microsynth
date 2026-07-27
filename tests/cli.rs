@@ -3,9 +3,13 @@
 use std::process::Command;
 
 fn cli_path() -> String {
-    // Use the debug binary path relative to the project root.
+    // Use the debug binary path relative to the project root. This is
+    // target-dir agnostic: current_exe() lands under whatever
+    // <target-dir>/debug/deps/ cargo actually used (the in-repo ./target by
+    // default, or the shared sibling dir set by .cargo/config.toml), and
+    // popping two path components reaches <target-dir>/debug/ either way.
     let mut path = std::env::current_exe().unwrap();
-    // tests are in target/debug/deps/, go up to target/debug/
+    // tests are in <target-dir>/debug/deps/, go up to <target-dir>/debug/
     path.pop();
     path.pop();
     path.push("microsynth-cli");

@@ -20,7 +20,15 @@ DUR=${1:-60}
 SR=44100
 N=${2:-5}
 
-RUST_SIZE="$ROOT/target/release/microsynth-cli"
+# Resolve the shared cargo target-dir (.cargo/config.toml) by asking cargo
+# rather than assuming the conventional in-repo ./target. The header's own
+# build command (`cd .. && cargo build ...`) runs with CWD inside ROOT, so
+# this asks with the identical CWD to stay consistent.
+TARGET_DIR=$(cd "$ROOT" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+RUST_SIZE="${TARGET_DIR:-$ROOT/target}/release/microsynth-cli"
+# target-speed keeps its old in-repo location: its build command passes an
+# explicit --target-dir target-speed, which always overrides config either way.
 RUST_SPEED="$ROOT/target-speed/release/microsynth-cli"
 HS=$(cabal list-bin microsynth-cli 2>/dev/null)
 
