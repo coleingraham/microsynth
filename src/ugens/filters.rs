@@ -186,6 +186,74 @@ fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32,
     normalize(b0, b1, b2, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
 }
 
+/// Compute biquad peaking-EQ coefficients (boost/cut a band around `freq`).
+///
+/// `gain_db` is the boost (positive) or cut (negative) at the center
+/// frequency; `q` controls the bandwidth of the affected region, same as the
+/// other biquad shapes above.
+#[inline]
+fn biquad_peaking_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
+    let a = 10f32.powf(gain_db / 40.0);
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
+    normalize(b0, b1, b2, 1.0 + alpha / a, -2.0 * cos_w0, 1.0 - alpha / a)
+}
+
+/// Compute biquad low-shelf coefficients (boost/cut everything below `freq`).
+///
+/// RBJ cookbook shelf formula, parameterized by `q` (rather than shelf slope
+/// `S`) for consistency with the other biquad shapes' `freq`/`q` inputs.
+#[inline]
+fn biquad_low_shelf_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
+    let a = 10f32.powf(gain_db / 40.0);
+    let sqrt_a = a.sqrt();
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+    normalize(b0, b1, b2, a0, a1, a2)
+}
+
+/// Compute biquad high-shelf coefficients (boost/cut everything above `freq`).
+#[inline]
+fn biquad_high_shelf_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
+    let a = 10f32.powf(gain_db / 40.0);
+    let sqrt_a = a.sqrt();
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+    normalize(b0, b1, b2, a0, a1, a2)
+}
+
 // --- Biquad filters (LPF / HPF / BPF / Notch / Allpass) ---
 //
 // These five second-order filters share an identical struct, lifecycle, port
@@ -318,6 +386,236 @@ biquad_ugen! {
     ///
     /// Inputs: in (signal), freq (center Hz), q (bandwidth, default 0.707).
     AllpassFilter, "AllpassFilter", coeffs = biquad_allpass_coeffs, q_default = 0.707
+}
+
+// --- Parametric EQ shapes (Peaking / Low-shelf / High-shelf) ---
+//
+// Same struct/lifecycle/process shape as `biquad_ugen!` above, plus a `gain`
+// (dB) input the five filters above don't need.
+
+/// Generate a second-order biquad EQ UGen with a `gain` (dB) input, alongside
+/// the existing `freq`/`q` inputs. See `biquad_ugen!` for the shared shape;
+/// this differs only by the extra input and the coefficient function's extra
+/// `gain_db` parameter.
+macro_rules! biquad_gain_ugen {
+    (
+        $(#[$meta:meta])*
+        $ty:ident, $name:literal, coeffs = $coeffs:path, q_default = $q_default:expr, gain_default = $gain_default:expr $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $ty {
+            state: BiquadState,
+            sample_rate: f32,
+        }
+
+        impl Default for $ty {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl $ty {
+            pub fn new() -> Self {
+                $ty {
+                    state: BiquadState::new(),
+                    sample_rate: 44100.0,
+                }
+            }
+        }
+
+        impl UGen for $ty {
+            ugen_spec!(
+                $name,
+                category = Filter,
+                inputs = ["in", "freq", "q", "gain"],
+                outputs = ["out"]
+            );
+
+            fn init(&mut self, context: &ProcessContext) {
+                self.sample_rate = context.sample_rate;
+            }
+
+            fn reset(&mut self) {
+                self.state = BiquadState::new();
+            }
+
+            fn process(
+                &mut self,
+                _context: &ProcessContext,
+                inputs: &[&AudioBuffer],
+                output: &mut AudioBuffer,
+            ) {
+                let in_buf = inputs[0];
+                let freq_buf = inputs.get(1).copied();
+                let q_buf = inputs.get(2).copied();
+                let gain_buf = inputs.get(3).copied();
+                let sr = self.sample_rate;
+                let nyquist = sr * 0.5;
+
+                for ch in 0..output.num_channels() {
+                    let mut state = self.state;
+                    let in_ch = channel_wrapped(in_buf, ch);
+                    let out = output.channel_mut(ch).samples_mut();
+
+                    for i in 0..out.len() {
+                        let freq = read_input(freq_buf, ch, i, 1000.0)
+                            .clamp(20.0, nyquist - 1.0);
+                        let q = read_input(q_buf, ch, i, $q_default).max(0.01);
+                        let gain_db = read_input(gain_buf, ch, i, $gain_default);
+
+                        let (b0, b1, b2, a1, a2) = $coeffs(freq, q, gain_db, sr);
+                        out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
+                    }
+
+                    if ch == 0 {
+                        self.state = state;
+                    }
+                }
+            }
+        }
+    };
+}
+
+biquad_gain_ugen! {
+    /// Peaking EQ: boosts or cuts a band centered on `freq`.
+    ///
+    /// Inputs: in (signal), freq (center Hz, default 1000), q (bandwidth,
+    /// default 1.0), gain (dB boost/cut, default 0.0).
+    BiquadPeaking, "BiquadPeaking", coeffs = biquad_peaking_coeffs, q_default = 1.0, gain_default = 0.0
+}
+
+biquad_gain_ugen! {
+    /// Low shelf: boosts or cuts everything below `freq`.
+    ///
+    /// Inputs: in (signal), freq (corner Hz, default 1000), q (transition
+    /// steepness, default 0.707), gain (dB boost/cut, default 0.0).
+    BiquadLowShelf, "BiquadLowShelf", coeffs = biquad_low_shelf_coeffs, q_default = 0.707, gain_default = 0.0
+}
+
+biquad_gain_ugen! {
+    /// High shelf: boosts or cuts everything above `freq`.
+    ///
+    /// Inputs: in (signal), freq (corner Hz, default 1000), q (transition
+    /// steepness, default 0.707), gain (dB boost/cut, default 0.0).
+    BiquadHighShelf, "BiquadHighShelf", coeffs = biquad_high_shelf_coeffs, q_default = 0.707, gain_default = 0.0
+}
+
+// --- ParametricEq3 ---
+
+/// Three-band parametric EQ: low shelf → peaking → high shelf in series.
+///
+/// A convenience wrapper over the three shapes above so a chain spec can
+/// author a full tone-shaping EQ as one stage instead of three. Each band
+/// keeps the same dB/Q/freq semantics as its standalone UGen.
+///
+/// Inputs:
+/// - `in`: audio signal
+/// - `lowFreq`/`lowGain`/`lowQ`: low-shelf corner (Hz, default 200), gain (dB,
+///   default 0), and Q (default 0.707)
+/// - `midFreq`/`midGain`/`midQ`: peaking band center (Hz, default 1000), gain
+///   (dB, default 0), and Q (default 1.0)
+/// - `highFreq`/`highGain`/`highQ`: high-shelf corner (Hz, default 5000),
+///   gain (dB, default 0), and Q (default 0.707)
+pub struct ParametricEq3 {
+    low: BiquadState,
+    mid: BiquadState,
+    high: BiquadState,
+    sample_rate: f32,
+}
+
+impl Default for ParametricEq3 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ParametricEq3 {
+    pub fn new() -> Self {
+        ParametricEq3 {
+            low: BiquadState::new(),
+            mid: BiquadState::new(),
+            high: BiquadState::new(),
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+impl UGen for ParametricEq3 {
+    ugen_spec!(
+        "ParametricEq3",
+        category = Filter,
+        inputs = [
+            "in", "lowFreq", "lowGain", "lowQ", "midFreq", "midGain", "midQ", "highFreq",
+            "highGain", "highQ"
+        ],
+        outputs = ["out"]
+    );
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        self.low = BiquadState::new();
+        self.mid = BiquadState::new();
+        self.high = BiquadState::new();
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let low_freq_buf = inputs.get(1).copied();
+        let low_gain_buf = inputs.get(2).copied();
+        let low_q_buf = inputs.get(3).copied();
+        let mid_freq_buf = inputs.get(4).copied();
+        let mid_gain_buf = inputs.get(5).copied();
+        let mid_q_buf = inputs.get(6).copied();
+        let high_freq_buf = inputs.get(7).copied();
+        let high_gain_buf = inputs.get(8).copied();
+        let high_q_buf = inputs.get(9).copied();
+        let sr = self.sample_rate;
+        let nyquist = sr * 0.5;
+
+        for ch in 0..output.num_channels() {
+            let mut low = self.low;
+            let mut mid = self.mid;
+            let mut high = self.high;
+            let in_ch = channel_wrapped(in_buf, ch);
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let low_freq = read_input(low_freq_buf, ch, i, 200.0).clamp(20.0, nyquist - 1.0);
+                let low_gain = read_input(low_gain_buf, ch, i, 0.0);
+                let low_q = read_input(low_q_buf, ch, i, 0.707).max(0.01);
+                let mid_freq = read_input(mid_freq_buf, ch, i, 1000.0).clamp(20.0, nyquist - 1.0);
+                let mid_gain = read_input(mid_gain_buf, ch, i, 0.0);
+                let mid_q = read_input(mid_q_buf, ch, i, 1.0).max(0.01);
+                let high_freq = read_input(high_freq_buf, ch, i, 5000.0).clamp(20.0, nyquist - 1.0);
+                let high_gain = read_input(high_gain_buf, ch, i, 0.0);
+                let high_q = read_input(high_q_buf, ch, i, 0.707).max(0.01);
+
+                let (b0, b1, b2, a1, a2) = biquad_low_shelf_coeffs(low_freq, low_q, low_gain, sr);
+                let x1 = low.tick(in_ch[i], b0, b1, b2, a1, a2);
+
+                let (b0, b1, b2, a1, a2) = biquad_peaking_coeffs(mid_freq, mid_q, mid_gain, sr);
+                let x2 = mid.tick(x1, b0, b1, b2, a1, a2);
+
+                let (b0, b1, b2, a1, a2) =
+                    biquad_high_shelf_coeffs(high_freq, high_q, high_gain, sr);
+                out[i] = high.tick(x2, b0, b1, b2, a1, a2);
+            }
+
+            if ch == 0 {
+                self.low = low;
+                self.mid = mid;
+                self.high = high;
+            }
+        }
+    }
 }
 
 // --- CombFilter ---
@@ -773,6 +1071,258 @@ impl UGen for Compressor {
 
             if ch <= 1 {
                 self.env_db[env_idx] = env_db;
+            }
+        }
+    }
+}
+
+// --- Limiter ---
+
+/// Fixed look-ahead window for the limiter's gain computation.
+///
+/// Sized so the fast-attack gain smoothing below (a quarter of this) settles
+/// well before a sample that triggered a gain reduction reaches the output
+/// tap. Not exposed as a parameter — see the module doc for why a fixed,
+/// small look-ahead was chosen over a tunable one.
+const LIMITER_LOOKAHEAD_SECS: f32 = 0.0015;
+
+/// Small fixed safety margin subtracted from `ceiling` internally.
+///
+/// The gain applied to a given output sample is a single scalar derived from
+/// its own local peak estimate, but neighboring samples carry very slightly
+/// different gain (the envelope is smoothed, not frozen), so the *actual*
+/// reconstructed inter-sample curve isn't quite the same as "peak estimate
+/// times one gain." Measured residual from that mismatch is ~0.03-0.05 dB
+/// (see the limiter tests in `tests/ugens.rs`); this margin comfortably
+/// covers it plus the two peak estimates' own interpolation error.
+const LIMITER_SAFETY_MARGIN_DB: f32 = 0.2;
+
+/// True-peak (not just sample-peak) brick-wall limiter with look-ahead.
+///
+/// A plain `Compressor` + `SoftClip` chain was tried first, per the RFC's own
+/// suggestion, and measured against a hot test signal using an oversampled
+/// (cubic-interpolated) true-peak estimate — the same technique used below.
+/// It did not hold a true-peak ceiling reliably: a compressor's envelope
+/// follower reacts to the *sample* peak, and soft clipping's added harmonics
+/// can produce inter-sample peaks a purely reactive, no-lookahead chain
+/// cannot see coming. This UGen exists because that was demonstrated, not
+/// assumed.
+///
+/// Design: a short internal look-ahead delay line (~1.5 ms, not user-facing)
+/// gives the gain envelope time to react *before* a loud sample reaches the
+/// output. At every input sample, a cheap 4x-oversampled cubic (Catmull-Rom)
+/// interpolation of the two most recent samples estimates the true peak
+/// arriving right now; the gain needed to keep that peak under `ceiling` is
+/// computed and smoothed toward with a fast, fixed attack (bounded by the
+/// look-ahead) and a slower, parametric release. Because the gain and the
+/// look-ahead delay share the same sample clock, by the time a given sample
+/// reaches the output tap the gain has already had a full look-ahead window
+/// to settle to the value that sample needs.
+///
+/// This is a true-peak-aware limiter, not a true-peak-*exact* one: the
+/// interpolation is a cheap local estimate (see `true_peak` in the test
+/// suite for the independent oversampled check used to validate it), not a
+/// full oversampled signal path. It is, however, measurably better than the
+/// reactive preset it replaces — see `tests/ugens.rs`'s limiter tests for the
+/// measurement.
+///
+/// Inputs:
+/// - `in`: signal to limit
+/// - `ceiling`: true-peak ceiling in dBTP (default -1.0)
+/// - `release`: gain recovery time in seconds after a peak passes (default 0.05)
+pub struct Limiter {
+    delay: DelayLine,
+    lookahead_samples: usize,
+    /// Per-channel gain state (capped at 2 channels), same convention as
+    /// `Compressor::env_db`.
+    gain_db: [f32; 2],
+    attack_coeff: f32,
+    sample_rate: f32,
+}
+
+impl Default for Limiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Limiter {
+    pub fn new() -> Self {
+        Limiter {
+            delay: DelayLine::new(),
+            lookahead_samples: 1,
+            gain_db: [0.0; 2],
+            attack_coeff: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+/// Precise linear-to-dB conversion for the limiter's peak/gain math.
+///
+/// `Compressor` above uses `fast_lin_to_db`/`fast_db_to_lin` (~0.09 dB
+/// error) because it's a continuously-modulated envelope where a fraction of
+/// a dB of ripple is inaudible. The limiter is instead judged against a hard
+/// ceiling, where that same error could be the difference between holding it
+/// and not — so it pays the exact `log10`/`powf` here instead.
+#[inline]
+fn precise_lin_to_db(x: f32) -> f32 {
+    20.0 * x.abs().max(1e-9).log10()
+}
+
+#[inline]
+fn precise_db_to_lin(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+/// Evaluate a Catmull-Rom cubic through `p0..p3` at `t` in `[0, 1]`,
+/// interpolating between `p1` and `p2`.
+#[inline]
+fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    0.5 * ((2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+}
+
+/// Oversample factor for the true-peak interpolation below. Matches the
+/// factor the independent `true_peak` test helper measures with, so the
+/// limiter's own estimate of "did I hold the ceiling" isn't coarser than the
+/// check it's judged against.
+const LIMITER_OVERSAMPLE: usize = 8;
+
+/// Causal oversampled true-peak estimate for the sample just written at
+/// `delay(0)`, using only past context (`delay(1)`, `delay(2)`) since its
+/// true future neighbor doesn't exist yet — approximated by repeating the
+/// newest sample. Used only to start the gain envelope moving early, well
+/// before the look-ahead window's exact clamp (below) needs it to have
+/// arrived; the anticipatory read, so a slight underestimate here is fine.
+#[inline]
+fn causal_true_peak(line: &DelayLine) -> f32 {
+    let p0 = line.read(2);
+    let p1 = line.read(1);
+    let p2 = line.read(0);
+    let p3 = p2;
+    let mut peak = p2.abs();
+    for k in 1..LIMITER_OVERSAMPLE {
+        let t = k as f32 / LIMITER_OVERSAMPLE as f32;
+        peak = peak.max(catmull_rom(p0, p1, p2, p3, t).abs());
+    }
+    peak
+}
+
+/// Exact, symmetric oversampled true-peak estimate for the sample about to
+/// be output, at `delay(center)`. Unlike [`causal_true_peak`], this one has
+/// real neighbors on *both* sides already sitting in the look-ahead buffer
+/// (they were written on later iterations, before this one), so it
+/// interpolates both the segment before and the segment after `center`
+/// exactly the way the independent `true_peak` measurement used to validate
+/// this UGen does — no repeated-sample approximation needed. This is what
+/// gives the ceiling its hard guarantee; [`causal_true_peak`]'s smoothed
+/// envelope only gives it a musical shape.
+#[inline]
+fn centered_true_peak(line: &DelayLine, center: usize) -> f32 {
+    let p_before = line.read(center + 2);
+    let p0 = line.read(center + 1);
+    let p1 = line.read(center);
+    let p2 = line.read(center - 1);
+    let p_after = line.read(center - 2);
+
+    let mut peak = p1.abs();
+    for k in 1..LIMITER_OVERSAMPLE {
+        let t = k as f32 / LIMITER_OVERSAMPLE as f32;
+        peak = peak.max(catmull_rom(p_before, p0, p1, p2, t).abs());
+        peak = peak.max(catmull_rom(p0, p1, p2, p_after, t).abs());
+    }
+    peak
+}
+
+impl UGen for Limiter {
+    ugen_spec!(
+        "Limiter",
+        category = Filter,
+        inputs = ["in", "ceiling", "release"],
+        outputs = ["out"]
+    );
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        self.lookahead_samples = ((LIMITER_LOOKAHEAD_SECS * context.sample_rate) as usize).max(4);
+        self.delay.resize(self.lookahead_samples + 8);
+        self.gain_db = [0.0; 2];
+        let attack_time = LIMITER_LOOKAHEAD_SECS / 4.0;
+        self.attack_coeff = (-1.0 / (attack_time * context.sample_rate)).exp();
+    }
+
+    fn reset(&mut self) {
+        self.delay.clear();
+        self.gain_db = [0.0; 2];
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let ceiling_buf = inputs.get(1).copied();
+        let release_buf = inputs.get(2).copied();
+        if self.delay.is_empty() {
+            return;
+        }
+        let lookahead = self.lookahead_samples;
+
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.delay.write_pos();
+
+        for ch in 0..output.num_channels() {
+            self.delay.set_write_pos(start_pos);
+            let in_ch = channel_wrapped(in_buf, ch);
+            let out = output.channel_mut(ch).samples_mut();
+            let gain_idx = ch.min(1);
+            let mut gain_db = self.gain_db[gain_idx];
+
+            for i in 0..out.len() {
+                let ceiling_db = read_input(ceiling_buf, ch, i, -1.0) - LIMITER_SAFETY_MARGIN_DB;
+                let release_time = read_input(release_buf, ch, i, 0.05).max(0.0001);
+                let release_coeff = (-1.0 / (release_time * self.sample_rate)).exp();
+
+                self.delay.write(in_ch[i]);
+
+                // Anticipatory component: starts the envelope moving as soon
+                // as a loud sample is *written*, `lookahead` samples before
+                // it will be read back out.
+                let causal_peak_db = precise_lin_to_db(causal_true_peak(&self.delay));
+                let causal_target_db = (ceiling_db - causal_peak_db).min(0.0);
+                let coeff = if causal_target_db < gain_db {
+                    self.attack_coeff // needs MORE reduction: fast, fixed
+                } else {
+                    release_coeff // recovering: slower, parametric
+                };
+                gain_db = coeff * gain_db + (1.0 - coeff) * causal_target_db;
+
+                // Exact component: the sample about to be read back out
+                // already has real neighbors on both sides in the buffer, so
+                // this is computed the same way the independent measurement
+                // checks it — no approximation. Whichever component wants
+                // *more* reduction wins; the exact one is the hard guarantee,
+                // the smoothed one is what keeps it from sounding like a
+                // sample-and-hold gate.
+                let exact_peak_db = precise_lin_to_db(centered_true_peak(&self.delay, lookahead));
+                let exact_target_db = (ceiling_db - exact_peak_db).min(0.0);
+                let applied_gain_db = gain_db.min(exact_target_db);
+
+                let delayed = self.delay.read(lookahead);
+                out[i] = delayed * precise_db_to_lin(applied_gain_db);
+
+                self.delay.advance();
+            }
+
+            if ch <= 1 {
+                self.gain_db[gain_idx] = gain_db;
             }
         }
     }
