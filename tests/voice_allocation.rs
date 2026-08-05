@@ -137,7 +137,9 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     // A bus's input-slot count is a fixed 64 regardless of the channel count
     // passed to `Bus::new` — fill every slot with voices the allocator never
     // sees, so there is truly no room left.
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(2)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
     let bus_voices: Vec<_> = (0..64)
         .map(|_| engine.spawn_voice_on_bus(&defs[0], bus).unwrap())
@@ -214,7 +216,9 @@ fn test_free_done_synths_updates_allocator_bookkeeping() {
     let defs = dsl::compile("synthdef test = perc 0.001 0.005", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(4)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
     engine.set_voice_allocator(VoiceAllocator::new(4, StealPolicy::Reject));
 
@@ -531,7 +535,9 @@ fn test_polyphonic_material_unaffected_by_unused_allocator_field() {
     .unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let v1 = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
