@@ -36,17 +36,30 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
+mod container;
 #[cfg(feature = "std")]
 mod render;
 mod serialize;
 
+pub use container::{IrBus, IrRoute, IrRoutingContainer, IrRoutingError, MAIN_BUS};
 #[cfg(feature = "std")]
-pub use render::{RenderSpec, render_ir};
+pub use render::{RenderSpec, build_routed_engine, render_ir};
 pub use serialize::IrCodecError;
 
 /// Current on-disk / on-wire format version. Bump on any semantic change to the
 /// byte layout or node model.
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// **Version 2** (bumped from 1) added [`IrRoutingContainer`] — buses, routes,
+/// and effect SynthDefs as one serializable unit, the wire-expressible form
+/// of [`crate::routing::RoutingGraph`]. `IrSynthDef`'s own byte layout is
+/// unchanged by this bump: the version marks the IR crate's on-wire
+/// vocabulary as a whole gaining a second artifact type, not a change to the
+/// single-def format. Back-compat holds because `from_bytes`/`from_json`
+/// reject only a stored version *greater than* the reader's `FORMAT_VERSION`
+/// — pre-existing version-1 single-def files decode unchanged. See the
+/// `ir::container` module's doc comment (source: `src/ir/container.rs`) for
+/// the container's format and the `busId` identity it defines.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// The structural class of a SynthDef — a discriminant carried in the wire
 /// format from day one so adding classes later is not a breaking bump. Only
