@@ -372,6 +372,58 @@ pub unsafe extern "C" fn ms_spawn_voice_named(name_ptr: *const u8, name_len: usi
     }
 }
 
+/// Spawn a voice from a named SynthDef onto the bus at the given stereo pan
+/// position. Same lookup/bus-slot behavior as [`ms_spawn_voice_named`]; the
+/// only difference is the pan placement (see [`ms_spawn_voice_panned`]'s doc
+/// for the pan value's range and the center-pan byte-identity guarantee).
+///
+/// This is the entry point a per-role/per-instrument render configuration
+/// calls: same named-SynthDef lookup as `ms_spawn_voice_named`, plus a pan
+/// value read from that configuration.
+///
+/// Returns voice_id > 0, or 0 on failure.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_spawn_voice_named_panned(
+    name_ptr: *const u8,
+    name_len: usize,
+    pan: f32,
+) -> u64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let def = match def_registry.get(name) {
+        Some(d) => d,
+        None => return 0,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 0,
+    };
+
+    match engine.spawn_voice_on_bus_panned(def, bus_id, pan) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
+}
+
 /// Allocate `size` bytes in WASM linear memory. Returns a pointer.
 /// Used by JS to write string data (DSL source) into WASM memory.
 #[unsafe(no_mangle)]

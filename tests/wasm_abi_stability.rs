@@ -62,6 +62,7 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_legato_slot_for",
         "ms_schedule_musical_glides",
         "ms_spawn_voice_panned",
+        "ms_spawn_voice_named_panned",
     ];
     for name in new_names {
         assert!(

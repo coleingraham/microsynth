@@ -1,7 +1,8 @@
 //! Integration tests for stereo pan placement at the instrument-bus stage:
 //! `Engine::spawn_voice_on_bus_panned` via the raw C-ABI `ms_spawn_voice_panned`
-//! (see `src/web.rs`). Mirrors `tests/wasm_raw_abi.rs`'s pattern of driving the
-//! `#[no_mangle] extern "C"` exports directly.
+//! and `ms_spawn_voice_named_panned` (see `src/web.rs`). Mirrors
+//! `tests/wasm_raw_abi.rs`'s pattern of driving the `#[no_mangle] extern "C"`
+//! exports directly.
 
 use microsynth::web;
 use std::sync::Mutex;
@@ -192,5 +193,56 @@ fn test_out_of_range_pan_is_clamped_not_rejected() {
             left_peak < 1e-5,
             "expected 5.0 to clamp to hard right, silencing the left channel"
         );
+    }
+}
+
+#[test]
+fn test_ms_spawn_voice_named_panned_pans_through_the_named_registry_path() {
+    // The production render path registers SynthDefs by name (`ms_init_with_bus`
+    // + `ms_register_def`) and spawns them by name, not through the simpler
+    // `ms_compile_def`/`ms_spawn_voice` pair the tests above use. This exercises
+    // `ms_spawn_voice_named_panned` through that same named-registry path, since
+    // it's the entry point a per-role render configuration would actually call.
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("lead");
+        let (sptr, slen) = alloc_str("synthdef lead freq=440.0 = sinOsc freq 0.0");
+        assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
+        free_str(sptr, slen);
+
+        let voice = web::ms_spawn_voice_named_panned(nptr, nlen, -0.6);
+        free_str(nptr, nlen);
+        assert!(voice > 0, "expected a voice id");
+
+        let mut left_energy = 0.0f32;
+        let mut right_energy = 0.0f32;
+        for _ in 0..10 {
+            let (l, r) = render_stereo();
+            for i in 0..128 {
+                left_energy += l[i].abs();
+                right_energy += r[i].abs();
+            }
+        }
+        assert!(
+            left_energy > right_energy,
+            "pan=-0.6 (toward left) should favor the left channel: left={left_energy}, right={right_energy}"
+        );
+        assert!(
+            right_energy > 0.0,
+            "expected some signal to still reach the right channel at a non-extreme pan"
+        );
+    }
+}
+
+#[test]
+fn test_ms_spawn_voice_named_panned_unregistered_name_returns_zero() {
+    let _guard = lock();
+    unsafe {
+        web::ms_init_with_bus(44100.0);
+        let (nptr, nlen) = alloc_str("nonexistent");
+        let voice = web::ms_spawn_voice_named_panned(nptr, nlen, 0.5);
+        assert_eq!(voice, 0, "an unregistered name must not produce a voice");
+        free_str(nptr, nlen);
     }
 }
