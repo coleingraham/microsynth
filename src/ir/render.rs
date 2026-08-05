@@ -4,10 +4,11 @@
 //! with envelope-tail detection so one-shots and sustaining voices both render
 //! cleanly.
 
-use super::IrSynthDef;
+use super::{IrRoutingContainer, IrRoutingError, IrSynthDef};
 use crate::dsl::compiler::UGenRegistry;
 use crate::engine::{Engine, EngineConfig};
 use crate::ir::IrError;
+use crate::routing::RoutingGraph;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -124,4 +125,24 @@ pub fn render_ir(
         ch.resize(target_samples, 0.0);
     }
     Ok(channels)
+}
+
+/// The offline-path counterpart of [`IrRoutingContainer::to_routing_graph`]:
+/// construct an [`Engine`] and wire `container`'s topology into it via
+/// [`Engine::build_routing`], so an offline caller (this module, or
+/// `microsynth-cli`) can instantiate a routed topology from IR bytes alone,
+/// the same way the wasm ABI's routing-aware exports do (`web.rs`).
+///
+/// Returns the engine (ready for `spawn_voice_on_routing_bus` and
+/// `prepare`/`render_offline`) and the live [`RoutingGraph`] (needed to
+/// resolve bus names to `BusId`s for spawning voices).
+pub fn build_routed_engine(
+    container: &IrRoutingContainer,
+    reg: &UGenRegistry,
+    config: EngineConfig,
+) -> Result<(Engine, RoutingGraph), IrRoutingError> {
+    let (mut routing, effect_defs) = container.to_routing_graph(reg)?;
+    let mut engine = Engine::new(config);
+    engine.build_routing(&mut routing, &effect_defs);
+    Ok((engine, routing))
 }
