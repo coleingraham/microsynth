@@ -12,6 +12,39 @@ use alloc::vec::Vec;
 /// Maximum number of simultaneous voice inputs on a single bus.
 const MAX_BUS_INPUTS: usize = 64;
 
+/// A bus's declared *output* channel count, expressed as intent rather than
+/// a bare `usize`.
+///
+/// This exists because a bare integer here is ambiguous in exactly the way
+/// that broke production output: `Bus::new(64)` reads as "room for 64
+/// voices," but the input-slot count is always [`MAX_BUS_INPUTS`] regardless
+/// of what's passed here — the argument is *only* the output channel count,
+/// and 64 output channels is not what anyone wanted. Naming the common cases
+/// and requiring `Custom` for anything else makes that confusion impossible
+/// to write by accident: a call site that wants a voice-capacity number has
+/// nowhere to put it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelCount {
+    /// Single output channel.
+    Mono,
+    /// Two output channels (left, right). The production default.
+    Stereo,
+    /// An explicit, non-standard channel count. Spelling this out (rather
+    /// than accepting a bare number) forces any call site that isn't
+    /// mono/stereo to say so, so it reads as a deliberate choice in review.
+    Custom(usize),
+}
+
+impl ChannelCount {
+    fn channels(self) -> usize {
+        match self {
+            ChannelCount::Mono => 1,
+            ChannelCount::Stereo => 2,
+            ChannelCount::Custom(n) => n.max(1),
+        }
+    }
+}
+
 /// A summing bus that mixes multiple inputs together.
 ///
 /// Has up to 64 input ports. Each input slot can receive a voice or effect output.
@@ -26,8 +59,10 @@ pub struct Bus {
 
 impl Bus {
     /// Create a bus with the given output channel count.
-    /// Input slot count defaults to 64 (internal detail).
-    pub fn new(channels: usize) -> Self {
+    /// Input slot count defaults to 64 (internal detail) regardless of the
+    /// output channel count requested here — see [`ChannelCount`]'s doc for
+    /// why the count is typed instead of a bare `usize`.
+    pub fn new(channels: ChannelCount) -> Self {
         let max_inputs = MAX_BUS_INPUTS;
         let mut specs = Vec::with_capacity(max_inputs);
         for _ in 0..max_inputs {
@@ -40,13 +75,13 @@ impl Bus {
         let input_specs: &'static [InputSpec] = Box::leak(specs.into_boxed_slice());
         Bus {
             input_specs,
-            channels: channels.max(1),
+            channels: channels.channels(),
         }
     }
 
     /// Create a default stereo bus.
     pub fn default_bus() -> Self {
-        Self::new(2)
+        Self::new(ChannelCount::Stereo)
     }
 
     /// Declared output channel count.

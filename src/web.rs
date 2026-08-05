@@ -181,8 +181,10 @@ pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
     };
     let mut engine = Engine::new(config);
 
-    // Create a bus node as the graph sink
-    let bus = crate::ugens::Bus::new(64);
+    // Create a stereo bus node as the graph sink. The input-slot count (voice
+    // capacity) is fixed at MAX_BUS_INPUTS regardless of this channel count —
+    // see `ugens::bus::ChannelCount`'s doc.
+    let bus = crate::ugens::Bus::new(crate::ugens::ChannelCount::Stereo);
     let bus_id = engine.graph_mut().add_node(Box::new(bus));
     engine.graph_mut().set_sink(bus_id);
     engine.prepare();
@@ -386,6 +388,58 @@ pub unsafe extern "C" fn ms_spawn_voice_named(name_ptr: *const u8, name_len: usi
     }
 }
 
+/// Spawn a voice from a named SynthDef onto the bus at the given stereo pan
+/// position. Same lookup/bus-slot behavior as [`ms_spawn_voice_named`]; the
+/// only difference is the pan placement (see [`ms_spawn_voice_panned`]'s doc
+/// for the pan value's range and the center-pan byte-identity guarantee).
+///
+/// This is the entry point a per-role/per-instrument render configuration
+/// calls: same named-SynthDef lookup as `ms_spawn_voice_named`, plus a pan
+/// value read from that configuration.
+///
+/// Returns voice_id > 0, or 0 on failure.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_spawn_voice_named_panned(
+    name_ptr: *const u8,
+    name_len: usize,
+    pan: f32,
+) -> u64 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let def = match def_registry.get(name) {
+        Some(d) => d,
+        None => return 0,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 0,
+    };
+
+    match engine.spawn_voice_on_bus_panned(def, bus_id, pan) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
+}
+
 /// Allocate `size` bytes in WASM linear memory. Returns a pointer.
 /// Used by JS to write string data (DSL source) into WASM memory.
 #[unsafe(no_mangle)]
@@ -573,8 +627,10 @@ pub unsafe extern "C" fn ms_compile_def(source_ptr: *const u8, source_len: usize
         block_size: 128,
     });
 
-    // Create a bus node as the graph sink
-    let bus = crate::ugens::Bus::new(32);
+    // Create a stereo bus node as the graph sink. The input-slot count (voice
+    // capacity) is fixed at MAX_BUS_INPUTS regardless of this channel count —
+    // see `ugens::bus::ChannelCount`'s doc.
+    let bus = crate::ugens::Bus::new(crate::ugens::ChannelCount::Stereo);
     let bus_id = engine.graph_mut().add_node(Box::new(bus));
     engine.graph_mut().set_sink(bus_id);
     engine.prepare();
@@ -609,6 +665,49 @@ pub extern "C" fn ms_spawn_voice() -> u64 {
     }
 
     match engine.spawn_voice_on_bus(&defs[0], bus_id) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
+}
+
+/// Spawn a voice from the first compiled SynthDef, connected to the bus at
+/// the given stereo pan position.
+///
+/// `pan` ranges -1.0 (left) to +1.0 (right); 0.0 is center. Out-of-range
+/// values are clamped by the underlying `Pan2` UGen. Passing `0.0` is
+/// equivalent to [`ms_spawn_voice`] — both take the same direct
+/// voice-to-bus connection, with no `Pan2` node inserted, so existing
+/// center-pan callers see byte-identical output whether they call this or
+/// `ms_spawn_voice`.
+///
+/// This is the config-driven entry point for per-role/per-instrument pan:
+/// callers select the pan value from their own render configuration (e.g.
+/// a per-role pan table) rather than this crate hardcoding any position.
+///
+/// Returns the voice ID (> 0), or 0 on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_spawn_voice_panned(pan: f32) -> u64 {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    let defs = match unsafe { DEFS.get_mut() }.as_ref() {
+        Some(d) => d,
+        None => return 0,
+    };
+    let bus_id = match unsafe { BUS_NODE.get_mut() } {
+        Some(id) => *id,
+        None => return 0,
+    };
+
+    if defs.is_empty() {
+        return 0;
+    }
+
+    match engine.spawn_voice_on_bus_panned(&defs[0], bus_id, pan) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0

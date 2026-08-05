@@ -386,7 +386,7 @@ fn test_schedule_note_aligned_pre_trigger() {
     ).unwrap();
 
     // Set up bus + voice
-    let bus = microsynth::ugens::Bus::new(4);
+    let bus = microsynth::ugens::Bus::new(microsynth::ugens::ChannelCount::Stereo);
     let bus_id = engine.graph_mut().add_node(alloc::boxed::Box::new(bus));
     engine.graph_mut().set_sink(bus_id);
     engine.prepare();

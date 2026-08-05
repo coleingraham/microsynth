@@ -67,6 +67,8 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_routing_add_effect",
         "ms_routing_build",
         "ms_spawn_voice_on_routing_bus_named",
+        "ms_spawn_voice_panned",
+        "ms_spawn_voice_named_panned",
     ];
     for name in new_names {
         assert!(
