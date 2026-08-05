@@ -374,3 +374,148 @@ impl UGen for Phaser {
         }
     }
 }
+
+// --- WowFlutter ---
+
+/// Tape/turntable speed-wobble macro: two summed LFOs modulating a delay
+/// line's read position, packaged as one named UGen so chain specs can refer
+/// to "wow and flutter" without re-deriving it from `Delay` + `Lfo` every
+/// time. There's no new DSP here — this is the same modulated-delay
+/// technique `Chorus`/`Flanger` already use, just with slower, wider
+/// (`wow`) and faster, narrower (`flutter`) modulation summed together and
+/// no feedback, matching how physical playback-speed variation actually
+/// behaves (a pure, non-resonant time wobble, not a comb filter).
+///
+/// Inputs:
+/// - `in`: audio signal
+/// - `wowRate`: slow speed-drift rate in Hz (default 0.7). Typical turntable
+///   wow is well under 2 Hz.
+/// - `wowDepth`: wow modulation depth in seconds (default 0.0020)
+/// - `flutterRate`: fast speed-flutter rate in Hz (default 8.0). Typical
+///   tape flutter sits in the 6-14 Hz range.
+/// - `flutterDepth`: flutter modulation depth in seconds (default 0.0006)
+/// - `mix`: dry/wet blend (default 1.0, fully wet — the wobble is meant to
+///   apply to the whole signal, not sit underneath a dry copy)
+pub struct WowFlutter {
+    line: DelayLine,
+    wow_phase: f32,
+    flutter_phase: f32,
+    sample_rate: f32,
+}
+
+impl Default for WowFlutter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WowFlutter {
+    pub fn new() -> Self {
+        WowFlutter {
+            line: DelayLine::new(),
+            wow_phase: 0.0,
+            flutter_phase: 0.0,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+/// Center delay, large enough that `wowDepth + flutterDepth` at their
+/// clamped maxima can't push the modulated delay negative.
+const WOW_FLUTTER_CENTER_DELAY: f32 = 0.010;
+/// Maximum delay buffer in seconds (center + max depths + margin).
+const WOW_FLUTTER_MAX_DELAY: f32 = 0.030;
+
+impl UGen for WowFlutter {
+    ugen_spec!(
+        "WowFlutter",
+        category = Effect,
+        inputs = [
+            "in",
+            "wowRate",
+            "wowDepth",
+            "flutterRate",
+            "flutterDepth",
+            "mix"
+        ],
+        outputs = ["out"]
+    );
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+        let max_samples = (WOW_FLUTTER_MAX_DELAY * context.sample_rate) as usize + 2;
+        self.line.resize(max_samples);
+        self.wow_phase = 0.0;
+        self.flutter_phase = 0.0;
+    }
+
+    fn reset(&mut self) {
+        self.line.clear();
+        self.wow_phase = 0.0;
+        self.flutter_phase = 0.0;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let in_buf = inputs[0];
+        let wow_rate_buf = inputs.get(1).copied();
+        let wow_depth_buf = inputs.get(2).copied();
+        let flutter_rate_buf = inputs.get(3).copied();
+        let flutter_depth_buf = inputs.get(4).copied();
+        let mix_buf = inputs.get(5).copied();
+        if self.line.is_empty() {
+            return;
+        }
+        let max_delay_samples = (self.line.len() - 2) as f32;
+        let inv_sr = 1.0 / self.sample_rate;
+
+        // Every channel replays the shared delay line from the same cursor.
+        let start_pos = self.line.write_pos();
+
+        for ch in 0..output.num_channels() {
+            self.line.set_write_pos(start_pos);
+            let mut wow_phase = self.wow_phase;
+            let mut flutter_phase = self.flutter_phase;
+            let in_ch = channel_wrapped(in_buf, ch);
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let x = in_ch[i];
+                let wow_rate = read_input(wow_rate_buf, ch, i, 0.7).max(0.01);
+                let wow_depth = read_input(wow_depth_buf, ch, i, 0.0020).clamp(0.0, 0.010);
+                let flutter_rate = read_input(flutter_rate_buf, ch, i, 8.0).max(0.01);
+                let flutter_depth =
+                    read_input(flutter_depth_buf, ch, i, 0.0006).clamp(0.0, 0.005);
+                let mix = read_input(mix_buf, ch, i, 1.0).clamp(0.0, 1.0);
+
+                // Write first: a delay of zero reads back this very sample.
+                self.line.write(x);
+
+                let wow = (wow_phase * TAU).sin();
+                let flutter = (flutter_phase * TAU).sin();
+                let delay_secs =
+                    WOW_FLUTTER_CENTER_DELAY + wow_depth * wow + flutter_depth * flutter;
+                let delay_samples =
+                    (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
+
+                let wet = self.line.read_interp(delay_samples);
+                out[i] = (1.0 - mix) * x + mix * wet;
+
+                wow_phase += wow_rate * inv_sr;
+                wow_phase -= wow_phase.floor();
+                flutter_phase += flutter_rate * inv_sr;
+                flutter_phase -= flutter_phase.floor();
+                self.line.advance();
+            }
+
+            if ch == 0 {
+                self.wow_phase = wow_phase;
+                self.flutter_phase = flutter_phase;
+            }
+        }
+    }
+}

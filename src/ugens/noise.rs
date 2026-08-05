@@ -1,9 +1,9 @@
-//! Noise UGens: WhiteNoise, PinkNoise.
+//! Noise UGens: WhiteNoise, PinkNoise, VinylCrackle.
 //!
 //! Uses a simple LCG PRNG (no_std compatible, deterministic, fast).
 
 use super::rng::Rng;
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -151,6 +151,129 @@ impl UGen for PinkNoise {
                 // Add one white noise sample for the highest frequency content.
                 let white = self.rng.next_bipolar();
                 *sample = (self.running_sum + white) * norm;
+            }
+        }
+    }
+}
+
+// --- VinylCrackle ---
+
+/// Fallback RNG seed used only if `seed` is left unconnected. A real chain
+/// spec is expected to always wire `seed` from its keyed-seed derivation
+/// (see the struct doc); this just keeps an unwired instance from panicking
+/// or being silently mute.
+const VINYL_CRACKLE_DEFAULT_SEED: u32 = 0x7A1E_C0DE;
+
+/// Sparse impulsive click/pop noise, the vinyl-surface-noise texture.
+///
+/// Each sample, a coin flip (weighted by `density`) decides whether a new
+/// click fires; when one does, it gets a random sign, an amplitude skewed
+/// toward quiet (cubed, so most clicks are small and loud pops are rare —
+/// matching how real surface noise sounds), and a short random exponential
+/// decay. Between clicks the output just decays the last one to zero.
+///
+/// **Seeding is a cross-repo contract, not a local detail.** `seed` is the
+/// literal parameter name a chain-spec author's keyed-seed derivation
+/// targets (`root → (busId, stageIndex, "seed")`); this UGen only *consumes*
+/// that value — it never derives its own. It is read once, from the first
+/// sample of `seed` on this instance's first `process` call (or on the call
+/// after a `reset`), and held for the UGen's lifetime: `seed` is meant to be
+/// a chain-spec constant, not something modulated at audio rate. Equal seeds
+/// produce byte-identical output (see the determinism tests in
+/// `tests/ugens.rs`); different seeds must, and are checked to, produce
+/// different output first — a test that would also pass with a stuck RNG is
+/// not a determinism test.
+///
+/// Inputs:
+/// - `density`: average clicks per second (default 80.0)
+/// - `amount`: click loudness scale, 0.0-1.0 (default 0.3)
+/// - `seed`: RNG seed (default 0x7A1E_C0DE if left unconnected — see above)
+pub struct VinylCrackle {
+    rng: Rng,
+    seeded: bool,
+    click_value: f32,
+    click_decay: f32,
+    sample_rate: f32,
+}
+
+impl Default for VinylCrackle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VinylCrackle {
+    pub fn new() -> Self {
+        VinylCrackle {
+            rng: Rng::new(VINYL_CRACKLE_DEFAULT_SEED),
+            seeded: false,
+            click_value: 0.0,
+            click_decay: 0.7,
+            sample_rate: 44100.0,
+        }
+    }
+}
+
+impl UGen for VinylCrackle {
+    ugen_spec!(
+        "VinylCrackle",
+        category = Noise,
+        inputs = ["density", "amount", "seed"],
+        outputs = ["out"]
+    );
+
+    fn init(&mut self, context: &ProcessContext) {
+        self.sample_rate = context.sample_rate;
+    }
+
+    fn reset(&mut self) {
+        // Re-latch `seed` on the next `process` call rather than reseeding
+        // here directly: `reset` has no access to `inputs`, only `seed`'s
+        // eventual buffer does.
+        self.seeded = false;
+        self.click_value = 0.0;
+        self.click_decay = 0.7;
+    }
+
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let density_buf = inputs.first().copied();
+        let amount_buf = inputs.get(1).copied();
+        let seed_buf = inputs.get(2).copied();
+
+        if !self.seeded {
+            let seed_val = read_input(seed_buf, 0, 0, VINYL_CRACKLE_DEFAULT_SEED as f32);
+            self.rng = Rng::new(seed_val as u32);
+            self.seeded = true;
+        }
+
+        let sr = self.sample_rate.max(1.0);
+
+        for ch in 0..output.num_channels() {
+            let out = output.channel_mut(ch).samples_mut();
+
+            for i in 0..out.len() {
+                let density = read_input(density_buf, ch, i, 80.0).max(0.0);
+                let amount = read_input(amount_buf, ch, i, 0.3).clamp(0.0, 1.0);
+                let p_trigger = (density / sr).min(1.0);
+
+                let trigger_roll = self.rng.next_bipolar().abs();
+                if trigger_roll < p_trigger {
+                    let sign = if self.rng.next_bipolar() >= 0.0 { 1.0 } else { -1.0 };
+                    let mag = self.rng.next_bipolar().abs();
+                    let skewed = mag * mag * mag; // mostly small clicks, rare loud pops
+                    self.click_value = sign * skewed * amount;
+                    let decay_roll = self.rng.next_bipolar().abs();
+                    self.click_decay = 0.5 + 0.35 * decay_roll; // ~2-6 sample tails
+                } else {
+                    self.click_value *= self.click_decay;
+                }
+
+                out[i] = self.click_value;
             }
         }
     }
