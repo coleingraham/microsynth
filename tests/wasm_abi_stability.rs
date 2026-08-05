@@ -61,6 +61,12 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_legato_note_off",
         "ms_legato_slot_for",
         "ms_schedule_musical_glides",
+        "ms_routing_init",
+        "ms_routing_add_bus",
+        "ms_register_effect_def",
+        "ms_routing_add_effect",
+        "ms_routing_build",
+        "ms_spawn_voice_on_routing_bus_named",
     ];
     for name in new_names {
         assert!(
