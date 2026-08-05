@@ -192,7 +192,12 @@ fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32,
 /// frequency; `q` controls the bandwidth of the affected region, same as the
 /// other biquad shapes above.
 #[inline]
-fn biquad_peaking_coeffs(freq: f32, q: f32, gain_db: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+fn biquad_peaking_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
     let a = 10f32.powf(gain_db / 40.0);
 
@@ -207,7 +212,12 @@ fn biquad_peaking_coeffs(freq: f32, q: f32, gain_db: f32, sample_rate: f32) -> (
 /// RBJ cookbook shelf formula, parameterized by `q` (rather than shelf slope
 /// `S`) for consistency with the other biquad shapes' `freq`/`q` inputs.
 #[inline]
-fn biquad_low_shelf_coeffs(freq: f32, q: f32, gain_db: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+fn biquad_low_shelf_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
     let a = 10f32.powf(gain_db / 40.0);
     let sqrt_a = a.sqrt();
@@ -224,7 +234,12 @@ fn biquad_low_shelf_coeffs(freq: f32, q: f32, gain_db: f32, sample_rate: f32) ->
 
 /// Compute biquad high-shelf coefficients (boost/cut everything above `freq`).
 #[inline]
-fn biquad_high_shelf_coeffs(freq: f32, q: f32, gain_db: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+fn biquad_high_shelf_coeffs(
+    freq: f32,
+    q: f32,
+    gain_db: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
     let a = 10f32.powf(gain_db / 40.0);
     let sqrt_a = a.sqrt();
@@ -530,16 +545,8 @@ impl UGen for ParametricEq3 {
         "ParametricEq3",
         category = Filter,
         inputs = [
-            "in",
-            "lowFreq",
-            "lowGain",
-            "lowQ",
-            "midFreq",
-            "midGain",
-            "midQ",
-            "highFreq",
-            "highGain",
-            "highQ"
+            "in", "lowFreq", "lowGain", "lowQ", "midFreq", "midGain", "midQ", "highFreq",
+            "highGain", "highQ"
         ],
         outputs = ["out"]
     );
@@ -587,8 +594,7 @@ impl UGen for ParametricEq3 {
                 let mid_freq = read_input(mid_freq_buf, ch, i, 1000.0).clamp(20.0, nyquist - 1.0);
                 let mid_gain = read_input(mid_gain_buf, ch, i, 0.0);
                 let mid_q = read_input(mid_q_buf, ch, i, 1.0).max(0.01);
-                let high_freq =
-                    read_input(high_freq_buf, ch, i, 5000.0).clamp(20.0, nyquist - 1.0);
+                let high_freq = read_input(high_freq_buf, ch, i, 5000.0).clamp(20.0, nyquist - 1.0);
                 let high_gain = read_input(high_gain_buf, ch, i, 0.0);
                 let high_q = read_input(high_q_buf, ch, i, 0.707).max(0.01);
 
@@ -1280,8 +1286,7 @@ impl UGen for Limiter {
             let mut gain_db = self.gain_db[gain_idx];
 
             for i in 0..out.len() {
-                let ceiling_db =
-                    read_input(ceiling_buf, ch, i, -1.0) - LIMITER_SAFETY_MARGIN_DB;
+                let ceiling_db = read_input(ceiling_buf, ch, i, -1.0) - LIMITER_SAFETY_MARGIN_DB;
                 let release_time = read_input(release_buf, ch, i, 0.05).max(0.0001);
                 let release_coeff = (-1.0 / (release_time * self.sample_rate)).exp();
 

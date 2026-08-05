@@ -107,9 +107,7 @@ fn measure(label: &str, threshold: f32, ratio: f32, attack: f32, release: f32, d
         data: signal,
         pos: 0,
     }));
-    let thresh = engine
-        .graph_mut()
-        .add_node(Box::new(Const::new(threshold)));
+    let thresh = engine.graph_mut().add_node(Box::new(Const::new(threshold)));
     let ratio_n = engine.graph_mut().add_node(Box::new(Const::new(ratio)));
     let attack_n = engine.graph_mut().add_node(Box::new(Const::new(attack)));
     let release_n = engine.graph_mut().add_node(Box::new(Const::new(release)));
@@ -142,7 +140,11 @@ fn measure(label: &str, threshold: f32, ratio: f32, attack: f32, release: f32, d
         lin_to_db(input_true_peak),
         lin_to_db(sample_peak),
         lin_to_db(true_peak),
-        if lin_to_db(true_peak) <= -1.0 { "HOLDS -1 dBTP" } else { "EXCEEDS -1 dBTP" }
+        if lin_to_db(true_peak) <= -1.0 {
+            "HOLDS -1 dBTP"
+        } else {
+            "EXCEEDS -1 dBTP"
+        }
     );
 }
 
@@ -177,7 +179,11 @@ fn measure_limiter(label: &str, ceiling: f32, release: f32) {
         "{label}: output sample-peak {:.3} dBFS, true-peak {:.3} dBTP {}",
         lin_to_db(sample_peak),
         lin_to_db(true_peak),
-        if lin_to_db(true_peak) <= ceiling { "HOLDS ceiling" } else { "EXCEEDS ceiling" }
+        if lin_to_db(true_peak) <= ceiling {
+            "HOLDS ceiling"
+        } else {
+            "EXCEEDS ceiling"
+        }
     );
 }
 
@@ -185,10 +191,38 @@ fn main() {
     println!("Hot signal: overdriven 3kHz sine (+2.9 dBFS) + transient burst\n");
 
     println!("-- Compressor preset + SoftClip --");
-    measure("compressor(-1dB,20:1,1ms/50ms)+softclip(drive=1.0)", -1.0, 20.0, 0.001, 0.05, 1.0);
-    measure("compressor(-3dB,20:1,1ms/50ms)+softclip(drive=1.0)", -3.0, 20.0, 0.001, 0.05, 1.0);
-    measure("compressor(-1dB,20:1,0.1ms/50ms)+softclip(drive=2.0)", -1.0, 20.0, 0.0001, 0.05, 2.0);
-    measure("compressor(-6dB,20:1,0.1ms/50ms)+softclip(drive=3.0)", -6.0, 20.0, 0.0001, 0.05, 3.0);
+    measure(
+        "compressor(-1dB,20:1,1ms/50ms)+softclip(drive=1.0)",
+        -1.0,
+        20.0,
+        0.001,
+        0.05,
+        1.0,
+    );
+    measure(
+        "compressor(-3dB,20:1,1ms/50ms)+softclip(drive=1.0)",
+        -3.0,
+        20.0,
+        0.001,
+        0.05,
+        1.0,
+    );
+    measure(
+        "compressor(-1dB,20:1,0.1ms/50ms)+softclip(drive=2.0)",
+        -1.0,
+        20.0,
+        0.0001,
+        0.05,
+        2.0,
+    );
+    measure(
+        "compressor(-6dB,20:1,0.1ms/50ms)+softclip(drive=3.0)",
+        -6.0,
+        20.0,
+        0.0001,
+        0.05,
+        3.0,
+    );
 
     println!("\n-- Dedicated Limiter (look-ahead, true-peak-aware) --");
     measure_limiter("limiter(ceiling=-1dBTP,release=50ms)", -1.0, 0.05);
@@ -210,8 +244,13 @@ fn main() {
     let input_tp = true_peak_linear(&hot2, 8);
     println!("input true-peak: {:.3} dBTP", lin_to_db(input_tp));
 
-    let mut engine = Engine::new(EngineConfig { sample_rate: sr, block_size: 64 });
-    let src = engine.graph_mut().add_node(Box::new(PlaybackSource { data: hot2, pos: 0 }));
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine
+        .graph_mut()
+        .add_node(Box::new(PlaybackSource { data: hot2, pos: 0 }));
     let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
     let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
     let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
@@ -228,7 +267,11 @@ fn main() {
         "output sample-peak {:.3} dBFS, true-peak {:.3} dBTP {}",
         lin_to_db(sample_peak),
         lin_to_db(true_peak),
-        if lin_to_db(true_peak) <= -1.0 { "HOLDS -1 dBTP" } else { "EXCEEDS -1 dBTP" }
+        if lin_to_db(true_peak) <= -1.0 {
+            "HOLDS -1 dBTP"
+        } else {
+            "EXCEEDS -1 dBTP"
+        }
     );
 
     println!("\n-- Limiter edge cases --");
@@ -240,8 +283,14 @@ fn measure_edge_cases() {
 
     // Silence: should stay silent, no NaN.
     let silence = vec![0.0f32; 512];
-    let mut engine = Engine::new(EngineConfig { sample_rate: sr, block_size: 64 });
-    let src = engine.graph_mut().add_node(Box::new(PlaybackSource { data: silence, pos: 0 }));
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(PlaybackSource {
+        data: silence,
+        pos: 0,
+    }));
     let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
     let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
     let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
@@ -251,14 +300,22 @@ fn measure_edge_cases() {
     engine.graph_mut().set_sink(lim);
     engine.prepare();
     let output = engine.render_offline(8);
-    let max = output[0].iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+    let max = output[0]
+        .iter()
+        .cloned()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
     let has_nan = output[0].iter().any(|x| x.is_nan());
     println!("silence: max |out| = {max}, has_nan = {has_nan}");
 
     // Full-scale DC.
     let dc = vec![1.0f32; 512];
-    let mut engine = Engine::new(EngineConfig { sample_rate: sr, block_size: 64 });
-    let src = engine.graph_mut().add_node(Box::new(PlaybackSource { data: dc, pos: 0 }));
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine
+        .graph_mut()
+        .add_node(Box::new(PlaybackSource { data: dc, pos: 0 }));
     let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
     let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
     let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
@@ -269,16 +326,25 @@ fn measure_edge_cases() {
     engine.prepare();
     let output = engine.render_offline(8);
     let last = *output[0].last().unwrap();
-    println!("full-scale DC: settled output = {last:.4} ({:.3} dBFS)", lin_to_db(last.abs()));
+    println!(
+        "full-scale DC: settled output = {last:.4} ({:.3} dBFS)",
+        lin_to_db(last.abs())
+    );
 
     // Alternating near-Nyquist burst only (the most adversarial local case).
     let mut burst = vec![0.0f32; 512];
-    for i in 200..260 {
-        burst[i] = if i % 2 == 0 { 1.8 } else { -1.8 };
+    for (i, v) in burst.iter_mut().enumerate().take(260).skip(200) {
+        *v = if i % 2 == 0 { 1.8 } else { -1.8 };
     }
     let input_tp = true_peak_linear(&burst, 8);
-    let mut engine = Engine::new(EngineConfig { sample_rate: sr, block_size: 64 });
-    let src = engine.graph_mut().add_node(Box::new(PlaybackSource { data: burst, pos: 0 }));
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(PlaybackSource {
+        data: burst,
+        pos: 0,
+    }));
     let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
     let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
     let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
@@ -293,6 +359,10 @@ fn measure_edge_cases() {
         "Nyquist-alternating burst: input true-peak {:.3} dBTP -> output true-peak {:.3} dBTP {}",
         lin_to_db(input_tp),
         lin_to_db(true_peak),
-        if lin_to_db(true_peak) <= -1.0 { "HOLDS -1 dBTP" } else { "EXCEEDS -1 dBTP" }
+        if lin_to_db(true_peak) <= -1.0 {
+            "HOLDS -1 dBTP"
+        } else {
+            "EXCEEDS -1 dBTP"
+        }
     );
 }

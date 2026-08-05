@@ -488,8 +488,7 @@ impl UGen for WowFlutter {
                 let wow_rate = read_input(wow_rate_buf, ch, i, 0.7).max(0.01);
                 let wow_depth = read_input(wow_depth_buf, ch, i, 0.0020).clamp(0.0, 0.010);
                 let flutter_rate = read_input(flutter_rate_buf, ch, i, 8.0).max(0.01);
-                let flutter_depth =
-                    read_input(flutter_depth_buf, ch, i, 0.0006).clamp(0.0, 0.005);
+                let flutter_depth = read_input(flutter_depth_buf, ch, i, 0.0006).clamp(0.0, 0.005);
                 let mix = read_input(mix_buf, ch, i, 1.0).clamp(0.0, 1.0);
 
                 // Write first: a delay of zero reads back this very sample.
@@ -499,8 +498,7 @@ impl UGen for WowFlutter {
                 let flutter = (flutter_phase * TAU).sin();
                 let delay_secs =
                     WOW_FLUTTER_CENTER_DELAY + wow_depth * wow + flutter_depth * flutter;
-                let delay_samples =
-                    (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
+                let delay_samples = (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
 
                 let wet = self.line.read_interp(delay_samples);
                 out[i] = (1.0 - mix) * x + mix * wet;

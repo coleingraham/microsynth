@@ -256,14 +256,18 @@ impl UGen for VinylCrackle {
         for ch in 0..output.num_channels() {
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
+            for (i, out_sample) in out.iter_mut().enumerate() {
                 let density = read_input(density_buf, ch, i, 80.0).max(0.0);
                 let amount = read_input(amount_buf, ch, i, 0.3).clamp(0.0, 1.0);
                 let p_trigger = (density / sr).min(1.0);
 
                 let trigger_roll = self.rng.next_bipolar().abs();
                 if trigger_roll < p_trigger {
-                    let sign = if self.rng.next_bipolar() >= 0.0 { 1.0 } else { -1.0 };
+                    let sign = if self.rng.next_bipolar() >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     let mag = self.rng.next_bipolar().abs();
                     let skewed = mag * mag * mag; // mostly small clicks, rare loud pops
                     self.click_value = sign * skewed * amount;
@@ -273,7 +277,7 @@ impl UGen for VinylCrackle {
                     self.click_value *= self.click_decay;
                 }
 
-                out[i] = self.click_value;
+                *out_sample = self.click_value;
             }
         }
     }
