@@ -129,6 +129,22 @@ static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::Synt
 /// Master effect synth (inserted between bus and graph sink).
 static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(None);
 
+/// A multi-bus routing topology under construction/live, for the
+/// `ms_routing_*` export family below (see that section's doc comment). A
+/// sibling to `BUS_NODE`'s single flat bus, not a replacement: a session
+/// uses one model or the other, chosen by which init export it calls
+/// (`ms_init_with_bus`/`ms_compile_def` vs. `ms_routing_init`).
+static ROUTING: WasmCell<Option<crate::routing::RoutingGraph>> = WasmCell::new(None);
+
+/// Effect SynthDefs registered for the routing topology (`ms_routing_*`),
+/// keyed by name. Separate from `DEF_REGISTRY` (voice/instrument defs)
+/// because `Engine::build_routing` needs owned `SynthDef`s at build time and
+/// `SynthDef` is not `Clone` (its node factories are boxed closures) — this
+/// map's contents are moved into that call by `ms_routing_build`, which
+/// drains it.
+static EFFECT_DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::SynthDef>>> =
+    WasmCell::new(None);
+
 /// A registered SynthDef's mono/legato voice mode: (pitch parameter name,
 /// portamento seconds, tie-portamento shape, tie-portamento space — the
 /// last two default to `Linear`/`Pitch` when the declaration omits them,
@@ -702,6 +718,298 @@ pub extern "C" fn ms_free_done() -> u32 {
         engine.prepare();
     }
     count as u32
+}
+
+// ============================================================================
+// Multi-bus routing exports
+// ============================================================================
+//
+// A named-bus / insert-effect topology reachable from the wasm ABI — the
+// live-performance counterpart of the offline `ir::IrRoutingContainer` path
+// (`ir::build_routed_engine`, `microsynth-cli render-routed`). Both bottom
+// out in the same `RoutingGraph` + `Engine::build_routing` (`src/routing.rs`,
+// `src/engine.rs`), so a topology built either way behaves identically; only
+// how it gets described differs.
+//
+// They deliberately do **not** decode `IrRoutingContainer`'s serialized
+// bytes: the `ir` crate feature is off in both wasm build profiles
+// (`web/build.sh` passes `--no-default-features` to each), a standing
+// decision (see `ir::from_decl`'s doc comment on `IrBuilder::compile_expr`)
+// that keeps the `opt-level = "s"` + LTO wasm bundle free of the IR crate's
+// code. Reversing that is out of this ticket's scope. Instead, these
+// exports build the *same* `RoutingGraph` a decoded container would, one
+// declaration at a time — mirroring `RoutingGraph::add_bus`/`add_effect`'s
+// own Rust API — so a JS caller (which already has the topology as data on
+// its side, e.g. from the same JSON a container's `to_json` would produce)
+// drives it declaratively without an in-wasm byte-container parser.
+//
+// Call sequence: `ms_routing_init` once, then any number of
+// `ms_routing_add_bus` / `ms_register_effect_def` / `ms_routing_add_effect`
+// calls, then exactly one `ms_routing_build` (which also calls
+// `engine.prepare()`), then `ms_spawn_voice_on_routing_bus_named` per voice
+// and `ms_render`/`ms_free_voice`/etc. as usual. The bus named `"main"`
+// always exists (the graph's sink) without an explicit `ms_routing_add_bus`
+// call — see `IrRoutingContainer`'s "Bus identity" docs (`src/ir/container.rs`)
+// for why `"main"` is reserved and why a bus's *name* (not any numeric
+// index) is its identity everywhere in this crate's routing story.
+
+/// Start a fresh multi-bus routing session: a new engine and an empty
+/// `RoutingGraph` (with its implicit `"main"` bus). Call once before any
+/// other `ms_routing_*`/`ms_register_effect_def` export.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_routing_init(sample_rate: f32) {
+    let mut registry = UGenRegistry::new();
+    register_builtins(&mut registry);
+
+    let config = EngineConfig {
+        sample_rate,
+        block_size: 128,
+    };
+
+    unsafe {
+        *ENGINE.get_mut() = Some(Engine::new(config));
+        *REGISTRY.get_mut() = Some(registry);
+        *ROUTING.get_mut() = Some(crate::routing::RoutingGraph::new());
+        *EFFECT_DEF_REGISTRY.get_mut() = Some(BTreeMap::new());
+        *DEF_REGISTRY.get_mut() = Some(BTreeMap::new());
+        *BUS_NODE.get_mut() = None;
+        *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
+        *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
+    }
+}
+
+/// Declare a named bus (see the section doc comment for `"main"`, which is
+/// implicit and must not be redeclared here). Returns 0 on success, 1 if no
+/// routing session is active or `name` is `"main"`.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_routing_add_bus(
+    name_ptr: *const u8,
+    name_len: usize,
+    channels: u32,
+) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    if name == "main" {
+        return 1;
+    }
+    let routing = match unsafe { ROUTING.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+    routing.add_bus(name, channels.max(1) as usize);
+    0
+}
+
+/// Compile a DSL source and register the first resulting SynthDef as a named
+/// effect def, for later reference by `ms_routing_add_effect`. An effect def
+/// uses `audioIn` to receive its source bus's audio (see the `dsl` module
+/// docs' "Effects & Routing" section) — this export does not itself check
+/// that; an effect def with no `audioIn` simply never receives its source
+/// bus's signal, matching how the DSL/`RoutingGraph` path already behaves
+/// (routing wiring is structural, not class-checked, at this layer — the
+/// `SynthDefClass::Effect` shell check lives in the `ir` container path
+/// instead, see `ir::IrRoutingContainer::to_routing_graph`).
+/// Returns 0 on success, 1 on error.
+///
+/// # Safety
+/// `name_ptr`/`source_ptr` must each point to an initialized buffer of at
+/// least `name_len`/`source_len` bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_register_effect_def(
+    name_ptr: *const u8,
+    name_len: usize,
+    source_ptr: *const u8,
+    source_len: usize,
+) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let source_bytes = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
+    let source = match core::str::from_utf8(source_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let ugen_registry = match unsafe { REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let defs = match dsl::compile(source, ugen_registry) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+    if defs.is_empty() {
+        return 1;
+    }
+
+    let effect_defs = match unsafe { EFFECT_DEF_REGISTRY.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+    effect_defs.insert(AllocString::from(name), defs.into_iter().next().unwrap());
+    0
+}
+
+/// Add a route: `source_bus`'s output through the named effect def to
+/// `target_bus`. All three are bus/effect *names* — see the section doc
+/// comment. `source_bus`/`target_bus` must already exist (via
+/// `ms_routing_add_bus` or be `"main"`); `effect_name` must already be
+/// registered via `ms_register_effect_def`. Returns 0 on success, 1 if any
+/// name is unresolved or no routing session is active.
+///
+/// # Safety
+/// Each `*_ptr`/`*_len` pair must describe an initialized, valid buffer for
+/// the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_routing_add_effect(
+    source_bus_ptr: *const u8,
+    source_bus_len: usize,
+    effect_name_ptr: *const u8,
+    effect_name_len: usize,
+    target_bus_ptr: *const u8,
+    target_bus_len: usize,
+) -> u32 {
+    let source_bus = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(source_bus_ptr, source_bus_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let effect_name = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(effect_name_ptr, effect_name_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let target_bus = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(target_bus_ptr, target_bus_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let routing = match unsafe { ROUTING.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let source_id = match routing.bus_by_name(source_bus) {
+        Some(id) => id,
+        None => return 1,
+    };
+    let target_id = match routing.bus_by_name(target_bus) {
+        Some(id) => id,
+        None => return 1,
+    };
+    let effect_defs = match unsafe { EFFECT_DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let def = match effect_defs.get(effect_name) {
+        Some(d) => d,
+        None => return 1,
+    };
+    routing.add_effect(source_id, def, target_id);
+    0
+}
+
+/// Materialize the declared topology into the live audio graph: creates each
+/// bus's `Bus` UGen node, sets `"main"` as the graph sink, instantiates every
+/// routed effect and wires it between its source and target buses, then
+/// calls `engine.prepare()`. Call once after all `ms_routing_add_bus` /
+/// `ms_register_effect_def` / `ms_routing_add_effect` calls and before any
+/// `ms_spawn_voice_on_routing_bus_named`/`ms_render` call. Consumes the
+/// effect-def registry (see `EFFECT_DEF_REGISTRY`'s doc comment) — a second
+/// `ms_routing_build` call without intervening `ms_register_effect_def`
+/// calls builds with zero effects. Returns 0 on success, 1 if no routing
+/// session is active.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_routing_build() -> u32 {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+    let routing = match unsafe { ROUTING.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let effect_defs: Vec<crate::synthdef::SynthDef> = unsafe { EFFECT_DEF_REGISTRY.get_mut() }
+        .take()
+        .map(|m| m.into_values().collect())
+        .unwrap_or_default();
+    unsafe {
+        *EFFECT_DEF_REGISTRY.get_mut() = Some(BTreeMap::new());
+    }
+
+    engine.build_routing(routing, &effect_defs);
+    engine.prepare();
+    0
+}
+
+/// Spawn a voice (registered via `ms_register_def`) onto a named routing
+/// bus. Returns voice_id > 0, or 0 on failure (unregistered def, unknown bus,
+/// no routing session, or the graph not yet `ms_routing_build`-ed).
+///
+/// # Safety
+/// Each `*_ptr`/`*_len` pair must describe an initialized, valid buffer for
+/// the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named(
+    name_ptr: *const u8,
+    name_len: usize,
+    bus_name_ptr: *const u8,
+    bus_name_len: usize,
+) -> u64 {
+    let name = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(name_ptr, name_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let bus_name = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(bus_name_ptr, bus_name_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let def = match def_registry.get(name) {
+        Some(d) => d,
+        None => return 0,
+    };
+    let routing = match unsafe { ROUTING.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let bus_id = match routing.bus_by_name(bus_name) {
+        Some(id) => id,
+        None => return 0,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+
+    match engine.spawn_voice_on_routing_bus(def, routing, bus_id) {
+        Some(voice_id) => {
+            engine.prepare();
+            voice_id.0
+        }
+        None => 0,
+    }
 }
 
 // ============================================================================
