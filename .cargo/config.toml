@@ -17,5 +17,14 @@
 # the current working directory, not the manifest path. Building via
 # `cargo build --manifest-path <this-repo>/Cargo.toml` from OUTSIDE the
 # checkout falls back to the ordinary in-repo ./target (still gitignored).
+#
+# Caveat: sharing one target-dir is only safe for SEQUENTIAL builds. Two
+# concurrent `cargo` processes building this same crate from different
+# worktrees can cross-contaminate incremental artifacts (one build linking
+# the other's stale output, which surfaces as "cannot find" errors against
+# symbols that are demonstrably present on disk), and a `cargo clean` in any
+# worktree deletes every sibling's cache. When building from multiple
+# worktrees at once, isolate each build instead, e.g.
+# `CARGO_TARGET_DIR="$PWD/target"`.
 [build]
 target-dir = "../microsynth-target"
