@@ -69,6 +69,11 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_spawn_voice_on_routing_bus_named",
         "ms_spawn_voice_panned",
         "ms_spawn_voice_named_panned",
+        // Bus/effect output taps -- two separate exports, not one, because a
+        // bus's raw summed input and an effect's own processed/wet output are different
+        // signals (see their doc comments in src/web.rs).
+        "ms_routing_bus_output",
+        "ms_routing_effect_output",
     ];
     for name in new_names {
         assert!(

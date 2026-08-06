@@ -1111,6 +1111,173 @@ pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named(
     }
 }
 
+/// Read a named routing bus's summed output for the block `ms_render` just
+/// produced (128 samples/channel) -- the bus's OWN signal, not the graph
+/// sink's. `name` is the bus's `busId` per `ir::container`'s doc (the exact
+/// bytes passed to `ms_routing_add_bus`, or the reserved literal `"main"`,
+/// which `RoutingGraph::new()` seeds as `buses[0]` and is therefore always a
+/// valid name here even though no explicit `ms_routing_add_bus("main", ..)`
+/// call ever registers it).
+///
+/// Every stage is a stem: this is what makes a POST-bus wet stem possible
+/// at all. Re-rendering a role subset through its group/master chain is NOT
+/// the same signal as this tap, because compression is level-dependent --
+/// the chain sees a different signal in the two cases. Reading every tier's
+/// bus with this export in ONE render pass (instead of N re-renders, one per
+/// tier) is the entire point: `AudioGraph::render` evaluates every node,
+/// including buses that feed no further stage output, every block, so an
+/// instrument/group/master tap costs nothing beyond the read itself.
+///
+/// Returns 0 on success. Returns 1 (and leaves `out_left`/`out_right`
+/// untouched -- never zero-filled) for: malformed UTF-8 `name`, no routing
+/// session (`ms_routing_init` not called), a `name` not seeded by
+/// `ms_routing_add_bus` and not `"main"`, or `ms_routing_build` not yet
+/// called (bus has no live node). Callers must not mistake an untouched
+/// buffer for silence -- check the return value.
+///
+/// Must be called AFTER the `ms_render` call for the block being tapped:
+/// like `ms_render`, this reads a node's output buffer as of the last
+/// `AudioGraph::render()` pass, it does not render anything itself.
+///
+/// # Safety
+/// `name_ptr`/`name_len` per the ABI's usual encoded-string contract.
+/// `out_left` and `out_right` must each point to a writable buffer of at
+/// least 128 `f32`s that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_routing_bus_output(
+    name_ptr: *const u8,
+    name_len: usize,
+    out_left: *mut f32,
+    out_right: *mut f32,
+) -> u32 {
+    let name = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(name_ptr, name_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let routing = match unsafe { ROUTING.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let bus_id = match routing.bus_by_name(name) {
+        Some(id) => id,
+        None => return 1,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_ref() {
+        Some(e) => e,
+        None => return 1,
+    };
+    let node_id = match routing.bus_node(bus_id) {
+        Some(n) => n,
+        None => return 1,
+    };
+    let buf = match engine.graph().node_output(node_id) {
+        Some(b) => b,
+        None => return 1,
+    };
+
+    let left = unsafe { core::slice::from_raw_parts_mut(out_left, 128) };
+    let right = unsafe { core::slice::from_raw_parts_mut(out_right, 128) };
+    let nc = buf.num_channels();
+    let src_l = buf.channel(0).samples();
+    let copy_len = 128.min(src_l.len());
+    left[..copy_len].copy_from_slice(&src_l[..copy_len]);
+    if nc >= 2 {
+        let src_r = buf.channel(1).samples();
+        let copy_len_r = 128.min(src_r.len());
+        right[..copy_len_r].copy_from_slice(&src_r[..copy_len_r]);
+    } else {
+        right[..copy_len].copy_from_slice(&src_l[..copy_len]);
+    }
+    0
+}
+
+/// Read a named routing EFFECT's output for the block `ms_render` just
+/// produced -- the effect SynthDef's OWN processed (wet) signal, as opposed
+/// to [`ms_routing_bus_output`] which reads a bus's raw SUMMED input (the
+/// dry signal feeding an effect, before that effect runs).
+///
+/// This distinction is why this export exists as a second one rather than
+/// folding into `ms_routing_bus_output`: `installTopology`
+/// (`bus_topology.mjs`) wires each group/master `ChainSpec` as an EFFECT
+/// reading from a bus and writing to another bus's input slot -- the
+/// processed signal never becomes a bus's own output, it becomes an INPUT
+/// to the next bus. A caller wanting "this group's stem, with its own chain
+/// applied" (RFC `2026-07-16-dsp-signal-chain-and-bus-architecture.md` S5,
+/// "every stage is a stem") needs the effect's output specifically; reading
+/// the group bus instead would silently report the group's DRY, pre-chain
+/// signal.
+///
+/// `name` is the effect's registered name (`ms_register_effect_def`'s
+/// `name_ptr`/`name_len` argument -- `bus_topology.mjs` names a group's
+/// effect `group__<groupName>` and the master's `"master"`, but this export
+/// takes whatever string was registered, verbatim, same as
+/// `ms_routing_bus_output` does for bus names).
+///
+/// Returns 0 on success. Returns 1 (`out_left`/`out_right` left untouched,
+/// never zero-filled) for: malformed UTF-8 `name`, no routing session, a
+/// `name` not registered via `ms_register_effect_def`/wired via
+/// `ms_routing_add_effect`, or `ms_routing_build` not yet called (effect has
+/// no live synth instance).
+///
+/// Must be called AFTER the `ms_render` call for the block being tapped,
+/// exactly like `ms_routing_bus_output`.
+///
+/// # Safety
+/// `name_ptr`/`name_len` per the ABI's usual encoded-string contract.
+/// `out_left` and `out_right` must each point to a writable buffer of at
+/// least 128 `f32`s that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_routing_effect_output(
+    name_ptr: *const u8,
+    name_len: usize,
+    out_left: *mut f32,
+    out_right: *mut f32,
+) -> u32 {
+    let name = match core::str::from_utf8(unsafe {
+        core::slice::from_raw_parts(name_ptr, name_len)
+    }) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let routing = match unsafe { ROUTING.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    let effect_idx = match routing.effects().iter().position(|e| e.def_name == name) {
+        Some(i) => i,
+        None => return 1,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_ref() {
+        Some(e) => e,
+        None => return 1,
+    };
+    let synth = match routing.effect_synth(crate::routing::EffectId(effect_idx)) {
+        Some(s) => s,
+        None => return 1,
+    };
+    let buf = match engine.graph().node_output(synth.output_node()) {
+        Some(b) => b,
+        None => return 1,
+    };
+
+    let left = unsafe { core::slice::from_raw_parts_mut(out_left, 128) };
+    let right = unsafe { core::slice::from_raw_parts_mut(out_right, 128) };
+    let nc = buf.num_channels();
+    let src_l = buf.channel(0).samples();
+    let copy_len = 128.min(src_l.len());
+    left[..copy_len].copy_from_slice(&src_l[..copy_len]);
+    if nc >= 2 {
+        let src_r = buf.channel(1).samples();
+        let copy_len_r = 128.min(src_r.len());
+        right[..copy_len_r].copy_from_slice(&src_r[..copy_len_r]);
+    } else {
+        right[..copy_len].copy_from_slice(&src_l[..copy_len]);
+    }
+    0
+}
+
 // ============================================================================
 // Mono/legato voice-mode exports
 // ============================================================================

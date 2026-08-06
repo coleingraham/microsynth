@@ -2648,6 +2648,134 @@ fn test_limiter_no_nan_on_silence() {
     );
 }
 
+/// Two-channel source with genuinely different, independently hot content
+/// per channel -- not a mono signal duplicated to both channels. Regression
+/// coverage for a real defect found on real stereo program material (a
+/// pilot-genre piece rendered through the actual composer pipeline, not a
+/// synthetic signal): the limiter's original look-ahead buffer was a single
+/// `DelayLine` shared across channels via the same "replay from the same
+/// cursor" convention `Flanger`/`CombFilter` use. That convention is a
+/// documented, acceptable compromise for effects where a little
+/// cross-channel bleed is inaudible -- it is NOT acceptable for a hard
+/// numeric ceiling guarantee. Because the look-ahead window (~66 samples at
+/// 44.1kHz) is longer than the render block size (64 samples), channel 1's
+/// look-ahead reads landed mostly on channel 0's *just-written* samples
+/// instead of its own, so channel 1's gain (correctly computed from its own
+/// content) got applied to the wrong channel's audio. On real material this
+/// measured as true peak reaching -0.7 dBTP against a -1.0 ceiling (an
+/// independent ffmpeg measurement on the actual pilot render); every prior
+/// test here was mono and could not have caught it.
+struct StereoHotSignalSource {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    pos: usize,
+}
+
+impl UGen for StereoHotSignalSource {
+    fn spec(&self) -> UGenSpec {
+        static OUTPUTS: &[OutputSpec] = &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }];
+        UGenSpec {
+            name: "StereoHotSignalSource",
+            category: UGenCategory::Utility,
+            inputs: &[],
+            outputs: OUTPUTS,
+        }
+    }
+    fn init(&mut self, _context: &ProcessContext) {}
+    fn reset(&mut self) {
+        self.pos = 0;
+    }
+    fn output_channels(&self, _input_channels: &[usize]) -> usize {
+        2
+    }
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        _inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let n = output.channel(0).samples().len();
+        let mut pos = self.pos;
+        for i in 0..n {
+            let l = self.left.get(pos).copied().unwrap_or(0.0);
+            let r = self.right.get(pos).copied().unwrap_or(0.0);
+            output.channel_mut(0).samples_mut()[i] = l;
+            output.channel_mut(1).samples_mut()[i] = r;
+            pos += 1;
+        }
+        self.pos = pos;
+    }
+}
+
+/// Same shape as `hot_test_signal` (overdriven tone + hard transient burst)
+/// but with an independently chosen frequency and burst window, so the two
+/// stereo channels carry genuinely different content, not a duplicated mono
+/// signal.
+fn hot_test_signal_variant(sr: f32, len: usize, tone_freq: f32, burst_start: usize) -> Vec<f32> {
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let t = i as f32 / sr;
+        let mut s = 1.4 * (core::f32::consts::TAU * tone_freq * t).sin();
+        if (burst_start..burst_start + 16).contains(&i) {
+            s = if i % 2 == 0 { 1.8 } else { -1.8 };
+        }
+        v.push(s);
+    }
+    v
+}
+
+#[test]
+fn test_limiter_holds_ceiling_independently_per_stereo_channel() {
+    let sr = 44100.0;
+    // Different frequency and different burst timing per channel -- if a
+    // channel's look-ahead reads leak the other channel's samples, this
+    // mismatch (gain calibrated for one channel's content, applied to a
+    // sample from the other) is what exposes it.
+    let left = hot_test_signal_variant(sr, 4096, 3000.0, 400);
+    let right = hot_test_signal_variant(sr, 4096, 4500.0, 1900);
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(StereoHotSignalSource {
+        left,
+        right,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(4096 / 64);
+    assert_eq!(
+        output.len(),
+        2,
+        "stereo source should yield 2 output channels"
+    );
+
+    let left_tp = true_peak_dbtp(&output[0], 8);
+    let right_tp = true_peak_dbtp(&output[1], 8);
+    assert!(
+        left_tp <= -0.95,
+        "left channel should hold a -1 dBTP ceiling independently, measured {left_tp:.3} dBTP"
+    );
+    assert!(
+        right_tp <= -0.95,
+        "right channel should hold a -1 dBTP ceiling independently, measured {right_tp:.3} dBTP \
+         (a cross-channel look-ahead leak would show up here first, since this channel's own \
+         content differs from the left channel's)"
+    );
+}
+
 #[test]
 fn test_dsl_limiter_compiles() {
     use microsynth::dsl::{self, UGenRegistry};

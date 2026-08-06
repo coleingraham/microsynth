@@ -1131,10 +1131,27 @@ const LIMITER_SAFETY_MARGIN_DB: f32 = 0.2;
 /// - `ceiling`: true-peak ceiling in dBTP (default -1.0)
 /// - `release`: gain recovery time in seconds after a peak passes (default 0.05)
 pub struct Limiter {
-    delay: DelayLine,
+    /// **Independent per-channel look-ahead buffers** — deliberately NOT the
+    /// single-shared-`DelayLine`-replayed-per-channel convention used by
+    /// `Flanger`/`CombFilter`/`FeedbackDelay` elsewhere in this file. That
+    /// convention is documented (`delayline.rs`) as an accepted compromise
+    /// for effects like chorus where a little cross-channel bleed is
+    /// inaudible. A limiter's ceiling is a hard numeric guarantee, not a
+    /// vibe: sharing one buffer across channels means channel 1's look-ahead
+    /// window reads back channel 0's *stale* samples for most of every
+    /// block (the block size is smaller than the look-ahead, so channel 1
+    /// never catches up to overwriting what channel 0 just wrote), silently
+    /// swapping in a completely different signal's peak estimate. This was
+    /// exactly the real defect a hot **stereo** test signal exposed that no
+    /// mono synthetic signal could have (see `tests/ugens.rs`'s stereo
+    /// cross-channel test and its own real-material-derived measurement
+    /// note) — every channel needs to see only its own history.
+    delays: [DelayLine; 2],
     lookahead_samples: usize,
-    /// Per-channel gain state (capped at 2 channels), same convention as
-    /// `Compressor::env_db`.
+    /// Per-channel gain state (capped at 2 channels, same as `delays` and
+    /// the same convention as `Compressor::env_db`). A 3rd+ channel would
+    /// share channel 1's delay/gain state; not a concern for a limiter,
+    /// which is essentially always mono or stereo.
     gain_db: [f32; 2],
     attack_coeff: f32,
     sample_rate: f32,
@@ -1149,7 +1166,7 @@ impl Default for Limiter {
 impl Limiter {
     pub fn new() -> Self {
         Limiter {
-            delay: DelayLine::new(),
+            delays: [DelayLine::new(), DelayLine::new()],
             lookahead_samples: 1,
             gain_db: [0.0; 2],
             attack_coeff: 0.0,
@@ -1250,14 +1267,18 @@ impl UGen for Limiter {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         self.lookahead_samples = ((LIMITER_LOOKAHEAD_SECS * context.sample_rate) as usize).max(4);
-        self.delay.resize(self.lookahead_samples + 8);
+        for d in &mut self.delays {
+            d.resize(self.lookahead_samples + 8);
+        }
         self.gain_db = [0.0; 2];
         let attack_time = LIMITER_LOOKAHEAD_SECS / 4.0;
         self.attack_coeff = (-1.0 / (attack_time * context.sample_rate)).exp();
     }
 
     fn reset(&mut self) {
-        self.delay.clear();
+        for d in &mut self.delays {
+            d.clear();
+        }
         self.gain_db = [0.0; 2];
     }
 
@@ -1270,16 +1291,14 @@ impl UGen for Limiter {
         let in_buf = inputs[0];
         let ceiling_buf = inputs.get(1).copied();
         let release_buf = inputs.get(2).copied();
-        if self.delay.is_empty() {
+        if self.delays[0].is_empty() {
             return;
         }
         let lookahead = self.lookahead_samples;
 
-        // Every channel replays the shared delay line from the same cursor.
-        let start_pos = self.delay.write_pos();
-
         for ch in 0..output.num_channels() {
-            self.delay.set_write_pos(start_pos);
+            let delay_idx = ch.min(1);
+            let delay = &mut self.delays[delay_idx];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
             let gain_idx = ch.min(1);
@@ -1290,12 +1309,12 @@ impl UGen for Limiter {
                 let release_time = read_input(release_buf, ch, i, 0.05).max(0.0001);
                 let release_coeff = (-1.0 / (release_time * self.sample_rate)).exp();
 
-                self.delay.write(in_ch[i]);
+                delay.write(in_ch[i]);
 
                 // Anticipatory component: starts the envelope moving as soon
                 // as a loud sample is *written*, `lookahead` samples before
                 // it will be read back out.
-                let causal_peak_db = precise_lin_to_db(causal_true_peak(&self.delay));
+                let causal_peak_db = precise_lin_to_db(causal_true_peak(delay));
                 let causal_target_db = (ceiling_db - causal_peak_db).min(0.0);
                 let coeff = if causal_target_db < gain_db {
                     self.attack_coeff // needs MORE reduction: fast, fixed
@@ -1311,14 +1330,14 @@ impl UGen for Limiter {
                 // *more* reduction wins; the exact one is the hard guarantee,
                 // the smoothed one is what keeps it from sounding like a
                 // sample-and-hold gate.
-                let exact_peak_db = precise_lin_to_db(centered_true_peak(&self.delay, lookahead));
+                let exact_peak_db = precise_lin_to_db(centered_true_peak(delay, lookahead));
                 let exact_target_db = (ceiling_db - exact_peak_db).min(0.0);
                 let applied_gain_db = gain_db.min(exact_target_db);
 
-                let delayed = self.delay.read(lookahead);
+                let delayed = delay.read(lookahead);
                 out[i] = delayed * precise_db_to_lin(applied_gain_db);
 
-                self.delay.advance();
+                delay.advance();
             }
 
             if ch <= 1 {
