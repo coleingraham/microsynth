@@ -402,4 +402,17 @@ impl AudioGraph {
     pub fn edges_to(&self, node_id: NodeId) -> usize {
         self.edges.iter().filter(|e| e.to == node_id).count()
     }
+
+    /// Which input slots on `node_id` currently have a connected edge, from
+    /// any source. Unlike `edges_to`'s bare count, this names the ACTUAL
+    /// occupied indices -- the one place that can answer "is slot N free on
+    /// this node" by reading the graph's own edges directly, rather than a
+    /// caller keeping a shadow count that can drift from what `connect` (an
+    /// (to, to_input) pair overwrite, see its own doc) actually did.
+    pub fn used_input_slots(&self, node_id: NodeId) -> impl Iterator<Item = usize> + '_ {
+        self.edges
+            .iter()
+            .filter(move |e| e.to == node_id)
+            .map(|e| e.to_input)
+    }
 }

@@ -33,8 +33,6 @@ impl Default for EngineConfig {
 struct Voice {
     id: VoiceId,
     synth: Synth,
-    /// Which bus input slot this voice is connected to, if any.
-    bus_input: Option<(NodeId, usize)>,
     /// Extra graph nodes inserted to place this voice in the stereo field —
     /// `(Pan2 node, its pan-position Const node)`. `None` for voices spawned
     /// at center pan (or via a pan-unaware spawn method), which connect
@@ -207,7 +205,6 @@ impl Engine {
         self.voices.push(Voice {
             id,
             synth: synth.clone_handle(),
-            bus_input: None,
             pan_nodes: None,
         });
         id
@@ -245,18 +242,21 @@ impl Engine {
         // Find the next free input slot on the bus
         let bus_max = self.graph.node_spec(bus_node)?.inputs.len();
 
-        // Find which slots are already used by checking existing edges
-        let used_slots: Vec<usize> = self
-            .voices
-            .iter()
-            .filter_map(|v| {
-                if let Some((bus, slot)) = v.bus_input {
-                    if bus == bus_node { Some(slot) } else { None }
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Find which slots are already used. Read this from the graph's OWN live edges
+        // (`used_input_slots`) rather than scanning `self.voices`' bookkeeping: a routing
+        // effect's connection to this same bus (wired directly via `self.graph.connect`,
+        // e.g. from `build_routing`) has no entry in `self.voices` at all, so a
+        // `self.voices`-only search cannot see it -- the very first voice spawned onto a
+        // bus a routing effect also targets would compute the SAME "free" slot the effect
+        // already occupies, and `connect`'s last-writer-wins semantics would then silently
+        // evict the effect's connection, dropping its entire contribution to that bus for
+        // the rest of the render. Reading the graph directly makes voice spawns and
+        // routing-effect wiring agree on occupancy by construction, and self-maintains
+        // across the render's life: freeing a voice (`free_voice`/`free_done_synths`, both
+        // via `remove_node`) already strips its edge from the graph, so its slot reopens
+        // here automatically, while a routing effect's edge -- never touched by either free
+        // path -- stays occupied for as long as it lives.
+        let used_slots: Vec<usize> = self.graph.used_input_slots(bus_node).collect();
 
         let free_slot = (0..bus_max).find(|slot| !used_slots.contains(slot))?;
 
@@ -282,7 +282,6 @@ impl Engine {
         self.voices.push(Voice {
             id,
             synth: synth.clone_handle(),
-            bus_input: Some((bus_node, free_slot)),
             pan_nodes,
         });
         Some(id)
