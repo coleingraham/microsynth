@@ -54,31 +54,34 @@ impl fmt::Display for IrCodecError {
 // Binary encoding
 // ---------------------------------------------------------------------------
 
-fn put_u16(out: &mut Vec<u8>, v: u16) {
+pub(super) fn put_u16(out: &mut Vec<u8>, v: u16) {
     out.extend_from_slice(&v.to_le_bytes());
 }
-fn put_u32(out: &mut Vec<u8>, v: u32) {
+pub(super) fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
-fn put_f32(out: &mut Vec<u8>, v: f32) {
+pub(super) fn put_f32(out: &mut Vec<u8>, v: f32) {
     out.extend_from_slice(&v.to_bits().to_le_bytes());
 }
-fn put_str(out: &mut Vec<u8>, s: &str) {
+pub(super) fn put_str(out: &mut Vec<u8>, s: &str) {
     put_u32(out, s.len() as u32);
     out.extend_from_slice(s.as_bytes());
 }
 
-/// A cursor reading little-endian records with bounds checks.
-struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
+/// A cursor reading little-endian records with bounds checks. `pub(super)` so
+/// [`crate::ir::container`] can decode its own length-prefixed sections with
+/// the same primitives this module uses for `IrSynthDef`, rather than a second
+/// hand-rolled reader.
+pub(super) struct Reader<'a> {
+    pub(super) buf: &'a [u8],
+    pub(super) pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
+    pub(super) fn new(buf: &'a [u8]) -> Self {
         Reader { buf, pos: 0 }
     }
-    fn take(&mut self, n: usize) -> Result<&'a [u8], IrCodecError> {
+    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], IrCodecError> {
         let end = self.pos.checked_add(n).ok_or(IrCodecError::UnexpectedEof)?;
         let slice = self
             .buf
@@ -87,24 +90,24 @@ impl<'a> Reader<'a> {
         self.pos = end;
         Ok(slice)
     }
-    fn u16(&mut self) -> Result<u16, IrCodecError> {
+    pub(super) fn u16(&mut self) -> Result<u16, IrCodecError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
-    fn u32(&mut self) -> Result<u32, IrCodecError> {
+    pub(super) fn u32(&mut self) -> Result<u32, IrCodecError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn usize32(&mut self) -> Result<usize, IrCodecError> {
+    pub(super) fn usize32(&mut self) -> Result<usize, IrCodecError> {
         Ok(self.u32()? as usize)
     }
-    fn f32(&mut self) -> Result<f32, IrCodecError> {
+    pub(super) fn f32(&mut self) -> Result<f32, IrCodecError> {
         Ok(f32::from_bits(u32::from_le_bytes(
             self.take(4)?.try_into().unwrap(),
         )))
     }
-    fn u8(&mut self) -> Result<u8, IrCodecError> {
+    pub(super) fn u8(&mut self) -> Result<u8, IrCodecError> {
         Ok(self.take(1)?[0])
     }
-    fn string(&mut self) -> Result<String, IrCodecError> {
+    pub(super) fn string(&mut self) -> Result<String, IrCodecError> {
         let len = self.usize32()?;
         let bytes = self.take(len)?;
         core::str::from_utf8(bytes)
@@ -378,7 +381,7 @@ impl IrSynthDef {
 // JSON encoding
 // ---------------------------------------------------------------------------
 
-fn json_escape(out: &mut String, s: &str) {
+pub(super) fn json_escape(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -401,13 +404,13 @@ fn json_escape(out: &mut String, s: &str) {
 }
 
 /// Emit a JSON element separator before all but the first item.
-fn json_sep(out: &mut String, i: usize) {
+pub(super) fn json_sep(out: &mut String, i: usize) {
     if i > 0 {
         out.push(',');
     }
 }
 
-fn json_num_f32(out: &mut String, v: f32) {
+pub(super) fn json_num_f32(out: &mut String, v: f32) {
     // Rust's default float formatting is shortest round-trippable. Guard the
     // non-finite cases JSON cannot express by emitting 0 (IR consts from the
     // DSL are always finite; authored IR should avoid non-finite values).
@@ -505,8 +508,10 @@ impl IrSynthDef {
 // ---------------------------------------------------------------------------
 
 /// A parsed JSON value — enough of the data model for the IR schema.
+/// `pub(super)` so [`crate::ir::container`] reuses this parser for its own
+/// JSON text form rather than a second hand-rolled one.
 #[derive(Debug, Clone, PartialEq)]
-enum Json {
+pub(super) enum Json {
     Null,
     Bool(bool),
     Num(f64),
@@ -515,13 +520,13 @@ enum Json {
     Obj(Vec<(String, Json)>),
 }
 
-struct JsonParser<'a> {
+pub(super) struct JsonParser<'a> {
     chars: &'a [u8],
     pos: usize,
 }
 
 impl<'a> JsonParser<'a> {
-    fn new(s: &'a str) -> Self {
+    pub(super) fn new(s: &'a str) -> Self {
         JsonParser {
             chars: s.as_bytes(),
             pos: 0,
@@ -532,7 +537,7 @@ impl<'a> JsonParser<'a> {
         IrCodecError::BadJson(msg.to_string())
     }
 
-    fn skip_ws(&mut self) {
+    pub(super) fn skip_ws(&mut self) {
         while let Some(&c) = self.chars.get(self.pos) {
             if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
                 self.pos += 1;
@@ -546,7 +551,7 @@ impl<'a> JsonParser<'a> {
         self.chars.get(self.pos).copied()
     }
 
-    fn value(&mut self) -> Result<Json, IrCodecError> {
+    pub(super) fn value(&mut self) -> Result<Json, IrCodecError> {
         self.skip_ws();
         match self.peek() {
             Some(b'{') => self.object(),
@@ -719,35 +724,35 @@ impl<'a> JsonParser<'a> {
 // --- schema mapping ---
 
 impl Json {
-    fn get<'a>(&'a self, key: &str) -> Option<&'a Json> {
+    pub(super) fn get<'a>(&'a self, key: &str) -> Option<&'a Json> {
         match self {
             Json::Obj(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
-    fn as_str(&self) -> Result<&str, IrCodecError> {
+    pub(super) fn as_str(&self) -> Result<&str, IrCodecError> {
         match self {
             Json::Str(s) => Ok(s),
             _ => Err(IrCodecError::BadJson("expected string".to_string())),
         }
     }
-    fn as_f64(&self) -> Result<f64, IrCodecError> {
+    pub(super) fn as_f64(&self) -> Result<f64, IrCodecError> {
         match self {
             Json::Num(n) => Ok(*n),
             _ => Err(IrCodecError::BadJson("expected number".to_string())),
         }
     }
-    fn as_arr(&self) -> Result<&[Json], IrCodecError> {
+    pub(super) fn as_arr(&self) -> Result<&[Json], IrCodecError> {
         match self {
             Json::Arr(a) => Ok(a),
             _ => Err(IrCodecError::BadJson("expected array".to_string())),
         }
     }
-    fn field<'a>(&'a self, key: &str) -> Result<&'a Json, IrCodecError> {
+    pub(super) fn field<'a>(&'a self, key: &str) -> Result<&'a Json, IrCodecError> {
         self.get(key)
             .ok_or_else(|| IrCodecError::BadJson(alloc::format!("missing field {key:?}")))
     }
-    fn usize_field(&self, key: &str) -> Result<usize, IrCodecError> {
+    pub(super) fn usize_field(&self, key: &str) -> Result<usize, IrCodecError> {
         Ok(self.field(key)?.as_f64()? as usize)
     }
     fn f32_field(&self, key: &str) -> Result<f32, IrCodecError> {

@@ -2233,3 +2233,909 @@ fn test_stereo_width_interpolates_fractional_delay() {
         );
     }
 }
+
+// ============================================================================
+// Parametric EQ tests (BiquadPeaking, BiquadLowShelf, BiquadHighShelf,
+// ParametricEq3)
+// ============================================================================
+
+/// Render a sine tone at `tone_freq` through a peaking EQ at `eq_freq`/`q`
+/// with the given `gain_db`, and return the settled peak amplitude (max abs
+/// of the render's second half, well past the biquad's transient).
+fn render_peaking_eq_peak(tone_freq: f32, eq_freq: f32, q: f32, gain_db: f32) -> f32 {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(tone_freq)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let eq_freq_n = engine.graph_mut().add_node(Box::new(Const::new(eq_freq)));
+    let eq_q_n = engine.graph_mut().add_node(Box::new(Const::new(q)));
+    let eq_gain_n = engine.graph_mut().add_node(Box::new(Const::new(gain_db)));
+    let eq = engine.graph_mut().add_node(Box::new(BiquadPeaking::new()));
+    engine.graph_mut().connect(osc, eq, 0);
+    engine.graph_mut().connect(eq_freq_n, eq, 1);
+    engine.graph_mut().connect(eq_q_n, eq, 2);
+    engine.graph_mut().connect(eq_gain_n, eq, 3);
+    engine.graph_mut().set_sink(eq);
+    engine.prepare();
+
+    let output = engine.render_offline(60);
+    let flat: Vec<f32> = output[0].clone();
+    let tail = &flat[flat.len() / 2..];
+    tail.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()))
+}
+
+#[test]
+fn test_peaking_eq_boosts_gain_at_center_freq() {
+    let unity = render_peaking_eq_peak(1000.0, 1000.0, 1.0, 0.0);
+    let boosted = render_peaking_eq_peak(1000.0, 1000.0, 1.0, 12.0);
+    assert!(
+        (0.5..1.5).contains(&unity),
+        "sanity: 0 dB gain should pass a ~1.0-amplitude tone through, got {unity}"
+    );
+    // +12 dB ~= 3.98x; assert we're clearly in that neighborhood rather than
+    // pinning the exact ratio, so this doesn't get brittle on filter Q/settle
+    // tuning while still catching a broken/no-op gain path (which would give
+    // a ratio near 1.0).
+    let ratio = boosted / unity;
+    assert!(
+        ratio > 2.5,
+        "peaking EQ at center freq with +12dB gain should boost noticeably, ratio={ratio}"
+    );
+}
+
+#[test]
+fn test_peaking_eq_cuts_gain_at_center_freq() {
+    let unity = render_peaking_eq_peak(1000.0, 1000.0, 1.0, 0.0);
+    let cut = render_peaking_eq_peak(1000.0, 1000.0, 1.0, -12.0);
+    let ratio = cut / unity;
+    assert!(
+        ratio < 0.4,
+        "peaking EQ at center freq with -12dB gain should cut noticeably, ratio={ratio}"
+    );
+}
+
+fn render_shelf_peak(shelf: &str, tone_freq: f32, corner_freq: f32, gain_db: f32) -> f32 {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(tone_freq)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let corner_n = engine
+        .graph_mut()
+        .add_node(Box::new(Const::new(corner_freq)));
+    let q_n = engine.graph_mut().add_node(Box::new(Const::new(0.707)));
+    let gain_n = engine.graph_mut().add_node(Box::new(Const::new(gain_db)));
+    let shelf_node: NodeId = match shelf {
+        "low" => engine.graph_mut().add_node(Box::new(BiquadLowShelf::new())),
+        "high" => engine
+            .graph_mut()
+            .add_node(Box::new(BiquadHighShelf::new())),
+        _ => unreachable!(),
+    };
+    engine.graph_mut().connect(osc, shelf_node, 0);
+    engine.graph_mut().connect(corner_n, shelf_node, 1);
+    engine.graph_mut().connect(q_n, shelf_node, 2);
+    engine.graph_mut().connect(gain_n, shelf_node, 3);
+    engine.graph_mut().set_sink(shelf_node);
+    engine.prepare();
+
+    let output = engine.render_offline(60);
+    let flat: Vec<f32> = output[0].clone();
+    let tail = &flat[flat.len() / 2..];
+    tail.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()))
+}
+
+#[test]
+fn test_low_shelf_cuts_frequencies_below_corner() {
+    let unity = render_shelf_peak("low", 50.0, 200.0, 0.0);
+    let cut = render_shelf_peak("low", 50.0, 200.0, -12.0);
+    let ratio = cut / unity;
+    assert!(
+        ratio < 0.4,
+        "low shelf at -12dB should cut a tone well below the corner freq, ratio={ratio}"
+    );
+}
+
+#[test]
+fn test_high_shelf_boosts_frequencies_above_corner() {
+    let unity = render_shelf_peak("high", 15000.0, 5000.0, 0.0);
+    let boosted = render_shelf_peak("high", 15000.0, 5000.0, 12.0);
+    let ratio = boosted / unity;
+    assert!(
+        ratio > 2.5,
+        "high shelf at +12dB should boost a tone well above the corner freq, ratio={ratio}"
+    );
+}
+
+/// At 0 dB gain, RBJ peaking/shelf coefficients reduce to an exact identity
+/// (numerator == denominator polynomial), so ParametricEq3 with all three
+/// bands at 0 dB should reproduce the input bit-for-bit (modulo the
+/// coefficient computation's own floating-point rounding).
+#[test]
+fn test_parametric_eq3_is_identity_at_zero_gain() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+
+    let zero = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let low_freq = engine.graph_mut().add_node(Box::new(Const::new(200.0)));
+    let low_q = engine.graph_mut().add_node(Box::new(Const::new(0.707)));
+    let mid_freq = engine.graph_mut().add_node(Box::new(Const::new(1000.0)));
+    let mid_q = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+    let high_freq = engine.graph_mut().add_node(Box::new(Const::new(5000.0)));
+    let high_q = engine.graph_mut().add_node(Box::new(Const::new(0.707)));
+    let eq = engine.graph_mut().add_node(Box::new(ParametricEq3::new()));
+
+    engine.graph_mut().connect(osc, eq, 0);
+    engine.graph_mut().connect(low_freq, eq, 1);
+    engine.graph_mut().connect(zero, eq, 2); // lowGain
+    engine.graph_mut().connect(low_q, eq, 3);
+    engine.graph_mut().connect(mid_freq, eq, 4);
+    engine.graph_mut().connect(zero, eq, 5); // midGain
+    engine.graph_mut().connect(mid_q, eq, 6);
+    engine.graph_mut().connect(high_freq, eq, 7);
+    engine.graph_mut().connect(zero, eq, 8); // highGain
+    engine.graph_mut().connect(high_q, eq, 9);
+    engine.graph_mut().set_sink(eq);
+    engine.prepare();
+    let eq_out = engine.render_offline(10);
+
+    let mut dry_engine = Engine::new(EngineConfig::default());
+    let dry_freq = dry_engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let dry_phase = dry_engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let dry_osc = dry_engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    dry_engine.graph_mut().connect(dry_freq, dry_osc, 0);
+    dry_engine.graph_mut().connect(dry_phase, dry_osc, 1);
+    dry_engine.graph_mut().set_sink(dry_osc);
+    dry_engine.prepare();
+    let dry_out = dry_engine.render_offline(10);
+
+    for (a, b) in eq_out[0].iter().zip(dry_out[0].iter()) {
+        assert!(
+            (a - b).abs() < 1e-4,
+            "0dB parametric EQ should reproduce the dry signal, got {a} vs {b}"
+        );
+    }
+}
+
+#[test]
+fn test_dsl_parametric_eq_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef eqd freq=440.0 =
+            let sig = sinOsc freq 0.0
+            let peaked = peakingEq sig 1000.0 1.0 6.0
+            let shelved = lowShelf peaked 200.0 0.707 (0.0 - 3.0)
+            let shelved2 = highShelf shelved 5000.0 0.707 3.0
+            parametricEq3 shelved2 200.0 0.0 0.707 1000.0 0.0 1.0 5000.0 0.0 0.707
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "eqd");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "EQ'd synth should produce output");
+}
+
+// ============================================================================
+// Limiter tests
+// ============================================================================
+
+/// Same cubic (Catmull-Rom) oversampling true-peak estimate used to decide
+/// (and validate) the limiter's design in `examples/measure_limiter.rs`.
+/// Kept here, independent of the UGen's own internal estimate, so this test
+/// isn't just checking the limiter agrees with itself.
+fn true_peak_dbtp(samples: &[f32], oversample: usize) -> f32 {
+    let n = samples.len() as isize;
+    let get = |i: isize| -> f32 {
+        let idx = i.clamp(0, n - 1) as usize;
+        samples[idx]
+    };
+    let mut peak = 0.0f32;
+    for i in 0..samples.len() as isize {
+        let p0 = get(i - 1);
+        let p1 = get(i);
+        let p2 = get(i + 1);
+        let p3 = get(i + 2);
+        for k in 0..oversample {
+            let t = k as f32 / oversample as f32;
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let v = 0.5
+                * ((2.0 * p1)
+                    + (-p0 + p2) * t
+                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                    + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+            peak = peak.max(v.abs());
+        }
+    }
+    20.0 * peak.max(1e-9).log10()
+}
+
+struct HotSignalSource {
+    data: Vec<f32>,
+    pos: usize,
+}
+
+impl UGen for HotSignalSource {
+    fn spec(&self) -> UGenSpec {
+        static OUTPUTS: &[OutputSpec] = &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }];
+        UGenSpec {
+            name: "HotSignalSource",
+            category: UGenCategory::Utility,
+            inputs: &[],
+            outputs: OUTPUTS,
+        }
+    }
+    fn init(&mut self, _context: &ProcessContext) {}
+    fn reset(&mut self) {
+        self.pos = 0;
+    }
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        _inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let out = output.channel_mut(0).samples_mut();
+        for s in out.iter_mut() {
+            *s = self.data[self.pos % self.data.len()];
+            self.pos += 1;
+        }
+    }
+}
+
+/// Overdriven 3kHz tone (+2.9 dBFS) plus a hard transient burst -- the same
+/// hot test signal `examples/measure_limiter.rs` measured the
+/// Compressor+SoftClip preset against (it did not hold -1 dBTP there; see
+/// that file for the measurement this UGen's design is a direct response to).
+fn hot_test_signal(sr: f32, len: usize) -> Vec<f32> {
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let t = i as f32 / sr;
+        let mut s = 1.4 * (core::f32::consts::TAU * 3000.0 * t).sin();
+        if (400..416).contains(&i) {
+            s = if i % 2 == 0 { 1.8 } else { -1.8 };
+        }
+        v.push(s);
+    }
+    v
+}
+
+#[test]
+fn test_limiter_holds_minus1_dbtp_on_hot_signal() {
+    let sr = 44100.0;
+    let signal = hot_test_signal(sr, 2048);
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(HotSignalSource {
+        data: signal,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(2048 / 64);
+    let true_peak = true_peak_dbtp(&output[0], 8);
+    assert!(
+        true_peak <= -0.95,
+        "limiter should hold a -1 dBTP ceiling on a hot signal, measured {true_peak:.3} dBTP"
+    );
+}
+
+#[test]
+fn test_limiter_holds_ceiling_on_nyquist_alternating_burst() {
+    // The most adversarial local case: a short burst that alternates sign
+    // every sample (content at Nyquist), which produces the largest
+    // inter-sample overshoot under cubic reconstruction.
+    let sr = 44100.0;
+    let mut signal = vec![0.0f32; 512];
+    for (i, v) in signal.iter_mut().enumerate().take(260).skip(200) {
+        *v = if i % 2 == 0 { 1.8 } else { -1.8 };
+    }
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(HotSignalSource {
+        data: signal,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(512 / 64);
+    let true_peak = true_peak_dbtp(&output[0], 8);
+    assert!(
+        true_peak <= -0.95,
+        "limiter should hold ceiling even on a Nyquist-alternating burst, measured {true_peak:.3} dBTP"
+    );
+}
+
+#[test]
+fn test_limiter_passes_quiet_signal_near_unity() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let freq = engine.graph_mut().add_node(Box::new(Const::new(440.0)));
+    let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+    let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+    engine.graph_mut().connect(freq, osc, 0);
+    engine.graph_mut().connect(phase, osc, 1);
+    let amp = engine.graph_mut().add_node(Box::new(Const::new(0.1)));
+    let mul = engine
+        .graph_mut()
+        .add_node(Box::new(BinOpUGen::new(BinOpKind::Mul)));
+    engine.graph_mut().connect(osc, mul, 0);
+    engine.graph_mut().connect(amp, mul, 1);
+
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(mul, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(50);
+    let tail = &output[0][output[0].len() - 200..];
+    let peak = tail.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+    // A -20dBFS tone is nowhere near -1dBTP; the limiter shouldn't touch it
+    // beyond the fixed look-ahead delay (no amplitude change expected).
+    assert!(
+        (peak - 0.1).abs() < 0.01,
+        "quiet signal well under ceiling should pass through ~unchanged, got peak={peak}"
+    );
+}
+
+#[test]
+fn test_limiter_no_nan_on_silence() {
+    let mut engine = Engine::new(EngineConfig::default());
+    let src = engine.graph_mut().add_node(Box::new(HotSignalSource {
+        data: vec![0.0; 256],
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(4);
+    assert!(
+        output[0].iter().all(|x| x.is_finite() && *x == 0.0),
+        "silence in should stay silence out, with no NaN/inf"
+    );
+}
+
+/// Two-channel source with genuinely different, independently hot content
+/// per channel -- not a mono signal duplicated to both channels. Regression
+/// coverage for a real defect found on real stereo program material (a
+/// pilot-genre piece rendered through the actual composer pipeline, not a
+/// synthetic signal): the limiter's original look-ahead buffer was a single
+/// `DelayLine` shared across channels via the same "replay from the same
+/// cursor" convention `Flanger`/`CombFilter` use. That convention is a
+/// documented, acceptable compromise for effects where a little
+/// cross-channel bleed is inaudible -- it is NOT acceptable for a hard
+/// numeric ceiling guarantee. Because the look-ahead window (~66 samples at
+/// 44.1kHz) is longer than the render block size (64 samples), channel 1's
+/// look-ahead reads landed mostly on channel 0's *just-written* samples
+/// instead of its own, so channel 1's gain (correctly computed from its own
+/// content) got applied to the wrong channel's audio. On real material this
+/// measured as true peak reaching -0.7 dBTP against a -1.0 ceiling (an
+/// independent ffmpeg measurement on the actual pilot render); every prior
+/// test here was mono and could not have caught it.
+struct StereoHotSignalSource {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    pos: usize,
+}
+
+impl UGen for StereoHotSignalSource {
+    fn spec(&self) -> UGenSpec {
+        static OUTPUTS: &[OutputSpec] = &[OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }];
+        UGenSpec {
+            name: "StereoHotSignalSource",
+            category: UGenCategory::Utility,
+            inputs: &[],
+            outputs: OUTPUTS,
+        }
+    }
+    fn init(&mut self, _context: &ProcessContext) {}
+    fn reset(&mut self) {
+        self.pos = 0;
+    }
+    fn output_channels(&self, _input_channels: &[usize]) -> usize {
+        2
+    }
+    fn process(
+        &mut self,
+        _context: &ProcessContext,
+        _inputs: &[&AudioBuffer],
+        output: &mut AudioBuffer,
+    ) {
+        let n = output.channel(0).samples().len();
+        let mut pos = self.pos;
+        for i in 0..n {
+            let l = self.left.get(pos).copied().unwrap_or(0.0);
+            let r = self.right.get(pos).copied().unwrap_or(0.0);
+            output.channel_mut(0).samples_mut()[i] = l;
+            output.channel_mut(1).samples_mut()[i] = r;
+            pos += 1;
+        }
+        self.pos = pos;
+    }
+}
+
+/// Same shape as `hot_test_signal` (overdriven tone + hard transient burst)
+/// but with an independently chosen frequency and burst window, so the two
+/// stereo channels carry genuinely different content, not a duplicated mono
+/// signal.
+fn hot_test_signal_variant(sr: f32, len: usize, tone_freq: f32, burst_start: usize) -> Vec<f32> {
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let t = i as f32 / sr;
+        let mut s = 1.4 * (core::f32::consts::TAU * tone_freq * t).sin();
+        if (burst_start..burst_start + 16).contains(&i) {
+            s = if i % 2 == 0 { 1.8 } else { -1.8 };
+        }
+        v.push(s);
+    }
+    v
+}
+
+#[test]
+fn test_limiter_holds_ceiling_independently_per_stereo_channel() {
+    let sr = 44100.0;
+    // Different frequency and different burst timing per channel -- if a
+    // channel's look-ahead reads leak the other channel's samples, this
+    // mismatch (gain calibrated for one channel's content, applied to a
+    // sample from the other) is what exposes it.
+    let left = hot_test_signal_variant(sr, 4096, 3000.0, 400);
+    let right = hot_test_signal_variant(sr, 4096, 4500.0, 1900);
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(StereoHotSignalSource {
+        left,
+        right,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(4096 / 64);
+    assert_eq!(
+        output.len(),
+        2,
+        "stereo source should yield 2 output channels"
+    );
+
+    let left_tp = true_peak_dbtp(&output[0], 8);
+    let right_tp = true_peak_dbtp(&output[1], 8);
+    assert!(
+        left_tp <= -0.95,
+        "left channel should hold a -1 dBTP ceiling independently, measured {left_tp:.3} dBTP"
+    );
+    assert!(
+        right_tp <= -0.95,
+        "right channel should hold a -1 dBTP ceiling independently, measured {right_tp:.3} dBTP \
+         (a cross-channel look-ahead leak would show up here first, since this channel's own \
+         content differs from the left channel's)"
+    );
+}
+
+/// An independently-implemented windowed-sinc true-peak reference --
+/// deliberately NOT `true_peak_dbtp` above (a 4-point Catmull-Rom spline,
+/// the same technique the limiter's estimator used internally before its
+/// fix, which is exactly why that function could not have caught the
+/// estimator's own optimism). This one is a separately-coded
+/// `REF_HALF_TAPS`-tap Blackman-Harris kernel at a different width than the
+/// production estimator's 32 (`SINC_HALF_TAPS` in `filters.rs`) -- not a
+/// call into `filters.rs`'s private functions.
+///
+/// The width was NOT chosen for maximum theoretical precision:
+/// `examples/measure_limiter.rs --characterize`'s sweep found that a
+/// WIDER/sharper kernel (48, even 32, taps) diverges FURTHER from an
+/// independent `ffmpeg -af loudnorm`
+/// measurement on this fixture's near-Nyquist content, not closer --
+/// `ffmpeg`'s own true-peak filter (ITU-R BS.1770-4 Annex 2's standardized
+/// 4x oversampling design) is itself a specific, bandwidth-limited
+/// approximation, not an oracle for the exact continuous-time peak, so an
+/// arbitrarily precise custom filter measures a stricter, non-equivalent
+/// standard. `REF_HALF_TAPS=24` was the narrowest width in that sweep that
+/// did NOT under-report relative to `ffmpeg` on any tested case (always
+/// slightly stricter, by ~0.3-0.4 dB) -- calibrated to avoid both false
+/// negatives (missing what `ffmpeg` would flag) and false positives from
+/// chasing precision `ffmpeg` itself doesn't chase. The real `ffmpeg`-backed
+/// arbiter check and real-material verification live in the caller-side
+/// tooling that drives this UGen, already gating CI there; this function's
+/// job is fast, hermetic regression coverage in this crate, not the final
+/// word on true-peak correctness.
+fn reference_true_peak_dbtp(samples: &[f32], oversample: usize) -> f32 {
+    const REF_HALF_TAPS: isize = 24;
+    let n = samples.len() as isize;
+    let get = |i: isize| -> f32 {
+        let idx = i.clamp(0, n - 1) as usize;
+        samples[idx]
+    };
+    let sinc = |x: f32| -> f32 {
+        if x.abs() < 1e-7 {
+            1.0
+        } else {
+            let px = core::f32::consts::PI * x;
+            px.sin() / px
+        }
+    };
+    // Blackman-Harris window over the 2*REF_HALF_TAPS-tap support.
+    let bh = |n: f32, taps: f32| -> f32 {
+        const A0: f32 = 0.358_75;
+        const A1: f32 = 0.488_29;
+        const A2: f32 = 0.141_28;
+        const A3: f32 = 0.011_68;
+        let x = core::f32::consts::TAU * n / taps;
+        A0 - A1 * x.cos() + A2 * (2.0 * x).cos() - A3 * (3.0 * x).cos()
+    };
+    let taps = (2 * REF_HALF_TAPS) as f32;
+    let mut peak = 0.0f32;
+    for i in 0..samples.len() as isize {
+        peak = peak.max(get(i).abs());
+        for k in 1..oversample {
+            let t = k as f32 / oversample as f32;
+            let mut acc = 0.0f32;
+            for tap in -REF_HALF_TAPS..REF_HALF_TAPS {
+                let sample = get(i + tap);
+                let dist = tap as f32 - t + 1.0;
+                let window = bh(tap as f32 + REF_HALF_TAPS as f32, taps);
+                acc += sample * sinc(dist) * window;
+            }
+            peak = peak.max(acc.abs());
+        }
+    }
+    20.0 * peak.max(1e-9).log10()
+}
+
+/// A regression case using adversarial-but-synthetic stereo material
+/// (multiple simultaneous near-Nyquist tones plus hard
+/// transient bursts, independently chosen per channel -- denser and hotter
+/// than `hot_test_signal_variant` above, closer to the harmonic density of
+/// heavily limited/compressed real program material), verified against
+/// `reference_true_peak_dbtp` -- NOT `true_peak_dbtp` -- so this test cannot
+/// pass merely by agreeing with the same technique the estimator itself
+/// used to use. Watched RED against the prior Catmull-Rom estimator (that
+/// version of this file, temporarily restored with this test already in
+/// place): failed with "measured 2.771 dBTP" against the -1.0 ceiling -- a
+/// 3.77 dB breach with the old estimator and its original 0.2 dB margin, a
+/// real breach, not a hypothetical one. Passes now with the windowed-sinc
+/// estimator and re-derived 2.0 dB margin.
+/// Same shape as `examples/measure_limiter.rs`'s `dense_signal` (the exact
+/// fixture `--characterize` validated the estimator fix against, using
+/// `ffmpeg -af loudnorm` as ground truth) -- kept in lock-step with that
+/// fixture deliberately, not just "similarly dense," so this test's
+/// severity matches what was actually characterized rather than a new,
+/// uncalibrated worst case.
+fn dense_adversarial_signal(sr: f32, len: usize, burst_stride: usize) -> Vec<f32> {
+    let tones = [1200.0, 3000.0, 6000.0, 9000.0, 12000.0, 16000.0];
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let t = i as f32 / sr;
+        let mut s = 0.0f32;
+        for (k, f) in tones.iter().enumerate() {
+            let amp = 0.55 - 0.05 * k as f32;
+            s += amp * (core::f32::consts::TAU * f * t).sin();
+        }
+        if i % burst_stride < 12 {
+            s = if i % 2 == 0 { 1.9 } else { -1.9 };
+        }
+        v.push(s);
+    }
+    v
+}
+
+#[test]
+fn test_limiter_holds_ceiling_on_adversarial_dense_stereo_material() {
+    let sr = 44100.0;
+    let left = dense_adversarial_signal(sr, 8192, 700);
+    let right = dense_adversarial_signal(sr, 8192, 900);
+    let gain = 10f32.powf(12.0 / 20.0); // +12 dB, mid-range of the gains this UGen is expected to hold ceiling under
+    let left: Vec<f32> = left.iter().map(|s| s * gain).collect();
+    let right: Vec<f32> = right.iter().map(|s| s * gain).collect();
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(StereoHotSignalSource {
+        left,
+        right,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(8192 / 64 + 1);
+    let left_tp = reference_true_peak_dbtp(&output[0], 8);
+    let right_tp = reference_true_peak_dbtp(&output[1], 8);
+    assert!(
+        left_tp <= -1.0,
+        "left channel should hold a -1 dBTP ceiling on adversarial dense material per the \
+         independent reference, measured {left_tp:.3} dBTP"
+    );
+    assert!(
+        right_tp <= -1.0,
+        "right channel should hold a -1 dBTP ceiling on adversarial dense material per the \
+         independent reference, measured {right_tp:.3} dBTP"
+    );
+}
+
+#[test]
+fn test_dsl_limiter_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef limited freq=440.0 =
+            let sig = sinOsc freq 0.0
+            limiter sig (0.0 - 1.0) 0.05
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "limited");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "limited synth should produce output");
+}
+
+// ============================================================================
+// WowFlutter tests
+// ============================================================================
+
+#[test]
+fn test_wow_flutter_depth_changes_output() {
+    fn render(depth: f32) -> Vec<f32> {
+        let mut engine = Engine::new(EngineConfig::default());
+        let freq = engine.graph_mut().add_node(Box::new(Const::new(220.0)));
+        let phase = engine.graph_mut().add_node(Box::new(Const::new(0.0)));
+        let osc = engine.graph_mut().add_node(Box::new(SinOsc::new()));
+        engine.graph_mut().connect(freq, osc, 0);
+        engine.graph_mut().connect(phase, osc, 1);
+
+        let wow_rate = engine.graph_mut().add_node(Box::new(Const::new(2.0)));
+        let wow_depth = engine.graph_mut().add_node(Box::new(Const::new(depth)));
+        let flutter_rate = engine.graph_mut().add_node(Box::new(Const::new(10.0)));
+        let flutter_depth = engine
+            .graph_mut()
+            .add_node(Box::new(Const::new(depth * 0.3)));
+        let mix = engine.graph_mut().add_node(Box::new(Const::new(1.0)));
+        let wf = engine.graph_mut().add_node(Box::new(WowFlutter::new()));
+        engine.graph_mut().connect(osc, wf, 0);
+        engine.graph_mut().connect(wow_rate, wf, 1);
+        engine.graph_mut().connect(wow_depth, wf, 2);
+        engine.graph_mut().connect(flutter_rate, wf, 3);
+        engine.graph_mut().connect(flutter_depth, wf, 4);
+        engine.graph_mut().connect(mix, wf, 5);
+        engine.graph_mut().set_sink(wf);
+        engine.prepare();
+
+        engine.render_offline(40).into_iter().next().unwrap()
+    }
+
+    let flat = render(0.0);
+    let wobbled = render(0.008);
+
+    assert!(
+        flat.iter().any(|x| x.abs() > 0.01),
+        "wow/flutter output shouldn't be silent"
+    );
+    assert!(
+        wobbled.iter().all(|x| x.is_finite() && x.abs() <= 1.01),
+        "wow/flutter output should stay bounded"
+    );
+
+    let differs = flat
+        .iter()
+        .zip(wobbled.iter())
+        .any(|(a, b)| (a - b).abs() > 1e-4);
+    assert!(
+        differs,
+        "non-zero wow/flutter depth should audibly differ from zero depth"
+    );
+}
+
+#[test]
+fn test_dsl_wow_flutter_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef wobbly freq=220.0 =
+            let sig = sinOsc freq 0.0
+            wowFlutter sig 0.7 0.002 8.0 0.0006 1.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "wobbly");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(10);
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "wobbly synth should produce output");
+}
+
+// ============================================================================
+// VinylCrackle tests
+// ============================================================================
+
+fn render_vinyl_crackle(seed: f32, num_blocks: usize) -> Vec<f32> {
+    let mut engine = Engine::new(EngineConfig::default());
+    let density = engine.graph_mut().add_node(Box::new(Const::new(400.0)));
+    let amount = engine.graph_mut().add_node(Box::new(Const::new(0.8)));
+    let seed_n = engine.graph_mut().add_node(Box::new(Const::new(seed)));
+    let vc = engine.graph_mut().add_node(Box::new(VinylCrackle::new()));
+    engine.graph_mut().connect(density, vc, 0);
+    engine.graph_mut().connect(amount, vc, 1);
+    engine.graph_mut().connect(seed_n, vc, 2);
+    engine.graph_mut().set_sink(vc);
+    engine.prepare();
+    engine
+        .render_offline(num_blocks)
+        .into_iter()
+        .next()
+        .unwrap()
+}
+
+#[test]
+fn test_vinyl_crackle_not_silent() {
+    let output = render_vinyl_crackle(12345.0, 20);
+    assert!(
+        output.iter().any(|x| x.abs() > 1e-6),
+        "vinyl crackle at a reasonable density should produce some clicks"
+    );
+    assert!(
+        output.iter().all(|x| x.is_finite() && x.abs() <= 1.0),
+        "vinyl crackle output should stay bounded"
+    );
+}
+
+/// Mutation check per the "a test that has only ever passed is an untested
+/// test" rule: prove the seed actually drives the RNG by first showing two
+/// *different* seeds diverge, before trusting that equal seeds match. A
+/// stuck/free-running RNG, or a seed input that's silently ignored, would
+/// make both this test AND the equal-seed test below pass for the wrong
+/// reason if only the equal-seed test existed.
+#[test]
+fn test_vinyl_crackle_different_seeds_produce_different_output() {
+    let a = render_vinyl_crackle(1.0, 20);
+    let b = render_vinyl_crackle(2.0, 20);
+    assert_ne!(
+        a, b,
+        "different seeds should produce different click patterns"
+    );
+}
+
+#[test]
+fn test_vinyl_crackle_equal_seeds_are_byte_identical() {
+    let a = render_vinyl_crackle(777.0, 20);
+    let b = render_vinyl_crackle(777.0, 20);
+    assert_eq!(
+        a, b,
+        "equal seeds must render byte-identical vinyl-crackle output"
+    );
+}
+
+#[test]
+fn test_vinyl_crackle_unseeded_default_is_deterministic() {
+    // No seed input connected at all: falls back to the fixed default seed,
+    // which must itself be reproducible run-to-run (not e.g. time-based).
+    fn render() -> Vec<f32> {
+        let mut engine = Engine::new(EngineConfig::default());
+        let density = engine.graph_mut().add_node(Box::new(Const::new(400.0)));
+        let amount = engine.graph_mut().add_node(Box::new(Const::new(0.8)));
+        let vc = engine.graph_mut().add_node(Box::new(VinylCrackle::new()));
+        engine.graph_mut().connect(density, vc, 0);
+        engine.graph_mut().connect(amount, vc, 1);
+        engine.graph_mut().set_sink(vc);
+        engine.prepare();
+        engine.render_offline(20).into_iter().next().unwrap()
+    }
+    assert_eq!(render(), render());
+}
+
+#[test]
+fn test_dsl_vinyl_crackle_compiles() {
+    use microsynth::dsl::{self, UGenRegistry};
+
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let source = r#"
+        synthdef crackly =
+            vinylCrackle 400.0 0.8 42.0
+    "#;
+    let defs = dsl::compile(source, &reg).unwrap();
+    assert_eq!(defs[0].name(), "crackly");
+
+    let mut engine = Engine::new(EngineConfig::default());
+    let synth = engine.instantiate_synthdef(&defs[0]);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let output = engine.render_offline(20);
+    let max = output[0]
+        .iter()
+        .copied()
+        .fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(max > 0.0, "crackly synth should produce some clicks");
+}

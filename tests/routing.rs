@@ -88,8 +88,9 @@ fn test_bus_fixed_channel_count() {
     let mut graph = AudioGraph::new();
     let ctx = ProcessContext::new(44100.0, 64);
 
-    // Create a 4-channel bus
-    let bus = graph.add_node(Box::new(ugens::Bus::new(4)));
+    // Create a 4-channel bus (deliberately non-stereo, to test that the
+    // declared channel count is honored as-is).
+    let bus = graph.add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Custom(4))));
     graph.set_sink(bus);
     graph.prepare(&ctx);
 

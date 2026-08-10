@@ -33,8 +33,12 @@ impl Default for EngineConfig {
 struct Voice {
     id: VoiceId,
     synth: Synth,
-    /// Which bus input slot this voice is connected to, if any.
-    bus_input: Option<(NodeId, usize)>,
+    /// Extra graph nodes inserted to place this voice in the stereo field —
+    /// `(Pan2 node, its pan-position Const node)`. `None` for voices spawned
+    /// at center pan (or via a pan-unaware spawn method), which connect
+    /// straight to the bus with no `Pan2` in the path. Owned by the voice so
+    /// `free_voice` can tear them down alongside its synth.
+    pan_nodes: Option<(NodeId, NodeId)>,
 }
 
 /// The synthesis engine. Owns the audio graph and drives rendering.
@@ -201,7 +205,7 @@ impl Engine {
         self.voices.push(Voice {
             id,
             synth: synth.clone_handle(),
-            bus_input: None,
+            pan_nodes: None,
         });
         id
     }
@@ -209,32 +213,76 @@ impl Engine {
     /// Instantiate a SynthDef as a voice and connect its output to a Bus node.
     /// Automatically finds the next available input slot on the bus.
     /// Returns the VoiceId, or None if the bus has no free slots.
+    ///
+    /// Equivalent to [`spawn_voice_on_bus_panned`](Self::spawn_voice_on_bus_panned)
+    /// with `pan = 0.0` (center) — same direct connection, no `Pan2` inserted.
     pub fn spawn_voice_on_bus(&mut self, def: &SynthDef, bus_node: NodeId) -> Option<VoiceId> {
+        self.spawn_voice_on_bus_panned(def, bus_node, 0.0)
+    }
+
+    /// Like [`spawn_voice_on_bus`](Self::spawn_voice_on_bus), but places the
+    /// voice in the stereo field via a `Pan2` node inserted between the
+    /// voice's output and the bus input slot. `pan` is the pan position
+    /// (-1.0 = left, 0.0 = center, +1.0 = right); out-of-range values are
+    /// clamped by `Pan2` itself.
+    ///
+    /// At exactly `pan == 0.0` this connects the voice directly to the bus
+    /// with no `Pan2` in between — byte-for-byte the same signal path this
+    /// engine has always used for center-panned voices, so existing
+    /// center-pan callers (including `spawn_voice_on_bus`) are unaffected by
+    /// this method's existence: a mono voice's samples land unscaled and
+    /// identical on every bus output channel via the bus's own channel-wrap,
+    /// exactly as before `Pan2` existed in this path.
+    pub fn spawn_voice_on_bus_panned(
+        &mut self,
+        def: &SynthDef,
+        bus_node: NodeId,
+        pan: f32,
+    ) -> Option<VoiceId> {
         // Find the next free input slot on the bus
         let bus_max = self.graph.node_spec(bus_node)?.inputs.len();
 
-        // Find which slots are already used by checking existing edges
-        let used_slots: Vec<usize> = self
-            .voices
-            .iter()
-            .filter_map(|v| {
-                if let Some((bus, slot)) = v.bus_input {
-                    if bus == bus_node { Some(slot) } else { None }
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Find which slots are already used. Read this from the graph's OWN live edges
+        // (`used_input_slots`) rather than scanning `self.voices`' bookkeeping: a routing
+        // effect's connection to this same bus (wired directly via `self.graph.connect`,
+        // e.g. from `build_routing`) has no entry in `self.voices` at all, so a
+        // `self.voices`-only search cannot see it -- the very first voice spawned onto a
+        // bus a routing effect also targets would compute the SAME "free" slot the effect
+        // already occupies, and `connect`'s last-writer-wins semantics would then silently
+        // evict the effect's connection, dropping its entire contribution to that bus for
+        // the rest of the render. Reading the graph directly makes voice spawns and
+        // routing-effect wiring agree on occupancy by construction, and self-maintains
+        // across the render's life: freeing a voice (`free_voice`/`free_done_synths`, both
+        // via `remove_node`) already strips its edge from the graph, so its slot reopens
+        // here automatically, while a routing effect's edge -- never touched by either free
+        // path -- stays occupied for as long as it lives.
+        let used_slots: Vec<usize> = self.graph.used_input_slots(bus_node).collect();
 
         let free_slot = (0..bus_max).find(|slot| !used_slots.contains(slot))?;
 
         let synth = self.instantiate_synthdef(def);
         let id = self.scheduler.alloc_voice_id();
-        self.graph.connect(synth.output_node(), bus_node, free_slot);
+
+        let pan_nodes = if pan == 0.0 {
+            self.graph.connect(synth.output_node(), bus_node, free_slot);
+            None
+        } else {
+            let const_node = self
+                .graph
+                .add_node(alloc::boxed::Box::new(ugens::Const::new(pan)));
+            let pan2_node = self
+                .graph
+                .add_node(alloc::boxed::Box::new(ugens::Pan2::new()));
+            self.graph.connect(synth.output_node(), pan2_node, 0);
+            self.graph.connect(const_node, pan2_node, 1);
+            self.graph.connect(pan2_node, bus_node, free_slot);
+            Some((pan2_node, const_node))
+        };
+
         self.voices.push(Voice {
             id,
             synth: synth.clone_handle(),
-            bus_input: Some((bus_node, free_slot)),
+            pan_nodes,
         });
         Some(id)
     }
@@ -308,6 +356,10 @@ impl Engine {
         if let Some(pos) = self.voices.iter().position(|v| v.id == voice_id) {
             let voice = self.voices.remove(pos);
             self.remove_synth(&voice.synth);
+            if let Some((pan2_node, const_node)) = voice.pan_nodes {
+                self.graph.remove_node(pan2_node);
+                self.graph.remove_node(const_node);
+            }
         }
         // Keep the allocator's bookkeeping accurate regardless of whether
         // this voice was spawned through the managed path.
@@ -512,6 +564,16 @@ impl Engine {
                     .filter(|v| v.synth.output_node() == synth.output_node())
                     .map(|v| v.id)
                     .collect();
+                // Also tear down any Pan2/Const nodes a panned voice owns —
+                // otherwise they'd leak in the graph once their voice's entry
+                // is gone (see `free_voice`, which does the same cleanup on
+                // the explicit-free path).
+                let freed_pan_nodes: Vec<(NodeId, NodeId)> = self
+                    .voices
+                    .iter()
+                    .filter(|v| v.synth.output_node() == synth.output_node())
+                    .filter_map(|v| v.pan_nodes)
+                    .collect();
                 self.voices
                     .retain(|v| v.synth.output_node() != synth.output_node());
                 if let Some(alloc) = self.voice_alloc.as_mut() {
@@ -521,6 +583,10 @@ impl Engine {
                 }
                 for &id in synth.node_ids() {
                     self.graph.remove_node(id);
+                }
+                for (pan2_node, const_node) in freed_pan_nodes {
+                    self.graph.remove_node(pan2_node);
+                    self.graph.remove_node(const_node);
                 }
                 removed += 1;
             } else {
@@ -582,9 +648,9 @@ impl Engine {
         // 1. Create Bus UGen nodes for each bus
         for bus_id in routing.bus_ids().collect::<Vec<_>>() {
             let (_, channels) = routing.bus_info(bus_id).unwrap();
-            let bus_node = self
-                .graph
-                .add_node(alloc::boxed::Box::new(ugens::Bus::new(channels)));
+            let bus_node = self.graph.add_node(alloc::boxed::Box::new(ugens::Bus::new(
+                ugens::ChannelCount::Custom(channels),
+            )));
             routing.set_bus_node(bus_id, bus_node);
         }
 

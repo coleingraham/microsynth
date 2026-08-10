@@ -72,7 +72,9 @@ fn test_voice_param_control() {
     .unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let voice = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
@@ -101,7 +103,9 @@ fn test_perc_envelope_done_action() {
     .unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let _voice = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
@@ -129,7 +133,9 @@ fn test_asr_done_after_release() {
     .unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let voice = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
@@ -341,7 +347,9 @@ fn test_scheduler_dispatches_events() {
     .unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let voice = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
@@ -374,7 +382,9 @@ fn test_scheduler_param_change() {
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let voice = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();
@@ -500,7 +510,9 @@ fn test_bus_sums_multiple_voices() {
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     // Spawn two voices on the bus
@@ -524,7 +536,9 @@ fn test_bus_voice_removal() {
     let defs = dsl::compile("synthdef tone freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    let bus = engine.graph_mut().add_node(Box::new(ugens::Bus::new(8)));
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
 
     let v1 = engine.spawn_voice_on_bus(&defs[0], bus).unwrap();

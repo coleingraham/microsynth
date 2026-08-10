@@ -72,9 +72,6 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
             case 'spawnVoiceNamed':
                 this.spawnVoiceNamed(msg.id, msg.name, msg.initialAmp);
                 break;
-            case 'setMasterEffect':
-                this.setMasterEffect(msg.name);
-                break;
             case 'masterParam':
                 this.masterParam(msg.param, msg.value);
                 break;
@@ -237,22 +234,6 @@ class MicrosynthProcessor extends AudioWorkletProcessor {
             this.wasm.ms_free(pPtr, pLen);
         }
         this.port.postMessage({ type: 'voiceSpawned', id: requestId, voiceId });
-    }
-
-    setMasterEffect(name) {
-        if (!this.wasm) {
-            this.port.postMessage({ type: 'error', message: 'WASM not initialized' });
-            return;
-        }
-        const { ptr: namePtr, len: nameLen } = this.writeString(name);
-        const result = this.wasm.ms_set_bus_master(namePtr, nameLen);
-        this.wasm.ms_free(namePtr, nameLen);
-
-        if (result === 0) {
-            this.port.postMessage({ type: 'masterEffectSet', name });
-        } else {
-            this.port.postMessage({ type: 'error', message: `Failed to set master effect: ${name}` });
-        }
     }
 
     masterParam(param, value) {

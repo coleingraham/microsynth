@@ -5,16 +5,19 @@
 //! - `oscillators`: SinOsc, Saw, Pulse, Tri, Phasor
 //! - `bl_oscillators`: BlSaw, BlPulse, BlTri (band-limited via polyBLEP)
 //! - `noise`: WhiteNoise, PinkNoise
-//! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, BiquadNotch, AllpassFilter, CombFilter, GVerb, Compressor
+//! - `filters`: OnePole, BiquadLPF, BiquadHPF, BiquadBPF, BiquadNotch, AllpassFilter,
+//!   BiquadPeaking, BiquadLowShelf, BiquadHighShelf, ParametricEq3, CombFilter, GVerb,
+//!   Compressor, Limiter
 //! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive, WaveFolder
-//! - `modulation`: Chorus, Flanger, Phaser
+//! - `modulation`: Chorus, Flanger, Phaser, WowFlutter
 //! - `fm`: FmOsc (two-operator FM synthesis with self-feedback)
 //! - `freqshift`: FreqShift (Hilbert transform frequency shifter)
 //! - `lfo`: Lfo (multi-shape unipolar LFO)
 //! - `stereo`: StereoWidth, PingPongDelay
 //! - `bitcrush`: Bitcrusher (sample rate / bit depth reduction)
+//! - `noise`: WhiteNoise, PinkNoise, VinylCrackle (seeded click noise)
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
@@ -122,6 +125,7 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     // -- Noise --
     reg.register_spec("whiteNoise", || Box::new(WhiteNoise::new()));
     reg.register_spec("pinkNoise", || Box::new(PinkNoise::new()));
+    reg.register_spec("vinylCrackle", || Box::new(VinylCrackle::new()));
 
     // -- Filters --
     reg.register_spec("onePole", || Box::new(OnePole::new()));
@@ -132,6 +136,12 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("allpass", || Box::new(AllpassFilter::new()));
     reg.register_spec("combFilter", || Box::new(CombFilter::new()));
     reg.register_spec("gverb", || Box::new(GVerb::new()));
+
+    // -- Parametric EQ --
+    reg.register_spec("peakingEq", || Box::new(BiquadPeaking::new()));
+    reg.register_spec("lowShelf", || Box::new(BiquadLowShelf::new()));
+    reg.register_spec("highShelf", || Box::new(BiquadHighShelf::new()));
+    reg.register_spec("parametricEq3", || Box::new(ParametricEq3::new()));
 
     // -- Envelopes --
     reg.register_spec("line", || Box::new(Line::new()));
@@ -153,8 +163,9 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("lag", || Box::new(Lag::new()));
     reg.register_spec("clip", || Box::new(Clip::new()));
 
-    // -- Compressor --
+    // -- Compressor / Limiter --
     reg.register_spec("compressor", || Box::new(Compressor::new()));
+    reg.register_spec("limiter", || Box::new(Limiter::new()));
 
     // -- FM Synthesis --
     reg.register_spec("fmOsc", || Box::new(FmOsc::new()));
@@ -166,6 +177,7 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("chorus", || Box::new(Chorus::new()));
     reg.register_spec("flanger", || Box::new(Flanger::new()));
     reg.register_spec("phaser", || Box::new(Phaser::new()));
+    reg.register_spec("wowFlutter", || Box::new(WowFlutter::new()));
 
     // -- Stereo Effects --
     reg.register_spec("stereoWidth", || Box::new(StereoWidth::new()));

@@ -3,6 +3,8 @@ use std::io::{self, Read, Write};
 use clap::{Parser, Subcommand, ValueEnum};
 use microsynth::dsl::{self, UGenRegistry};
 use microsynth::engine::{Engine, EngineConfig};
+#[cfg(feature = "ir")]
+use microsynth::ir::{IrRoutingContainer, build_routed_engine};
 use microsynth::ugens::register_builtins;
 
 #[derive(Parser)]
@@ -42,6 +44,45 @@ enum Command {
         /// Parameter overrides (name=value, repeatable).
         #[arg(long = "param", value_parser = parse_param)]
         params: Vec<(String, f32)>,
+    },
+
+    /// Compile a voice DSL from stdin, load a routing container from a file,
+    /// spawn the voice onto a named bus in that topology, and render offline
+    /// through the full routed graph (bus -> effects -> main). Exercises the
+    /// same container -> RoutingGraph -> engine.build_routing path as the
+    /// wasm ABI's routing-aware exports, from a non-test, non-wasm entry
+    /// point.
+    ///
+    /// Requires the `ir` feature (on by default; off in the wasm build
+    /// profiles — see `web.rs`'s "Multi-bus routing exports" section doc
+    /// comment for why).
+    #[cfg(feature = "ir")]
+    RenderRouted {
+        /// Path to a routing-container file (canonical binary form, i.e.
+        /// `IrRoutingContainer::to_bytes`'s output).
+        #[arg(long)]
+        routing: String,
+
+        /// Bus to spawn the voice onto (must exist in the routing container,
+        /// or be "main").
+        #[arg(long)]
+        bus: String,
+
+        /// Duration in seconds.
+        #[arg(long, default_value = "1.0")]
+        duration: f32,
+
+        /// Sample rate in Hz.
+        #[arg(long, default_value = "44100")]
+        sample_rate: f32,
+
+        /// Output format.
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+
+        /// Output file path (default: stdout for json).
+        #[arg(long)]
+        output: Option<String>,
     },
 }
 
@@ -139,6 +180,99 @@ fn main() {
             engine.prepare();
 
             // Render
+            let num_blocks = ((duration * sample_rate) / block_size as f32).ceil() as usize;
+            let channels = engine.render_offline(num_blocks);
+            let num_samples = channels.first().map_or(0, |c| c.len());
+
+            match format {
+                OutputFormat::Json => {
+                    write_json(&channels, sample_rate, block_size, num_samples, &output);
+                }
+                OutputFormat::Wav => {
+                    let path = output.unwrap_or_else(|| {
+                        eprintln!("--output is required for wav format");
+                        std::process::exit(1);
+                    });
+                    write_wav(&channels, sample_rate, &path);
+                }
+            }
+        }
+
+        #[cfg(feature = "ir")]
+        Command::RenderRouted {
+            routing,
+            bus,
+            duration,
+            sample_rate,
+            format,
+            output,
+        } => {
+            // Read voice DSL from stdin
+            let mut source = String::new();
+            io::stdin()
+                .read_to_string(&mut source)
+                .expect("failed to read stdin");
+
+            let mut registry = UGenRegistry::new();
+            register_builtins(&mut registry);
+
+            let voice_defs = match dsl::compile(&source, &registry) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Compile error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let voice_def = match voice_defs.first() {
+                Some(d) => d,
+                None => {
+                    eprintln!("No synthdef found in input");
+                    std::process::exit(1);
+                }
+            };
+
+            // Load the routing container (buses, routes, effect synthdefs)
+            let container_bytes = std::fs::read(&routing).unwrap_or_else(|e| {
+                eprintln!("failed to read routing container '{routing}': {e}");
+                std::process::exit(1);
+            });
+            let container = IrRoutingContainer::from_bytes(&container_bytes).unwrap_or_else(|e| {
+                eprintln!("failed to decode routing container: {e}");
+                std::process::exit(1);
+            });
+
+            let block_size = 64;
+            let config = EngineConfig {
+                sample_rate,
+                block_size,
+            };
+            let (mut engine, routing_graph) = build_routed_engine(&container, &registry, config)
+                .unwrap_or_else(|e| {
+                    eprintln!("failed to build routing graph: {e}");
+                    std::process::exit(1);
+                });
+
+            let bus_id = routing_graph.bus_by_name(&bus).unwrap_or_else(|| {
+                eprintln!("unknown bus '{bus}' in routing container");
+                std::process::exit(1);
+            });
+            let voice = engine
+                .spawn_voice_on_routing_bus(voice_def, &routing_graph, bus_id)
+                .unwrap_or_else(|| {
+                    eprintln!("failed to spawn voice onto bus '{bus}'");
+                    std::process::exit(1);
+                });
+
+            let has_gate_param = voice_def
+                .param_names()
+                .iter()
+                .any(|(name, _, _)| name == "gate");
+            if has_gate_param {
+                engine.set_voice_param(voice, "gate", 1.0);
+            }
+
+            engine.prepare();
+
             let num_blocks = ((duration * sample_rate) / block_size as f32).ceil() as usize;
             let channels = engine.render_offline(num_blocks);
             let num_samples = channels.first().map_or(0, |c| c.len());
