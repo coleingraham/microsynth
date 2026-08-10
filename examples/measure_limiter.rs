@@ -371,7 +371,7 @@ fn main() {
 /// Requires `ffmpeg` on PATH; run manually with
 /// `cargo run --example measure_limiter -- --characterize`.
 fn characterize_against_ffmpeg() {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     // DEBUG cross-check: the same independently-parameterized (48-tap Hann)
@@ -455,7 +455,7 @@ fn characterize_against_ffmpeg() {
     /// `loudnorm`'s analysis-pass `input_tp`, independent of the TP target
     /// parameter -- more precision than the `ebur128` filter's 1-decimal
     /// `Peak:` summary line.
-    fn ffmpeg_true_peak_dbtp(path: &PathBuf) -> f32 {
+    fn ffmpeg_true_peak_dbtp(path: &Path) -> f32 {
         let out = Command::new("ffmpeg")
             .args([
                 "-nostats",
