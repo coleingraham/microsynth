@@ -2776,6 +2776,155 @@ fn test_limiter_holds_ceiling_independently_per_stereo_channel() {
     );
 }
 
+/// An independently-implemented windowed-sinc true-peak reference --
+/// deliberately NOT `true_peak_dbtp` above (a 4-point Catmull-Rom spline,
+/// the same technique the limiter's estimator used internally before its
+/// fix, which is exactly why that function could not have caught the
+/// estimator's own optimism). This one is a separately-coded
+/// `REF_HALF_TAPS`-tap Blackman-Harris kernel at a different width than the
+/// production estimator's 32 (`SINC_HALF_TAPS` in `filters.rs`) -- not a
+/// call into `filters.rs`'s private functions.
+///
+/// The width was NOT chosen for maximum theoretical precision:
+/// `examples/measure_limiter.rs --characterize`'s sweep found that a
+/// WIDER/sharper kernel (48, even 32, taps) diverges FURTHER from an
+/// independent `ffmpeg -af loudnorm`
+/// measurement on this fixture's near-Nyquist content, not closer --
+/// `ffmpeg`'s own true-peak filter (ITU-R BS.1770-4 Annex 2's standardized
+/// 4x oversampling design) is itself a specific, bandwidth-limited
+/// approximation, not an oracle for the exact continuous-time peak, so an
+/// arbitrarily precise custom filter measures a stricter, non-equivalent
+/// standard. `REF_HALF_TAPS=24` was the narrowest width in that sweep that
+/// did NOT under-report relative to `ffmpeg` on any tested case (always
+/// slightly stricter, by ~0.3-0.4 dB) -- calibrated to avoid both false
+/// negatives (missing what `ffmpeg` would flag) and false positives from
+/// chasing precision `ffmpeg` itself doesn't chase. The real `ffmpeg`-backed
+/// arbiter check and real-material verification live in the caller-side
+/// tooling that drives this UGen, already gating CI there; this function's
+/// job is fast, hermetic regression coverage in this crate, not the final
+/// word on true-peak correctness.
+fn reference_true_peak_dbtp(samples: &[f32], oversample: usize) -> f32 {
+    const REF_HALF_TAPS: isize = 24;
+    let n = samples.len() as isize;
+    let get = |i: isize| -> f32 {
+        let idx = i.clamp(0, n - 1) as usize;
+        samples[idx]
+    };
+    let sinc = |x: f32| -> f32 {
+        if x.abs() < 1e-7 {
+            1.0
+        } else {
+            let px = core::f32::consts::PI * x;
+            px.sin() / px
+        }
+    };
+    // Blackman-Harris window over the 2*REF_HALF_TAPS-tap support.
+    let bh = |n: f32, taps: f32| -> f32 {
+        const A0: f32 = 0.358_75;
+        const A1: f32 = 0.488_29;
+        const A2: f32 = 0.141_28;
+        const A3: f32 = 0.011_68;
+        let x = core::f32::consts::TAU * n / taps;
+        A0 - A1 * x.cos() + A2 * (2.0 * x).cos() - A3 * (3.0 * x).cos()
+    };
+    let taps = (2 * REF_HALF_TAPS) as f32;
+    let mut peak = 0.0f32;
+    for i in 0..samples.len() as isize {
+        peak = peak.max(get(i).abs());
+        for k in 1..oversample {
+            let t = k as f32 / oversample as f32;
+            let mut acc = 0.0f32;
+            for tap in -REF_HALF_TAPS..REF_HALF_TAPS {
+                let sample = get(i + tap);
+                let dist = tap as f32 - t + 1.0;
+                let window = bh(tap as f32 + REF_HALF_TAPS as f32, taps);
+                acc += sample * sinc(dist) * window;
+            }
+            peak = peak.max(acc.abs());
+        }
+    }
+    20.0 * peak.max(1e-9).log10()
+}
+
+/// A regression case using adversarial-but-synthetic stereo material
+/// (multiple simultaneous near-Nyquist tones plus hard
+/// transient bursts, independently chosen per channel -- denser and hotter
+/// than `hot_test_signal_variant` above, closer to the harmonic density of
+/// heavily limited/compressed real program material), verified against
+/// `reference_true_peak_dbtp` -- NOT `true_peak_dbtp` -- so this test cannot
+/// pass merely by agreeing with the same technique the estimator itself
+/// used to use. Watched RED against the prior Catmull-Rom estimator (that
+/// version of this file, temporarily restored with this test already in
+/// place): failed with "measured 2.771 dBTP" against the -1.0 ceiling -- a
+/// 3.77 dB breach with the old estimator and its original 0.2 dB margin, a
+/// real breach, not a hypothetical one. Passes now with the windowed-sinc
+/// estimator and re-derived 2.0 dB margin.
+/// Same shape as `examples/measure_limiter.rs`'s `dense_signal` (the exact
+/// fixture `--characterize` validated the estimator fix against, using
+/// `ffmpeg -af loudnorm` as ground truth) -- kept in lock-step with that
+/// fixture deliberately, not just "similarly dense," so this test's
+/// severity matches what was actually characterized rather than a new,
+/// uncalibrated worst case.
+fn dense_adversarial_signal(sr: f32, len: usize, burst_stride: usize) -> Vec<f32> {
+    let tones = [1200.0, 3000.0, 6000.0, 9000.0, 12000.0, 16000.0];
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let t = i as f32 / sr;
+        let mut s = 0.0f32;
+        for (k, f) in tones.iter().enumerate() {
+            let amp = 0.55 - 0.05 * k as f32;
+            s += amp * (core::f32::consts::TAU * f * t).sin();
+        }
+        if i % burst_stride < 12 {
+            s = if i % 2 == 0 { 1.9 } else { -1.9 };
+        }
+        v.push(s);
+    }
+    v
+}
+
+#[test]
+fn test_limiter_holds_ceiling_on_adversarial_dense_stereo_material() {
+    let sr = 44100.0;
+    let left = dense_adversarial_signal(sr, 8192, 700);
+    let right = dense_adversarial_signal(sr, 8192, 900);
+    let gain = 10f32.powf(12.0 / 20.0); // +12 dB, mid-range of the gains this UGen is expected to hold ceiling under
+    let left: Vec<f32> = left.iter().map(|s| s * gain).collect();
+    let right: Vec<f32> = right.iter().map(|s| s * gain).collect();
+
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 64,
+    });
+    let src = engine.graph_mut().add_node(Box::new(StereoHotSignalSource {
+        left,
+        right,
+        pos: 0,
+    }));
+    let ceiling = engine.graph_mut().add_node(Box::new(Const::new(-1.0)));
+    let release = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+    let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+    engine.graph_mut().connect(src, lim, 0);
+    engine.graph_mut().connect(ceiling, lim, 1);
+    engine.graph_mut().connect(release, lim, 2);
+    engine.graph_mut().set_sink(lim);
+    engine.prepare();
+
+    let output = engine.render_offline(8192 / 64 + 1);
+    let left_tp = reference_true_peak_dbtp(&output[0], 8);
+    let right_tp = reference_true_peak_dbtp(&output[1], 8);
+    assert!(
+        left_tp <= -1.0,
+        "left channel should hold a -1 dBTP ceiling on adversarial dense material per the \
+         independent reference, measured {left_tp:.3} dBTP"
+    );
+    assert!(
+        right_tp <= -1.0,
+        "right channel should hold a -1 dBTP ceiling on adversarial dense material per the \
+         independent reference, measured {right_tp:.3} dBTP"
+    );
+}
+
 #[test]
 fn test_dsl_limiter_compiles() {
     use microsynth::dsl::{self, UGenRegistry};
