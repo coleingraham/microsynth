@@ -8,6 +8,14 @@
 //! catches the case a type-level check can't, an incidental reformatting or
 //! reordering of parameters that would still typecheck (e.g. swapping two
 //! same-typed arguments) but would silently break every existing caller.
+//!
+//! DELIBERATE RETIREMENT: `ms_set_bus_master` is removed from
+//! `PRE_EXISTING_SIGNATURES` below. It was exported dead code: zero call
+//! sites anywhere reachable at runtime (the one JS wrapper that called it,
+//! `processor.js`'s `setMasterEffect`, was itself only reachable from a
+//! `postMessage` case nothing in the repo ever sends). This is the ONE
+//! sanctioned removal from this list; any other signature disappearing is
+//! still a real regression this test must catch.
 
 const WEB_RS: &str = include_str!("../src/web.rs");
 
@@ -16,7 +24,6 @@ const WEB_RS: &str = include_str!("../src/web.rs");
 const PRE_EXISTING_SIGNATURES: &[&str] = &[
     "pub extern \"C\" fn ms_init_with_bus(sample_rate: f32) {",
     "pub unsafe extern \"C\" fn ms_register_def(\n    name_ptr: *const u8,\n    name_len: usize,\n    source_ptr: *const u8,\n    source_len: usize,\n) -> u32 {",
-    "pub unsafe extern \"C\" fn ms_set_bus_master(name_ptr: *const u8, name_len: usize) -> u32 {",
     "pub unsafe extern \"C\" fn ms_master_param(param_ptr: *const u8, param_len: usize, value: f32) {",
     "pub unsafe extern \"C\" fn ms_spawn_voice_named(name_ptr: *const u8, name_len: usize) -> u64 {",
     "pub extern \"C\" fn ms_alloc(size: usize) -> *mut u8 {",
