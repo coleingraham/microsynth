@@ -564,7 +564,9 @@ fn characterize_against_ffmpeg() {
                     right: gr,
                     pos: 0,
                 }));
-                let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(ceiling_db)));
+                let ceiling_n = engine
+                    .graph_mut()
+                    .add_node(Box::new(Const::new(ceiling_db)));
                 let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
                 let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
                 engine.graph_mut().connect(src, lim, 0);
@@ -576,17 +578,21 @@ fn characterize_against_ffmpeg() {
                 let num_blocks = len / block_size + 1;
                 let output = engine.render_offline(num_blocks);
 
-                let self_tp = lin_to_db(true_peak_linear(&output[0], 8)).max(lin_to_db(
-                    true_peak_linear(&output[1], 8),
-                ));
-                let hann_tp = hann_reference_dbtp(&output[0], 8).max(hann_reference_dbtp(&output[1], 8));
+                let self_tp = lin_to_db(true_peak_linear(&output[0], 8))
+                    .max(lin_to_db(true_peak_linear(&output[1], 8)));
+                let hann_tp =
+                    hann_reference_dbtp(&output[0], 8).max(hann_reference_dbtp(&output[1], 8));
 
                 let wav_path = dir.join(format!("{density_name}-{gain_db}dB-{ceiling_db}dBTP.wav"));
                 write_wav_f32(&output, sr, &wav_path);
                 let ffmpeg_tp = ffmpeg_true_peak_dbtp(&wav_path);
 
                 let error = ffmpeg_tp - self_tp;
-                let verdict = if ffmpeg_tp <= ceiling_db { "HOLDS" } else { "BREACH" };
+                let verdict = if ffmpeg_tp <= ceiling_db {
+                    "HOLDS"
+                } else {
+                    "BREACH"
+                };
                 println!(
                     "{density_name:<9} {gain_db:>+5.1}dB  {ceiling_db:>+5.1}dBTP  {self_tp:>10.3}  hann48={hann_tp:>8.3}  {ffmpeg_tp:>10.3}     {error:>+10.3}          {verdict}"
                 );

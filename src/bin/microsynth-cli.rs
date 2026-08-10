@@ -246,8 +246,8 @@ fn main() {
                 sample_rate,
                 block_size,
             };
-            let (mut engine, routing_graph) =
-                build_routed_engine(&container, &registry, config).unwrap_or_else(|e| {
+            let (mut engine, routing_graph) = build_routed_engine(&container, &registry, config)
+                .unwrap_or_else(|e| {
                     eprintln!("failed to build routing graph: {e}");
                     std::process::exit(1);
                 });

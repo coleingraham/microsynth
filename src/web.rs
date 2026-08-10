@@ -1017,12 +1017,11 @@ pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named(
     bus_name_ptr: *const u8,
     bus_name_len: usize,
 ) -> u64 {
-    let name = match core::str::from_utf8(unsafe {
-        core::slice::from_raw_parts(name_ptr, name_len)
-    }) {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
+    let name =
+        match core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
     let bus_name = match core::str::from_utf8(unsafe {
         core::slice::from_raw_parts(bus_name_ptr, bus_name_len)
     }) {
@@ -1099,12 +1098,11 @@ pub unsafe extern "C" fn ms_routing_bus_output(
     out_left: *mut f32,
     out_right: *mut f32,
 ) -> u32 {
-    let name = match core::str::from_utf8(unsafe {
-        core::slice::from_raw_parts(name_ptr, name_len)
-    }) {
-        Ok(s) => s,
-        Err(_) => return 1,
-    };
+    let name =
+        match core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) {
+            Ok(s) => s,
+            Err(_) => return 1,
+        };
     let routing = match unsafe { ROUTING.get_mut() }.as_ref() {
         Some(r) => r,
         None => return 1,
@@ -1184,12 +1182,11 @@ pub unsafe extern "C" fn ms_routing_effect_output(
     out_left: *mut f32,
     out_right: *mut f32,
 ) -> u32 {
-    let name = match core::str::from_utf8(unsafe {
-        core::slice::from_raw_parts(name_ptr, name_len)
-    }) {
-        Ok(s) => s,
-        Err(_) => return 1,
-    };
+    let name =
+        match core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) {
+            Ok(s) => s,
+            Err(_) => return 1,
+        };
     let routing = match unsafe { ROUTING.get_mut() }.as_ref() {
         Some(r) => r,
         None => return 1,

@@ -3,9 +3,11 @@
 //! serializable unit.
 
 use microsynth::dsl::UGenRegistry;
-use microsynth::ir::{IrBus, IrEdge, IrNode, IrRoute, IrRoutingContainer, IrSynthDef, SynthDefClass};
-use microsynth::{engine::EngineConfig, ugens};
+use microsynth::ir::{
+    IrBus, IrEdge, IrNode, IrRoute, IrRoutingContainer, IrSynthDef, SynthDefClass,
+};
 use microsynth::{Engine, RoutingGraph, SynthDefBuilder};
+use microsynth::{engine::EngineConfig, ugens};
 
 /// Hand-built IR for a simple gain effect: `audioIn * 0.5`. Structurally
 /// identical (same node kinds, same order, same edges) to what

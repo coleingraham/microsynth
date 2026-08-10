@@ -79,7 +79,9 @@
 //! (see [`CONTAINER_MAGIC`] vs. `serialize::MAGIC`), so a decoder for one
 //! format cleanly rejects bytes from the other rather than misparsing them.
 
-use super::serialize::{Json, JsonParser, Reader, json_escape, json_sep, put_str, put_u16, put_u32};
+use super::serialize::{
+    Json, JsonParser, Reader, json_escape, json_sep, put_str, put_u16, put_u32,
+};
 use super::{FORMAT_VERSION, IrCodecError, IrError, IrSynthDef, SynthDefClass};
 use crate::dsl::compiler::UGenRegistry;
 use crate::routing::RoutingGraph;
@@ -233,18 +235,18 @@ impl IrRoutingContainer {
         }
 
         for route in &self.routes {
-            let source_bus = routing
-                .bus_by_name(&route.source_bus)
-                .ok_or_else(|| IrRoutingError::UnknownBus {
+            let source_bus = routing.bus_by_name(&route.source_bus).ok_or_else(|| {
+                IrRoutingError::UnknownBus {
                     at: "route.source_bus",
                     name: route.source_bus.clone(),
-                })?;
-            let target_bus = routing
-                .bus_by_name(&route.target_bus)
-                .ok_or_else(|| IrRoutingError::UnknownBus {
+                }
+            })?;
+            let target_bus = routing.bus_by_name(&route.target_bus).ok_or_else(|| {
+                IrRoutingError::UnknownBus {
                     at: "route.target_bus",
                     name: route.target_bus.clone(),
-                })?;
+                }
+            })?;
             let def = effect_defs
                 .iter()
                 .find(|d| d.name() == route.effect_def)
