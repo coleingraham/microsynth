@@ -344,15 +344,257 @@ fn main() {
     println!("\n-- Limiter stereo (independent per-channel content) --");
     measure_stereo_case();
 
-    if let Some(path) = env::args().nth(1) {
-        measure_real_material(&path);
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--characterize") {
+        characterize_against_ffmpeg();
+    } else if let Some(path) = args.first() {
+        measure_real_material(path);
     } else {
         println!(
             "\n(pass a raw interleaved-stereo f32le PCM file path as the first argument to \
              also verify against real material, e.g. a WAV converted with \
-             `ffmpeg -i mix.wav -f f32le -acodec pcm_f32le mix.f32`)"
+             `ffmpeg -i mix.wav -f f32le -acodec pcm_f32le mix.f32`, or pass \
+             `--characterize` to sweep gain/density against an independent ffmpeg \
+             true-peak measurement -- requires ffmpeg on PATH)"
         );
     }
+}
+
+/// Characterize the internal (self) true-peak estimator's error against an
+/// INDEPENDENT measurement, across gain and signal density, so the finding
+/// is a scaling relationship rather than a single number. `ffmpeg`'s
+/// `loudnorm` filter analysis pass emits `input_tp`, a higher-precision
+/// true-peak reading than the `ebur128` filter's 1-decimal summary --
+/// deliberately NOT the same technique as `true_peak_linear` above, which
+/// is what's being checked.
+///
+/// Requires `ffmpeg` on PATH; run manually with
+/// `cargo run --example measure_limiter -- --characterize`.
+fn characterize_against_ffmpeg() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    // DEBUG cross-check: the same independently-parameterized (48-tap Hann)
+    // reference used by tests/ugens.rs's regression test, run here so its
+    // agreement with ffmpeg on the SAME rendered audio can be inspected
+    // directly instead of trusted blindly.
+    fn hann_reference_dbtp(samples: &[f32], oversample: usize) -> f32 {
+        const REF_HALF_TAPS: isize = 24;
+        let n = samples.len() as isize;
+        let get = |i: isize| -> f32 {
+            let idx = i.clamp(0, n - 1) as usize;
+            samples[idx]
+        };
+        let sinc = |x: f32| -> f32 {
+            if x.abs() < 1e-7 {
+                1.0
+            } else {
+                let px = core::f32::consts::PI * x;
+                px.sin() / px
+            }
+        };
+        let bh = |n: f32, taps: f32| -> f32 {
+            const A0: f32 = 0.358_75;
+            const A1: f32 = 0.488_29;
+            const A2: f32 = 0.141_28;
+            const A3: f32 = 0.011_68;
+            let x = core::f32::consts::TAU * n / taps;
+            A0 - A1 * x.cos() + A2 * (2.0 * x).cos() - A3 * (3.0 * x).cos()
+        };
+        let taps = (2 * REF_HALF_TAPS) as f32;
+        let mut peak = 0.0f32;
+        for i in 0..samples.len() as isize {
+            peak = peak.max(get(i).abs());
+            for k in 1..oversample {
+                let t = k as f32 / oversample as f32;
+                let mut acc = 0.0f32;
+                for tap in -REF_HALF_TAPS..REF_HALF_TAPS {
+                    let sample = get(i + tap);
+                    let dist = tap as f32 - t + 1.0;
+                    let window = bh(tap as f32 + REF_HALF_TAPS as f32, taps);
+                    acc += sample * sinc(dist) * window;
+                }
+                peak = peak.max(acc.abs());
+            }
+        }
+        20.0 * peak.max(1e-9).log10()
+    }
+
+    fn write_wav_f32(channels: &[Vec<f32>], sample_rate: f32, path: &PathBuf) {
+        let num_channels = channels.len() as u16;
+        let num_samples = channels.first().map_or(0, |c| c.len());
+        let bits_per_sample: u16 = 32;
+        let byte_rate = sample_rate as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let block_align = num_channels * (bits_per_sample / 8);
+        let data_size = num_samples as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let file_size = 36 + data_size;
+
+        let mut buf: Vec<u8> = Vec::with_capacity(44 + data_size as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+        buf.extend_from_slice(&num_channels.to_le_bytes());
+        buf.extend_from_slice(&(sample_rate as u32).to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            for ch in channels {
+                let sample = ch.get(i).copied().unwrap_or(0.0);
+                buf.extend_from_slice(&sample.to_le_bytes());
+            }
+        }
+        fs::write(path, &buf).expect("failed to write WAV file");
+    }
+
+    /// `loudnorm`'s analysis-pass `input_tp`, independent of the TP target
+    /// parameter -- more precision than the `ebur128` filter's 1-decimal
+    /// `Peak:` summary line.
+    fn ffmpeg_true_peak_dbtp(path: &PathBuf) -> f32 {
+        let out = Command::new("ffmpeg")
+            .args([
+                "-nostats",
+                "-i",
+                path.to_str().unwrap(),
+                "-af",
+                "loudnorm=I=-14:TP=-1:print_format=json",
+                "-f",
+                "null",
+                "-",
+            ])
+            .output()
+            .expect("failed to run ffmpeg -- is it on PATH?");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let needle = "\"input_tp\"";
+        let pos = stderr
+            .find(needle)
+            .unwrap_or_else(|| panic!("no \"input_tp\" in ffmpeg output:\n{stderr}"));
+        let rest = &stderr[pos + needle.len()..];
+        let colon = rest.find(':').unwrap();
+        let after_colon = &rest[colon + 1..];
+        let quote1 = after_colon.find('"').unwrap();
+        let after_q1 = &after_colon[quote1 + 1..];
+        let quote2 = after_q1.find('"').unwrap();
+        after_q1[..quote2]
+            .parse()
+            .unwrap_or_else(|e| panic!("could not parse input_tp {:?}: {e}", &after_q1[..quote2]))
+    }
+
+    /// "sparse": a single overdriven tone plus one short hard transient
+    /// burst per channel -- the same shape `measure_stereo_case` above and
+    /// `tests/ugens.rs`'s `hot_test_signal_variant` use.
+    fn sparse_signal(sr: f32, len: usize, tone_freq: f32, burst_start: usize) -> Vec<f32> {
+        let mut v = Vec::with_capacity(len);
+        for i in 0..len {
+            let t = i as f32 / sr;
+            let mut s = 1.4 * (core::f32::consts::TAU * tone_freq * t).sin();
+            if (burst_start..burst_start + 16).contains(&i) {
+                s = if i % 2 == 0 { 1.8 } else { -1.8 };
+            }
+            v.push(s);
+        }
+        v
+    }
+
+    /// "dense": several simultaneous overdriven tones near/above the
+    /// original -1.4..1.8 hot-signal amplitude range, spaced across the
+    /// spectrum including close to Nyquist, plus MULTIPLE hard transient
+    /// bursts -- closer in harmonic density to real limited/compressed
+    /// program material (many simultaneous near-Nyquist components) than
+    /// the sparse single-tone case, which is what a purely local 4-point
+    /// spline is least equipped to reconstruct accurately.
+    fn dense_signal(sr: f32, len: usize, burst_stride: usize) -> Vec<f32> {
+        let mut v = Vec::with_capacity(len);
+        let tones = [1200.0, 3000.0, 6000.0, 9000.0, 12000.0, 16000.0];
+        for i in 0..len {
+            let t = i as f32 / sr;
+            let mut s = 0.0f32;
+            for (k, f) in tones.iter().enumerate() {
+                let amp = 0.55 - 0.05 * k as f32;
+                s += amp * (core::f32::consts::TAU * f * t).sin();
+            }
+            if i % burst_stride < 12 {
+                s = if i % 2 == 0 { 1.9 } else { -1.9 };
+            }
+            v.push(s);
+        }
+        v
+    }
+
+    let sr = 44100.0;
+    let len = 8192usize;
+    let dir = std::env::temp_dir().join(format!("microsynth-characterize-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("failed to create scratch dir");
+
+    println!(
+        "\n-- estimator error vs. independent ffmpeg measurement --\n\
+         density   gain    ceiling   self-estimate(dBTP)   ffmpeg(dBTP)   error(ffmpeg-self)   verdict(ffmpeg)"
+    );
+
+    for (density_name, left, right) in [
+        (
+            "sparse",
+            sparse_signal(sr, len, 3000.0, 400),
+            sparse_signal(sr, len, 4500.0, 1900),
+        ),
+        (
+            "dense",
+            dense_signal(sr, len, 700),
+            dense_signal(sr, len, 900),
+        ),
+    ] {
+        for gain_db in [6.0f32, 12.0, 18.0] {
+            for ceiling_db in [-1.0f32, -3.0, -6.0] {
+                let g = 10f32.powf(gain_db / 20.0);
+                let gl: Vec<f32> = left.iter().map(|s| s * g).collect();
+                let gr: Vec<f32> = right.iter().map(|s| s * g).collect();
+                let block_size = 64;
+
+                let mut engine = Engine::new(EngineConfig {
+                    sample_rate: sr,
+                    block_size,
+                });
+                let src = engine.graph_mut().add_node(Box::new(StereoPlaybackSource {
+                    left: gl,
+                    right: gr,
+                    pos: 0,
+                }));
+                let ceiling_n = engine.graph_mut().add_node(Box::new(Const::new(ceiling_db)));
+                let release_n = engine.graph_mut().add_node(Box::new(Const::new(0.05)));
+                let lim = engine.graph_mut().add_node(Box::new(Limiter::new()));
+                engine.graph_mut().connect(src, lim, 0);
+                engine.graph_mut().connect(ceiling_n, lim, 1);
+                engine.graph_mut().connect(release_n, lim, 2);
+                engine.graph_mut().set_sink(lim);
+                engine.prepare();
+
+                let num_blocks = len / block_size + 1;
+                let output = engine.render_offline(num_blocks);
+
+                let self_tp = lin_to_db(true_peak_linear(&output[0], 8)).max(lin_to_db(
+                    true_peak_linear(&output[1], 8),
+                ));
+                let hann_tp = hann_reference_dbtp(&output[0], 8).max(hann_reference_dbtp(&output[1], 8));
+
+                let wav_path = dir.join(format!("{density_name}-{gain_db}dB-{ceiling_db}dBTP.wav"));
+                write_wav_f32(&output, sr, &wav_path);
+                let ffmpeg_tp = ffmpeg_true_peak_dbtp(&wav_path);
+
+                let error = ffmpeg_tp - self_tp;
+                let verdict = if ffmpeg_tp <= ceiling_db { "HOLDS" } else { "BREACH" };
+                println!(
+                    "{density_name:<9} {gain_db:>+5.1}dB  {ceiling_db:>+5.1}dBTP  {self_tp:>10.3}  hann48={hann_tp:>8.3}  {ffmpeg_tp:>10.3}     {error:>+10.3}          {verdict}"
+                );
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Two independently-hot channels with different frequency/burst timing.

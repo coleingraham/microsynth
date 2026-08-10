@@ -1088,14 +1088,37 @@ const LIMITER_LOOKAHEAD_SECS: f32 = 0.0015;
 
 /// Small fixed safety margin subtracted from `ceiling` internally.
 ///
-/// The gain applied to a given output sample is a single scalar derived from
-/// its own local peak estimate, but neighboring samples carry very slightly
-/// different gain (the envelope is smoothed, not frozen), so the *actual*
-/// reconstructed inter-sample curve isn't quite the same as "peak estimate
-/// times one gain." Measured residual from that mismatch is ~0.03-0.05 dB
-/// (see the limiter tests in `tests/ugens.rs`); this margin comfortably
-/// covers it plus the two peak estimates' own interpolation error.
-const LIMITER_SAFETY_MARGIN_DB: f32 = 0.2;
+/// Re-derived from characterization data, not assumed. The gain applied to
+/// a given output sample is a single scalar derived from its own local peak
+/// estimate, but neighboring samples carry very slightly different gain
+/// (the envelope is smoothed, not frozen), so the *actual* reconstructed
+/// inter-sample curve isn't quite the same as "peak estimate times one
+/// gain." With the windowed-sinc estimator below (replacing a 4-point
+/// Catmull-Rom spline measured optimistic by several dB on realistic
+/// material -- see that estimator's own doc comment),
+/// `examples/measure_limiter.rs --characterize` measured the *residual* gap
+/// between the estimator and an independent `ffmpeg` true-peak measurement
+/// at a roughly constant +0.34 dB (sparse test content) / +0.68-0.76 dB
+/// (dense, adversarial multi-tone-near-Nyquist content) across every gain
+/// and ceiling swept -- i.e. still a structural bias from finite kernel
+/// width and the single-rate gain architecture (see that module's doc
+/// comment on the fix), just a few dB smaller than before and no longer
+/// scaling with limiting depth. A 1.0 dB margin (i.e. the worst-case 0.757
+/// dB residual plus modest headroom) was tried first and still left the
+/// adversarial dense fixture ~0.1 dB over ceiling -- the smoothed causal
+/// component doesn't reach a newly-lowered target instantaneously, so
+/// re-deriving purely from the *steady-state* residual undercounted the
+/// attack envelope's own settling slop. 1.5 dB held the ceiling against
+/// `ffmpeg` on every case in that sweep, but only with ~0.04 dB to spare on
+/// the adversarial dense case against `tests/ugens.rs`'s permanent
+/// regression check (a differently-windowed, differently-sized reference
+/// than this file's, calibrated to track `ffmpeg` slightly on the strict
+/// side) -- too tight to be a stable, non-flaky gate. 2.0 dB gives that
+/// regression test real headroom while still holding every
+/// `ffmpeg`-verified case comfortably. A separate, larger, whole-piece
+/// guard band applied by callers upstream of this UGen is a different
+/// mechanism with its own disposition, not derived from this number.
+const LIMITER_SAFETY_MARGIN_DB: f32 = 2.0;
 
 /// True-peak (not just sample-peak) brick-wall limiter with look-ahead.
 ///
@@ -1155,6 +1178,14 @@ pub struct Limiter {
     gain_db: [f32; 2],
     attack_coeff: f32,
     sample_rate: f32,
+    /// Precomputed `sinc * Blackman-Harris` kernel, one row per oversample
+    /// phase (`LIMITER_OVERSAMPLE - 1` rows, phase 0 needs no interpolation)
+    /// times `2*SINC_HALF_TAPS` taps per row, flattened. `sin`/`cos` are not
+    /// `const fn`-able on stable Rust and this UGen's `process` runs at
+    /// audio rate (potentially in a WASM AudioWorklet), so the kernel is
+    /// computed once here -- in `init`, off the audio thread's steady-state
+    /// path -- rather than recomputing trig functions per sample per tap.
+    sinc_kernel: alloc::vec::Vec<f32>,
 }
 
 impl Default for Limiter {
@@ -1171,8 +1202,30 @@ impl Limiter {
             gain_db: [0.0; 2],
             attack_coeff: 0.0,
             sample_rate: 44100.0,
+            sinc_kernel: alloc::vec::Vec::new(),
         }
     }
+}
+
+/// Builds the flattened `[phase][tap]` windowed-sinc kernel table described
+/// on [`Limiter::sinc_kernel`]. `phase` is 1-based in the returned table's
+/// row order (row 0 corresponds to oversample phase 1, i.e. `t = 1 /
+/// LIMITER_OVERSAMPLE`) since phase 0 (`t = 0`) is exactly the tap-`k=-1`
+/// sample and needs no interpolation.
+fn build_sinc_kernel() -> alloc::vec::Vec<f32> {
+    let taps = 2 * SINC_HALF_TAPS;
+    let taps_f = taps as f32;
+    let mut table = alloc::vec::Vec::with_capacity((LIMITER_OVERSAMPLE - 1) * taps);
+    for phase in 1..LIMITER_OVERSAMPLE {
+        let t = phase as f32 / LIMITER_OVERSAMPLE as f32;
+        for tap_idx in 0..taps {
+            let k = tap_idx as isize - SINC_HALF_TAPS as isize;
+            let dist = k as f32 - t + 1.0;
+            let window = blackman_harris(k as f32 + SINC_HALF_TAPS as f32, taps_f);
+            table.push(sinc(dist) * window);
+        }
+    }
+    table
 }
 
 /// Precise linear-to-dB conversion for the limiter's peak/gain math.
@@ -1192,66 +1245,132 @@ fn precise_db_to_lin(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// Evaluate a Catmull-Rom cubic through `p0..p3` at `t` in `[0, 1]`,
-/// interpolating between `p1` and `p2`.
-#[inline]
-fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    0.5 * ((2.0 * p1)
-        + (-p0 + p2) * t
-        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
-}
+/// A local 4-point Catmull-Rom spline (the technique this replaced) is a
+/// curve-fitting convenience, not a model of a bandlimited signal's
+/// continuous-time reconstruction — it has no defined stopband, so it
+/// systematically misses inter-sample energy that a real oversampling
+/// reconstruction filter would show. This crate's own characterization
+/// (`examples/measure_limiter.rs --characterize`) measured that blind spot
+/// at a *constant* +3.35 dB (sparse content) / +3.84 dB (dense,
+/// multi-tone content) against an independent `ffmpeg` measurement, present
+/// at every gain and every ceiling tested once the limiter was engaged at
+/// all — i.e. not a "one big spike," a structural bias in the interpolation
+/// technique itself.
+///
+/// The replacement below is a windowed-sinc lowpass reconstruction filter —
+/// the same family ITU-R BS.1770-4 Annex 2 specifies for true-peak
+/// measurement (a proper oversampling filter, not a local polynomial fit).
+/// A `SINC_HALF_TAPS`-sample-radius kernel, windowed with Blackman-Harris to
+/// control stopband ripple, is evaluated at `LIMITER_OVERSAMPLE` phases
+/// between the two nearest real samples; the interpolation converges toward
+/// the actual continuous-time peak of the bandlimited signal as the kernel
+/// widens, unlike the cubic spline's fixed (and biased) 4-point fit.
+const SINC_HALF_TAPS: usize = 32;
 
-/// Oversample factor for the true-peak interpolation below. Matches the
-/// factor the independent `true_peak` test helper measures with, so the
-/// limiter's own estimate of "did I hold the ceiling" isn't coarser than the
-/// check it's judged against.
+/// Oversample factor (phases evaluated between each pair of real samples)
+/// for the true-peak interpolation below.
 const LIMITER_OVERSAMPLE: usize = 8;
 
-/// Causal oversampled true-peak estimate for the sample just written at
-/// `delay(0)`, using only past context (`delay(1)`, `delay(2)`) since its
-/// true future neighbor doesn't exist yet — approximated by repeating the
-/// newest sample. Used only to start the gain envelope moving early, well
-/// before the look-ahead window's exact clamp (below) needs it to have
-/// arrived; the anticipatory read, so a slight underestimate here is fine.
+/// Normalized sinc: `sin(pi*x) / (pi*x)`, with the removable singularity at
+/// `x == 0` handled explicitly.
 #[inline]
-fn causal_true_peak(line: &DelayLine) -> f32 {
-    let p0 = line.read(2);
-    let p1 = line.read(1);
-    let p2 = line.read(0);
-    let p3 = p2;
-    let mut peak = p2.abs();
-    for k in 1..LIMITER_OVERSAMPLE {
-        let t = k as f32 / LIMITER_OVERSAMPLE as f32;
-        peak = peak.max(catmull_rom(p0, p1, p2, p3, t).abs());
+fn sinc(x: f32) -> f32 {
+    if x.abs() < 1e-7 {
+        1.0
+    } else {
+        let px = core::f32::consts::PI * x;
+        px.sin() / px
+    }
+}
+
+/// Blackman-Harris window, `n` in `0..=taps` (inclusive), for a kernel of
+/// `taps` samples total width. Low sidelobes (~-92 dB) keep the windowed
+/// sinc's stopband well below the sub-dB precision this estimate needs.
+#[inline]
+fn blackman_harris(n: f32, taps: f32) -> f32 {
+    const A0: f32 = 0.358_75;
+    const A1: f32 = 0.488_29;
+    const A2: f32 = 0.141_28;
+    const A3: f32 = 0.011_68;
+    let x = core::f32::consts::TAU * n / taps;
+    A0 - A1 * x.cos() + A2 * (2.0 * x).cos() - A3 * (3.0 * x).cos()
+}
+
+/// Windowed-sinc interpolation at oversample `phase` (`1..LIMITER_OVERSAMPLE`,
+/// i.e. `t = phase / LIMITER_OVERSAMPLE`) of a `2*SINC_HALF_TAPS`-sample
+/// kernel, via `get(k)` for `k` in `-SINC_HALF_TAPS..SINC_HALF_TAPS`. By
+/// convention `get(-1)` is the sample at `t=0` and `get(0)` is the sample at
+/// `t=1`; more negative/positive `k` extend the kernel further from the two
+/// samples being interpolated between, giving the sinc kernel the wider
+/// context a bandlimited reconstruction needs beyond just its two nearest
+/// neighbors. `kernel` is [`Limiter::sinc_kernel`] (or an equivalent table
+/// from [`build_sinc_kernel`]) -- the `sinc * window` coefficients, already
+/// computed, so this inner loop is pure multiply-accumulate.
+#[inline]
+fn sinc_interp(kernel: &[f32], phase: usize, get: impl Fn(isize) -> f32) -> f32 {
+    let taps = 2 * SINC_HALF_TAPS;
+    let row = &kernel[(phase - 1) * taps..phase * taps];
+    let mut acc = 0.0f32;
+    for (tap_idx, &coeff) in row.iter().enumerate() {
+        let k = tap_idx as isize - SINC_HALF_TAPS as isize;
+        acc += get(k) * coeff;
+    }
+    acc
+}
+
+/// Causal oversampled true-peak estimate for the sample just written at
+/// `delay(0)`, reconstructing the segment from `delay(1)` (`t=0`) to
+/// `delay(0)` (`t=1`) -- the freshest fully-real segment available, exactly
+/// as the old estimator did, just with a wider sinc kernel instead of a
+/// 4-point spline. Taps beyond `delay(0)` are genuine future samples that
+/// don't exist yet, so they repeat `delay(0)` (the closest real value) --
+/// this only feeds the anticipatory envelope, not the hard ceiling
+/// guarantee, so a slight approximation here is fine (see module doc).
+#[inline]
+fn causal_true_peak(line: &DelayLine, kernel: &[f32]) -> f32 {
+    let newest = line.read(0);
+    let get = |k: isize| -> f32 {
+        if k <= 0 {
+            line.read((-k) as usize)
+        } else {
+            newest
+        }
+    };
+    let mut peak = newest.abs();
+    for phase in 1..LIMITER_OVERSAMPLE {
+        peak = peak.max(sinc_interp(kernel, phase, get).abs());
     }
     peak
 }
 
 /// Exact, symmetric oversampled true-peak estimate for the sample about to
-/// be output, at `delay(center)`. Unlike [`causal_true_peak`], this one has
-/// real neighbors on *both* sides already sitting in the look-ahead buffer
-/// (they were written on later iterations, before this one), so it
-/// interpolates both the segment before and the segment after `center`
-/// exactly the way the independent `true_peak` measurement used to validate
-/// this UGen does — no repeated-sample approximation needed. This is what
-/// gives the ceiling its hard guarantee; [`causal_true_peak`]'s smoothed
-/// envelope only gives it a musical shape.
+/// be output, at `delay(center)`. Unlike [`causal_true_peak`], every tap in
+/// both reconstructed segments is real data already sitting in the
+/// look-ahead buffer (written on earlier iterations), so no repeated-sample
+/// approximation is needed anywhere in the kernel. This is what gives the
+/// ceiling its hard guarantee; [`causal_true_peak`]'s smoothed envelope only
+/// gives it a musical shape.
 #[inline]
-fn centered_true_peak(line: &DelayLine, center: usize) -> f32 {
-    let p_before = line.read(center + 2);
-    let p0 = line.read(center + 1);
-    let p1 = line.read(center);
-    let p2 = line.read(center - 1);
-    let p_after = line.read(center - 2);
-
-    let mut peak = p1.abs();
-    for k in 1..LIMITER_OVERSAMPLE {
-        let t = k as f32 / LIMITER_OVERSAMPLE as f32;
-        peak = peak.max(catmull_rom(p_before, p0, p1, p2, t).abs());
-        peak = peak.max(catmull_rom(p0, p1, p2, p_after, t).abs());
+fn centered_true_peak(line: &DelayLine, center: usize, kernel: &[f32]) -> f32 {
+    let at_center = line.read(center);
+    // Segment "before center": delay(center+1) at t=0 to delay(center) at
+    // t=1, i.e. get_before(-1) = delay(center+1), get_before(0) = delay(center)
+    // => get_before(k) = delay(center - k).
+    let get_before = |k: isize| -> f32 {
+        let delay = center as isize - k;
+        line.read(delay.max(0) as usize)
+    };
+    // Segment "after center": delay(center) at t=0 to delay(center-1) at
+    // t=1, i.e. get_after(-1) = delay(center), get_after(0) = delay(center-1)
+    // => get_after(k) = delay(center - 1 - k).
+    let get_after = |k: isize| -> f32 {
+        let delay = center as isize - 1 - k;
+        line.read(delay.max(0) as usize)
+    };
+    let mut peak = at_center.abs();
+    for phase in 1..LIMITER_OVERSAMPLE {
+        peak = peak.max(sinc_interp(kernel, phase, get_before).abs());
+        peak = peak.max(sinc_interp(kernel, phase, get_after).abs());
     }
     peak
 }
@@ -1266,13 +1385,22 @@ impl UGen for Limiter {
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
-        self.lookahead_samples = ((LIMITER_LOOKAHEAD_SECS * context.sample_rate) as usize).max(4);
+        // Floor raised from 4 to SINC_HALF_TAPS+2: centered_true_peak's wider
+        // sinc kernel reads up to `center - SINC_HALF_TAPS - 1`, which
+        // underflows a `center` smaller than that at degenerate sample rates.
+        self.lookahead_samples =
+            ((LIMITER_LOOKAHEAD_SECS * context.sample_rate) as usize).max(SINC_HALF_TAPS + 2);
         for d in &mut self.delays {
-            d.resize(self.lookahead_samples + 8);
+            // Must cover the widest kernel read: centered_true_peak's
+            // "before" segment reads up to delay(center + SINC_HALF_TAPS).
+            d.resize(self.lookahead_samples + SINC_HALF_TAPS + 2);
         }
         self.gain_db = [0.0; 2];
         let attack_time = LIMITER_LOOKAHEAD_SECS / 4.0;
         self.attack_coeff = (-1.0 / (attack_time * context.sample_rate)).exp();
+        if self.sinc_kernel.is_empty() {
+            self.sinc_kernel = build_sinc_kernel();
+        }
     }
 
     fn reset(&mut self) {
@@ -1295,6 +1423,7 @@ impl UGen for Limiter {
             return;
         }
         let lookahead = self.lookahead_samples;
+        let kernel = self.sinc_kernel.as_slice();
 
         for ch in 0..output.num_channels() {
             let delay_idx = ch.min(1);
@@ -1314,7 +1443,7 @@ impl UGen for Limiter {
                 // Anticipatory component: starts the envelope moving as soon
                 // as a loud sample is *written*, `lookahead` samples before
                 // it will be read back out.
-                let causal_peak_db = precise_lin_to_db(causal_true_peak(delay));
+                let causal_peak_db = precise_lin_to_db(causal_true_peak(delay, kernel));
                 let causal_target_db = (ceiling_db - causal_peak_db).min(0.0);
                 let coeff = if causal_target_db < gain_db {
                     self.attack_coeff // needs MORE reduction: fast, fixed
@@ -1330,7 +1459,7 @@ impl UGen for Limiter {
                 // *more* reduction wins; the exact one is the hard guarantee,
                 // the smoothed one is what keeps it from sounding like a
                 // sample-and-hold gate.
-                let exact_peak_db = precise_lin_to_db(centered_true_peak(delay, lookahead));
+                let exact_peak_db = precise_lin_to_db(centered_true_peak(delay, lookahead, kernel));
                 let exact_target_db = (ceiling_db - exact_peak_db).min(0.0);
                 let applied_gain_db = gain_db.min(exact_target_db);
 
