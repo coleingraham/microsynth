@@ -84,6 +84,21 @@ fn registered_ugens_have_expected_categories() {
 }
 
 #[test]
+fn table_bound_ugens_have_expected_categories() {
+    // Table-bound kinds (MOT-634's `register_table_bound`) live in a map
+    // disjoint from the bare-factory registry `category_of`/`registry()`
+    // above check, so they need their own registration
+    // (`register_table_bound_builtins`) and their own lookup
+    // (`table_bound_entry`, not `entry`).
+    let mut reg = registry();
+    microsynth::register_table_bound_builtins(&mut reg);
+    let entry = reg
+        .table_bound_entry("partialsNoise")
+        .expect("partialsNoise not registered as table-bound");
+    assert_eq!(entry.category, Oscillator, "category of partialsNoise");
+}
+
+#[test]
 fn every_registered_ugen_has_a_category() {
     // Smoke check: every registered entry is reachable and its category is one
     // of the known variants (the type guarantees this, but this also asserts
