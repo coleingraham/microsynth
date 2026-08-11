@@ -61,10 +61,37 @@
 //! parameterization; a convex combination of L1-unit vectors (even
 //! zero-padded ones — zero-padding never changes an L1 sum) is itself
 //! L1-unit. This ugen applies **no renormalization** anywhere in the render
-//! path: each partial's amplitude is `coefficient * mainlobe_gain * fade *
-//! gain`, summed directly, so total output amplitude tracks `gain` exactly
-//! through an interpolated glide. `tests/partials_noise.rs` checks both the
-//! interpolation arithmetic directly and the ugen's rendered peak amplitude.
+//! path.
+//!
+//! For the **partial half**, that gives an exact L1 energy budget: each
+//! partial's amplitude is `coefficient * mainlobe_gain * fade * gain`,
+//! summed directly, and since each term is `amp_m * sin(...)` with `|sin| <=
+//! 1`, the triangle inequality gives `|sum_m amp_m * sin(...)| <= gain *
+//! mainlobe_gain * sum_m |coeff_m|` for every sample — total output
+//! amplitude tracks `gain` exactly through an interpolated glide.
+//!
+//! The **noise half does not inherit that bound in the same form.** Each
+//! band's contribution is `coeff_j * noise_gain * gain * filtered_j`, where
+//! `filtered_j` is a resonant biquad's *output*, not its input — and a
+//! stable IIR filter's worst-case gain against a bounded-magnitude input
+//! (`Rng::next_bipolar()` is uniform on `[-1, 1]`) is its impulse response's
+//! L1 norm `‖h_j‖₁` (`sum_n |h_j[n]|`), not 1. For [`NOISE_BAND_Q`]'s
+//! constant-peak-gain resonance, `‖h_j‖₁` measures **> 1** (QA measured a
+//! real rendered peak of 0.9028 at `gain = 0.9`, all L1 mass on one noise
+//! band, no metadata — exceeding the naive `gain * 1.0 = 0.9` bound; see
+//! `tests/partials_noise.rs`'s `noise_band_l1_bound_requires_the_filter_impulse_response_norm`,
+//! which reproduces that measurement and pins the correct bound: `coeff_j *
+//! noise_gain * gain * ‖h_j‖₁`, not `coeff_j * noise_gain * gain`).
+//!
+//! This is not a headroom risk in practice: the exporter's shipped
+//! `noise_gain` values are ≈0.058 (`motif-soundmatch`'s
+//! `channel_export.py`), which keeps real dictionary tables far below the
+//! bound even with `‖h_j‖₁ > 1`. The point of this section is what the
+//! invariant precisely *is* — exact for the partial half, filter-dependent
+//! for the noise half — not a claim that shipped output risks clipping.
+//! `tests/partials_noise.rs` checks the partial-only bound directly (no
+//! noise mass) and separately closes the noise-band case with its own
+//! filter-dependent bound.
 //!
 //! ## The deterministic bridge (RFC "The bridge is deterministic")
 //!

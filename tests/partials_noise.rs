@@ -401,14 +401,25 @@ fn same_slot_interpolation_tracks_gain_exactly_with_no_renormalization() {
 
 #[test]
 fn birth_death_interpolation_never_exceeds_the_l1_energy_budget() {
-    // Rigorous upper bound, true regardless of phase relationships: since
-    // both endpoint coefficient rows are L1-unit and convex interpolation
-    // (even zero-padded) preserves that, the interpolated row's L1 sum is
-    // exactly 1.0 at every t. By the triangle inequality, |sum_m amp_m *
-    // sin(...)| <= sum_m |amp_m| <= gain * 1.0 for every sample, with
-    // equality only at a vanishingly unlikely phase alignment. A
-    // renormalization bug that *adds* energy (double-counting, a sign
-    // error) is exactly what would push a sample over this bound.
+    // Rigorous upper bound, true regardless of phase relationships -- for
+    // the PARTIAL half only. `birth_death_table()` has `j_noise: 0` on both
+    // entries, so this table exercises exactly that case: since both
+    // endpoint coefficient rows are L1-unit and convex interpolation (even
+    // zero-padded) preserves that, the interpolated row's L1 sum is exactly
+    // 1.0 at every t. By the triangle inequality, |sum_m amp_m * sin(...)|
+    // <= sum_m |amp_m| <= gain * 1.0 for every sample, with equality only at
+    // a vanishingly unlikely phase alignment. A renormalization bug that
+    // *adds* energy (double-counting, a sign error) is exactly what would
+    // push a sample over this bound.
+    //
+    // This bound does NOT generalize to entries carrying noise mass -- a
+    // resonant noise-band biquad's impulse response can have L1 norm > 1, so
+    // `coeff_j * noise_gain * gain` alone is not a valid per-sample bound for
+    // the noise half. See
+    // `noise_band_l1_bound_requires_the_filter_impulse_response_norm` below
+    // (MOT-649 F3) for the noise case and its correct, filter-dependent
+    // bound, and `partials.rs`'s "Simplex closure" module doc for the full
+    // restatement.
     let table = birth_death_table();
     let gain = 0.9;
     let dur_secs = 0.5;
@@ -426,9 +437,148 @@ fn birth_death_interpolation_never_exceeds_the_l1_energy_budget() {
     for (i, &s) in out.iter().enumerate().take(num_samples) {
         assert!(
             s.abs() <= bound,
-            "sample {i}: {s} exceeds the L1 energy budget {bound} (gain={gain})"
+            "sample {i}: {s} exceeds the partial-only L1 energy budget {bound} (gain={gain})"
         );
     }
+}
+
+// ============================================================================
+// 4b. Noise-band L1 energy bound (MOT-649 F3): the partial-only bound above
+// does not hold for entries carrying noise mass. This independently
+// reimplements partials.rs's private mel-spaced band-center formula and
+// filters.rs's private RBJ constant-peak-gain bandpass coefficients (both
+// `pub(crate)`, unreachable from an integration test) to compute the
+// noise-band biquad's impulse-response L1 norm -- the correct filter-
+// dependent bound -- and pins the exact QA-reported violation of the naive
+// bound as the closure test's red evidence. This mirrors an existing
+// cross-boundary precedent: motif-soundmatch's `channel_export.py` already
+// reimplements the same band-center formula for the same reason (F4). If
+// `NOISE_BAND_MIN_HZ` / `NOISE_BAND_MAX_HZ` / `NOISE_BAND_Q` ever change in
+// `partials.rs`, this copy must move with them.
+// ============================================================================
+
+const TEST_NOISE_BAND_MIN_HZ: f32 = 80.0;
+const TEST_NOISE_BAND_MAX_HZ: f32 = 12_000.0;
+const TEST_NOISE_BAND_Q: f32 = 1.0;
+
+fn test_hz_to_mel(hz: f32) -> f32 {
+    2595.0 * (1.0 + hz / 700.0).log10()
+}
+
+fn test_mel_to_hz(mel: f32) -> f32 {
+    700.0 * (10f32.powf(mel / 2595.0) - 1.0)
+}
+
+/// Mirrors `partials.rs::noise_band_centers` plus the Nyquist clamp applied
+/// in `PartialsNoise::init`.
+fn test_clamped_band_center_hz(j_max: usize, band: usize, sample_rate: f32) -> f32 {
+    let mel_lo = test_hz_to_mel(TEST_NOISE_BAND_MIN_HZ);
+    let mel_hi = test_hz_to_mel(TEST_NOISE_BAND_MAX_HZ);
+    let frac = (band as f32 + 0.5) / j_max as f32;
+    let raw = test_mel_to_hz(mel_lo + frac * (mel_hi - mel_lo));
+    let nyquist = sample_rate * 0.5;
+    raw.min(nyquist * 0.9).max(20.0)
+}
+
+/// Mirrors `filters.rs::biquad_bpf_coeffs` (constant-peak-gain RBJ
+/// bandpass), independently re-derived rather than called (private).
+fn test_biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+    let w0 = TAU * freq / sample_rate;
+    let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
+    let alpha = sin_w0 / (2.0 * q);
+    let (b0, b1, b2) = (alpha, 0.0, -alpha);
+    let (a0, a1, a2) = (1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha);
+    (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+}
+
+/// `sum_n |h[n]|` for `n` in `[0, n_samples)`, via the same direct-form-II-
+/// transposed recurrence as `BiquadState::tick` (independently re-derived --
+/// see the section comment above). Every band this ugen uses is stable
+/// (pole radius < 1), so the impulse response decays geometrically and
+/// `n_samples` far beyond that decay makes the truncated sum a tight,
+/// effectively-exact estimate of the true (infinite) L1 norm.
+fn impulse_response_l1_norm(b0: f32, b1: f32, b2: f32, a1: f32, a2: f32, n_samples: usize) -> f32 {
+    let (mut z1, mut z2) = (0.0f32, 0.0f32);
+    let mut total = 0.0f32;
+    for n in 0..n_samples {
+        let x = if n == 0 { 1.0 } else { 0.0 };
+        let y = b0 * x + z1;
+        z1 = b1 * x - a1 * y + z2;
+        z2 = b2 * x - a2 * y;
+        total += y.abs();
+    }
+    total
+}
+
+#[test]
+fn noise_band_l1_bound_requires_the_filter_impulse_response_norm() {
+    // Exact reproduction of the QA report's F3 measurement (MOT-649):
+    // sr=16000, J=4, all L1 mass on band index 2, no metadata (both bridge
+    // scalars default 1.0), gain=0.9. QA measured a real rendered peak of
+    // 0.9028 -- which is the naive "L1 energy budget" bound (gain * 1.0 =
+    // 0.9) being violated. Reproduced here as the closure test's red
+    // evidence, then checked against the correct, filter-dependent bound.
+    let sr = 16_000.0f32;
+    let j_max = 4usize;
+    let band = 2usize;
+    let f0 = 220.0; // Irrelevant: this entry carries no partial mass.
+    let gain = 0.9;
+    let mut noise_coeffs = vec![0.0f32; j_max];
+    noise_coeffs[band] = 1.0;
+    let table = single_entry_table(f0, &[], &noise_coeffs, vec![]);
+
+    let num_samples = 200_000usize;
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: BLOCK_SIZE,
+    });
+    let freq_node = engine.graph_mut().add_node(Box::new(Const::new(f0)));
+    let gain_node = engine.graph_mut().add_node(Box::new(Const::new(gain)));
+    let osc = engine
+        .graph_mut()
+        .add_node(Box::new(PartialsNoise::new(Arc::new(table))));
+    engine.graph_mut().connect(freq_node, osc, 0);
+    engine.graph_mut().connect(gain_node, osc, 1);
+    engine.graph_mut().set_sink(osc);
+    engine.prepare();
+    let out = engine.render_offline(blocks_for(num_samples)).remove(0);
+    let peak = out
+        .iter()
+        .take(num_samples)
+        .fold(0.0f32, |m, &s| m.max(s.abs()));
+
+    // Red evidence: the naive partial-only bound does not hold for the
+    // noise half.
+    let naive_bound = gain * 1.0;
+    assert!(
+        peak > naive_bound,
+        "expected the naive partial-only L1 bound ({naive_bound}) to be \
+         violated by the noise half -- this is the red evidence for F3; got \
+         peak {peak}, which no longer demonstrates the defect"
+    );
+    assert!(
+        (peak - 0.9028).abs() < 5e-4,
+        "expected to reproduce QA's exact measured peak (0.9028); got {peak} \
+         instead -- a mismatch means the RNG/filter recurrence or this \
+         table's construction has drifted from the reported repro"
+    );
+
+    // Correct bound: coeff_j * noise_gain * gain * ||h_j||_1, not
+    // coeff_j * noise_gain * gain. coeff_j = noise_gain = 1.0 here (all mass
+    // on one band, no metadata), so the bound reduces to gain * ||h||_1.
+    let (b0, b1, b2, a1, a2) = test_biquad_bpf_coeffs(
+        test_clamped_band_center_hz(j_max, band, sr),
+        TEST_NOISE_BAND_Q,
+        sr,
+    );
+    let h_l1_norm = impulse_response_l1_norm(b0, b1, b2, a1, a2, 500_000);
+    let correct_bound = gain * h_l1_norm + 1e-4;
+    assert!(
+        peak <= correct_bound,
+        "sample peak {peak} exceeds the filter-dependent bound {correct_bound} \
+         (gain={gain} * ||h||_1={h_l1_norm}) -- this bound should hold even \
+         though the naive one does not"
+    );
 }
 
 // ============================================================================
@@ -505,3 +655,5 @@ fn table_bound_registration_resolves_and_renders() {
         "resolved partialsNoise node should render non-silent output"
     );
 }
+
+
