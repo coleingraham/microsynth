@@ -204,6 +204,7 @@ fn json_handles_inline_consts_and_effect_class() {
         }],
         params: vec![],
         audio_inputs: vec![("in".into(), 0)],
+        table_bindings: vec![],
         output_node: 1,
     };
     let round = IrSynthDef::from_json(&ir.to_json()).unwrap();
@@ -323,6 +324,7 @@ fn validate_rejects_unknown_kind() {
         edges: vec![],
         params: vec![],
         audio_inputs: vec![],
+        table_bindings: vec![],
         output_node: 0,
     };
     assert!(ir.validate(&reg).is_err());
@@ -361,6 +363,7 @@ fn validate_rejects_cycle() {
         ],
         params: vec![],
         audio_inputs: vec![],
+        table_bindings: vec![],
         output_node: 1,
     };
     assert!(ir.validate(&reg).is_err());
@@ -389,6 +392,7 @@ fn validate_rejects_input_port_out_of_range() {
         }],
         params: vec![],
         audio_inputs: vec![],
+        table_bindings: vec![],
         output_node: 1,
     };
     assert!(ir.validate(&reg).is_err());

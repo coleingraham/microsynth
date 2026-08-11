@@ -6,7 +6,7 @@
 //! hand-rolled WAV writer in the CLI). Both forms round-trip; the binary form
 //! is the canonical one the content hash is computed over.
 
-use super::{IrEdge, IrNode, IrParam, IrSynthDef, SynthDefClass};
+use super::{IrEdge, IrNode, IrParam, IrSynthDef, IrTableBinding, SynthDefClass};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -201,6 +201,22 @@ impl IrSynthDef {
         }
 
         put_u32(&mut out, self.output_node as u32);
+
+        // Table bindings (format_version >= 3 only, additive trailing
+        // section — see `ir::FORMAT_VERSION`'s doc for the version-3 bump).
+        // Gated on the stamped version, not unconditionally, so a document
+        // explicitly constructed at an older version round-trips
+        // byte-for-byte through `to_bytes`/`from_bytes` with no trailing
+        // section, matching what a genuinely pre-bump writer would have
+        // produced.
+        if self.format_version >= 3 {
+            put_u32(&mut out, self.table_bindings.len() as u32);
+            for tb in &self.table_bindings {
+                put_u32(&mut out, tb.node as u32);
+                put_u32(&mut out, tb.table_id);
+            }
+        }
+
         out
     }
 
@@ -272,6 +288,23 @@ impl IrSynthDef {
 
         let output_node = r.usize32()?;
 
+        // Table bindings: present only from format_version 3 on. A
+        // version-1/2 document has no trailing section, so this defaults to
+        // empty rather than reading past the end of a shorter, valid buffer.
+        let table_bindings = if format_version >= 3 {
+            let tb_count = r.usize32()?;
+            let mut table_bindings = Vec::with_capacity(tb_count);
+            for _ in 0..tb_count {
+                table_bindings.push(IrTableBinding {
+                    node: r.usize32()?,
+                    table_id: r.u32()?,
+                });
+            }
+            table_bindings
+        } else {
+            Vec::new()
+        };
+
         Ok(IrSynthDef {
             format_version,
             name,
@@ -281,6 +314,7 @@ impl IrSynthDef {
             edges,
             params,
             audio_inputs,
+            table_bindings,
             output_node,
         })
     }
@@ -497,6 +531,21 @@ impl IrSynthDef {
             let _ = write!(s, ",{node}]");
         }
         s.push(']');
+
+        // Omitted (not emitted as an empty array) when there are none, so a
+        // version-3 document with no table bindings is byte-for-byte the
+        // same JSON a version-2 writer would have produced — `from_json`
+        // treats a missing key the same as an empty one either way (see its
+        // doc), so this is a cosmetic choice, not a compatibility
+        // requirement.
+        if !self.table_bindings.is_empty() {
+            s.push_str(",\"table_bindings\":[");
+            for (i, tb) in self.table_bindings.iter().enumerate() {
+                json_sep(&mut s, i);
+                let _ = write!(s, "{{\"node\":{},\"table_id\":{}}}", tb.node, tb.table_id);
+            }
+            s.push(']');
+        }
 
         let _ = write!(s, ",\"output_node\":{}}}", self.output_node);
         s
@@ -839,6 +888,19 @@ impl IrSynthDef {
 
         let output_node = root.usize_field("output_node")?;
 
+        // Absent for any document written before this field existed (or one
+        // that simply has no table bindings) — `get` (not `field`) so a
+        // missing key decodes to empty rather than erroring.
+        let mut table_bindings = Vec::new();
+        if let Some(tbs) = root.get("table_bindings") {
+            for tb in tbs.as_arr()? {
+                table_bindings.push(IrTableBinding {
+                    node: tb.usize_field("node")?,
+                    table_id: tb.field("table_id")?.as_f64()? as u32,
+                });
+            }
+        }
+
         Ok(IrSynthDef {
             format_version,
             name,
@@ -848,6 +910,7 @@ impl IrSynthDef {
             edges,
             params,
             audio_inputs,
+            table_bindings,
             output_node,
         })
     }
