@@ -96,6 +96,15 @@ producer computes once from its own window/FFT configuration:
   its bump mass into a noise-generator gain. Absent: defaults to `1.0`, same
   treatment.
 
+Absent-key defaults are safe only for deliberately-unscaled synthetic tables
+(e.g. microsynth's own Rust-side test tables); a producer exporting real
+fitted dictionaries MUST write both keys explicitly, since a fitted table
+rendered at the 1.0 defaults plays its partials on the order of 1700x too
+hot (at `n_fft=1024`, the real `mainlobe_gain` scalar is ~5.8e-4, not 1.0).
+`motif-soundmatch`'s `channel_export.py` enforces this at encode time
+(`encode_coeff_table`'s `allow_unscaled` guard, MOT-649 F10); any other
+producer of this format must enforce an equivalent guard of its own.
+
 Both are per-entry, not per-column: the mainlobe/noise-magnitude
 relationship is fixed by a table's analysis-time window/FFT configuration,
 which today is constant across an entry's own partial/noise columns rather
