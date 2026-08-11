@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod buffer;
+pub mod coeff_table;
 pub mod context;
 pub mod curve;
 pub mod dsl;
@@ -30,6 +31,7 @@ pub mod web;
 
 // Re-export core types for convenience.
 pub use buffer::{AudioBuffer, Block, MAX_BLOCK_SIZE};
+pub use coeff_table::{CoeffTable, CoeffTableBank, CoeffTableBankError, PitchEntry, TableId};
 pub use context::{ProcessContext, Rate};
 pub use curve::{GlideShape, GlideSpace, glide_fraction};
 pub use engine::{Engine, EngineConfig};
