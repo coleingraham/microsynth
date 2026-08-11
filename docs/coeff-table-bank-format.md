@@ -79,8 +79,40 @@ inverse computation.
 `metadata` is an open `(string, f32)` list, order-preserving. It exists so a
 future field can travel in the format without a version bump: a decoder that
 doesn't recognize a key simply doesn't look for it; an encoder adds a key
-only when it has a value for it. No metadata keys are reserved by this
-document today.
+only when it has a value for it.
+
+Two keys are reserved today, both consumed by the direct-synthesis ugen
+(`microsynth::ugens::partials::PartialsNoise`, MOT-636) as the governing
+RFC's "deterministic bridge" — column mass -> sinusoid amplitude and bump
+mass -> noise-generator gain, both per-entry scalars an analysis-side
+producer computes once from its own window/FFT configuration:
+
+- **`mainlobe_gain`** (f32): the analysis window's mainlobe-gain scalar —
+  multiplies every partial coefficient in the entry to convert its L1 mass
+  into a time-domain sinusoid amplitude. Absent: defaults to `1.0` (the
+  consuming ugen treats coefficients as amplitudes directly).
+- **`noise_gain`** (f32): the expected-white-noise-magnitude scalar for the
+  entry's noise bands — multiplies every noise-band coefficient to convert
+  its bump mass into a noise-generator gain. Absent: defaults to `1.0`, same
+  treatment.
+
+Both are per-entry, not per-column: the mainlobe/noise-magnitude
+relationship is fixed by a table's analysis-time window/FFT configuration,
+which today is constant across an entry's own partial/noise columns rather
+than varying column-by-column. Neither key encodes which of an entry's
+`k_channels` a consumer should render — that selection is a
+construction-time parameter of the consuming ugen (`PartialsNoise`'s
+`with_channel`), not carried in the wire format.
+
+The noise-band scalar bridges between the fixed smooth-noise basis a
+table's coefficients were fit against — defined by the analysis-side
+channel model (`motif-soundmatch`'s `channels.py`, MOT-633) as
+mel-spaced/cepstral smooth bumps — and whatever fixed noise-band
+realization a consuming ugen renders with. The two must describe compatible
+band structure for the scalar to be meaningful; reconciling them is the
+concern of whichever producer/consumer pair is in play, not this document.
+
+No other metadata keys are reserved today.
 
 ### Versioning
 
