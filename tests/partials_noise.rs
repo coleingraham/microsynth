@@ -8,7 +8,9 @@
 //! `ir`-feature registration/resolution wiring end to end.
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank, PitchEntry};
-use microsynth::ugens::partials::{MAINLOBE_GAIN_KEY, NOISE_GAIN_KEY, PartialsNoise};
+use microsynth::ugens::partials::{
+    MAINLOBE_GAIN_KEY, NOISE_GAIN_KEY, NoEntriesForChannel, PartialsNoise,
+};
 use microsynth::ugens::*;
 use microsynth::*;
 use std::f32::consts::TAU;
@@ -582,6 +584,153 @@ fn noise_band_l1_bound_requires_the_filter_impulse_response_norm() {
 }
 
 // ============================================================================
+// 4c. Whole-table vs single-entry channel resolution (MOT-649 F9): a channel
+// index out of range for every entry in a non-empty table is a structurally
+// different failure than a single bad entry among otherwise-fine ones, and
+// must be loud rather than a silently entry-less (silent-output) ugen.
+// ============================================================================
+
+#[test]
+fn with_channel_tolerates_a_single_bad_entry_among_good_ones() {
+    // Entry A carries 2 channels (channel 1 resolves); entry B carries only
+    // 1 (channel 1 is out of range for it). Requesting channel 1 should
+    // silently drop entry B and keep entry A -- the existing, still-desired
+    // single-entry tolerance.
+    let table = CoeffTable {
+        name: "mixed-k-channels".into(),
+        entries: vec![
+            PitchEntry {
+                f0_hz: 110.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: vec![110.0],
+                k_channels: 2,
+                j_noise: 0,
+                coefficients: vec![0.3, 0.8], // channel 0, channel 1
+                metadata: vec![],
+            },
+            PitchEntry {
+                f0_hz: 220.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: vec![220.0],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: vec![0.5], // channel 0 only
+                metadata: vec![],
+            },
+        ],
+    };
+
+    let ugen = PartialsNoise::with_channel(Arc::new(table), 1)
+        .expect("one of two entries resolves channel 1; this must not error");
+
+    // Render at entry A's f0 (110 Hz, the only resolved entry) and confirm
+    // its channel-1 coefficient (0.8) is actually in effect -- proof the
+    // tolerated entry, not a silently-empty ugen, is doing the rendering.
+    let num_samples = 512;
+    let out = render_const(Box::new(ugen), 110.0, 1.0, blocks_for(num_samples));
+    assert!(
+        out.iter().take(num_samples).any(|&s| s != 0.0),
+        "the surviving entry should still render non-silent output"
+    );
+    let peak = out
+        .iter()
+        .take(num_samples)
+        .fold(0.0f32, |m, &s| m.max(s.abs()));
+    assert!(
+        (peak - 0.8).abs() < 1e-3,
+        "peak should track entry A's channel-1 coefficient (0.8), got {peak}"
+    );
+}
+
+#[test]
+fn with_channel_fails_loud_when_every_entry_lacks_the_channel() {
+    // Every entry in this table carries only 1 channel; requesting channel 1
+    // must fail for the whole table, not silently construct an entry-less
+    // (and therefore silently zero-output) ugen -- the F9 defect this test
+    // closes.
+    let table = CoeffTable {
+        name: "all-k1".into(),
+        entries: vec![
+            PitchEntry {
+                f0_hz: 110.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: vec![110.0],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: vec![0.5],
+                metadata: vec![],
+            },
+            PitchEntry {
+                f0_hz: 220.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: vec![220.0],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: vec![0.5],
+                metadata: vec![],
+            },
+        ],
+    };
+
+    let result = PartialsNoise::with_channel(Arc::new(table), 1);
+    assert_eq!(
+        result.err(),
+        Some(NoEntriesForChannel {
+            channel: 1,
+            table_entries: 2,
+        }),
+        "requesting a channel no entry has should fail loud, naming the \
+         channel and how many entries were checked"
+    );
+}
+
+#[test]
+fn with_channel_on_a_zero_entry_table_is_not_an_error() {
+    // A table with no entries at all (e.g. nothing loaded yet) is a
+    // separate, pre-existing, tolerated case -- it must not be conflated
+    // with "every entry present but none resolves the channel".
+    let table = CoeffTable {
+        name: "empty".into(),
+        entries: vec![],
+    };
+    let ugen = PartialsNoise::with_channel(Arc::new(table), 3)
+        .expect("a zero-entry table is valid and must not error");
+    let out = render_const(Box::new(ugen), 220.0, 1.0, blocks_for(128));
+    assert!(
+        out.iter().all(|&s| s == 0.0),
+        "a zero-entry table has nothing to render -- this silence is the \
+         pre-existing, intended behavior, unrelated to F9"
+    );
+}
+
+#[test]
+fn new_panics_when_every_entry_lacks_channel_zero() {
+    // PartialsNoise::new always requests DEFAULT_CHANNEL (0). A malformed,
+    // hand-built table (bypassing CoeffTable::from_bytes's decode-time
+    // validation) where every entry's k_channels == 0 makes even channel 0
+    // unresolvable table-wide -- new()'s internal expect() must surface that
+    // loudly rather than silently building a zero-output ugen.
+    let table = CoeffTable {
+        name: "zero-k-channels".into(),
+        entries: vec![PitchEntry {
+            f0_hz: 110.0,
+            inharmonicity_stretch: 1.0,
+            partial_freqs: vec![],
+            k_channels: 0,
+            j_noise: 0,
+            coefficients: vec![],
+            metadata: vec![],
+        }],
+    };
+    let result = std::panic::catch_unwind(|| PartialsNoise::new(Arc::new(table)));
+    assert!(
+        result.is_err(),
+        "PartialsNoise::new should panic loudly rather than silently \
+         constructing an entry-less ugen when channel 0 resolves nowhere"
+    );
+}
+
+// ============================================================================
 // 5. Registration + IR resolution wiring (mirrors tests/coeff_table_bank.rs).
 // ============================================================================
 
@@ -655,5 +804,3 @@ fn table_bound_registration_resolves_and_renders() {
         "resolved partialsNoise node should render non-silent output"
     );
 }
-
-

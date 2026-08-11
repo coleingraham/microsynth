@@ -21,11 +21,13 @@
 //! feeds it) is upstream arithmetic, not the ugen's business. A `CoeffTable`
 //! entry can carry K channels (MOT-634's format), but this ugen renders
 //! exactly one of them, picked once at construction time
-//! (`with_channel`, default channel 0) — it never blends channels at render
-//! time. A caller that wants a specific pre-mixed timbre uploads a table
-//! whose entries already carry that mix in the selected channel; this ugen's
-//! job stops at rendering whichever fixed coefficient vector each entry
-//! hands it, continuously reinterpreted as f0 glides across the pitch grid.
+//! (`with_channel`, default channel 0, fallible — see its doc — when the
+//! requested channel resolves for none of the table's entries) — it never
+//! blends channels at render time. A caller that wants a specific pre-mixed
+//! timbre uploads a table whose entries already carry that mix in the
+//! selected channel; this ugen's job stops at rendering whichever fixed
+//! coefficient vector each entry hands it, continuously reinterpreted as f0
+//! glides across the pitch grid.
 //!
 //! ## The two axes of "coefficient... update" smoothing (RFC requirement 6)
 //!
@@ -248,6 +250,32 @@ struct EntryData {
     noise_coeffs: Vec<f32>,
 }
 
+/// Returned by [`PartialsNoise::with_channel`] when `channel` resolves for
+/// **none** of a non-empty table's entries (e.g. every entry's `k_channels
+/// <= channel`) — a structurally different failure from a single bad entry
+/// among otherwise-fine ones, which [`extract_entries`] still tolerates (see
+/// its doc). A table with zero entries to begin with is a separate,
+/// pre-existing, tolerated case (an intentionally empty/not-yet-loaded
+/// dictionary) and does not produce this error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEntriesForChannel {
+    /// The channel index that was requested.
+    pub channel: u32,
+    /// How many entries the table had, all of which failed to resolve
+    /// `channel`.
+    pub table_entries: usize,
+}
+
+impl core::fmt::Display for NoEntriesForChannel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "channel {} resolved for none of this table's {} entries",
+            self.channel, self.table_entries
+        )
+    }
+}
+
 /// Extract and sort every resolvable entry of `table`'s channel `channel`.
 ///
 /// An entry whose `channel` is out of range for that entry (or the entry is
@@ -258,6 +286,11 @@ struct EntryData {
 /// own entry order — `CoeffTable`'s doc states ascending-f0 order is "by
 /// convention (not enforced)", so a consumer doing pitch-bracket search
 /// must sort or verify, not assume.
+///
+/// This tolerance is per-entry only. A caller where **every** entry fails to
+/// resolve `channel` gets a loud [`NoEntriesForChannel`] from
+/// [`PartialsNoise::with_channel`], not a silently entry-less (and therefore
+/// silently zero-output) ugen — see that function's doc.
 fn extract_entries(table: &CoeffTable, channel: u32) -> Vec<EntryData> {
     let mut out: Vec<EntryData> = table
         .entries
@@ -319,8 +352,25 @@ impl PartialsNoise {
     /// Construct bound to `table`, rendering channel [`DEFAULT_CHANNEL`] (0)
     /// of each entry. The table-bound factory [`register`] registers
     /// constructs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `table` is non-empty but no entry resolves channel 0 (e.g.
+    /// every entry's `k_channels == 0`) — see [`with_channel`](Self::with_channel)'s
+    /// doc for why this is loud rather than tolerated. This is a
+    /// construction-time (not audio-thread) panic: [`register`]'s factory
+    /// runs during synth instantiation, before any audio renders. For a
+    /// malformed table produced by [`CoeffTable::from_bytes`], this should
+    /// be unreachable — decode-time validation rejects it there; it remains
+    /// reachable only for a hand-built `CoeffTable` that bypassed that
+    /// validation. A well-formed *empty* table (zero entries — e.g. no
+    /// dictionary loaded yet) is unaffected and still constructs normally.
     pub fn new(table: Arc<CoeffTable>) -> Self {
-        Self::with_channel(table, DEFAULT_CHANNEL)
+        Self::with_channel(table, DEFAULT_CHANNEL).expect(
+            "channel 0 always resolves for a well-formed, non-empty CoeffTable \
+             (k_channels >= 1 on every entry); an empty table is a separate, \
+             tolerated case and does not reach this expect",
+        )
     }
 
     /// Construct bound to `table`, rendering a specific channel of each
@@ -329,8 +379,23 @@ impl PartialsNoise {
     /// runtime input — the caller (typically the exporter that resolved
     /// which channel, or an already-mixed-to-one-channel table) picks it
     /// once, up front.
-    pub fn with_channel(table: Arc<CoeffTable>, channel: u32) -> Self {
+    ///
+    /// Returns [`NoEntriesForChannel`] if `table` has at least one entry but
+    /// `channel` resolves for none of them — this is the whole-table failure
+    /// mode (every entry out of range for `channel`), which is a different
+    /// and louder case than a single bad entry among otherwise-fine ones
+    /// (that case is tolerated silently by [`extract_entries`], as before).
+    /// A table with zero entries to begin with is unaffected: it is a valid,
+    /// pre-existing "not yet loaded" case, not this error.
+    pub fn with_channel(table: Arc<CoeffTable>, channel: u32) -> Result<Self, NoEntriesForChannel> {
+        let table_entries = table.entries.len();
         let entries = extract_entries(&table, channel);
+        if table_entries > 0 && entries.is_empty() {
+            return Err(NoEntriesForChannel {
+                channel,
+                table_entries,
+            });
+        }
         let m_max = entries
             .iter()
             .map(|e| e.partial_coeffs.len())
@@ -342,7 +407,7 @@ impl PartialsNoise {
             .max()
             .unwrap_or(0);
         let noise_center_hz = noise_band_centers(j_max);
-        PartialsNoise {
+        Ok(PartialsNoise {
             entries,
             j_max,
             phase: alloc::vec![0.0; m_max],
@@ -351,7 +416,7 @@ impl PartialsNoise {
             noise_center_hz,
             rng: Rng::new(PARTIALS_NOISE_DEFAULT_SEED),
             sample_rate: 44100.0,
-        }
+        })
     }
 
     /// Find the two entry indices bracketing `f0` (equal if `f0` is at or
