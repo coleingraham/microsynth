@@ -81,20 +81,23 @@ impl UGen for OnePole {
 // --- Biquad state ---
 
 /// Per-channel biquad filter state (transposed direct form II).
+///
+/// `pub(crate)`: reused as-is by `ugens::partials`'s shaped-noise band
+/// filters (MOT-636) rather than duplicating the recurrence a second time.
 #[derive(Clone, Copy)]
-struct BiquadState {
+pub(crate) struct BiquadState {
     z1: f32,
     z2: f32,
 }
 
 impl BiquadState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         BiquadState { z1: 0.0, z2: 0.0 }
     }
 
     /// Process one sample through the biquad.
     #[inline]
-    fn tick(&mut self, x: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
+    pub(crate) fn tick(&mut self, x: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
         let y = b0 * x + self.z1;
         self.z1 = b1 * x - a1 * y + self.z2;
         self.z2 = b2 * x - a2 * y;
@@ -154,8 +157,11 @@ fn biquad_hpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
 }
 
 /// Compute biquad bandpass coefficients (constant-peak-gain).
+///
+/// `pub(crate)`: reused by `ugens::partials` for its fixed shaped-noise band
+/// filters (MOT-636).
 #[inline]
-fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+pub(crate) fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = alpha;

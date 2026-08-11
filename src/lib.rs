@@ -45,7 +45,7 @@ pub use scheduler::{EventAction, Scheduler, VoiceId};
 pub use spectral::{Complex, StftProcessor, WindowType};
 pub use synthdef::{Synth, SynthDef, SynthDefBuilder, SynthParam};
 pub use tuning::{TuningTable, apply_cents, hz_to_midi_12tet, midi_to_hz_12tet};
-pub use ugens::register_builtins;
+pub use ugens::{register_builtins, register_table_bound_builtins};
 pub use voice::{
     Admission, LegatoVoice, StealPolicy, Transition, VoiceAllocator, classify_transition,
 };
