@@ -1,5 +1,6 @@
 //! Compiles DSL AST into SynthDef templates.
 
+use crate::coeff_table::CoeffTable;
 use crate::dsl::ast::{Expr, SynthDefDecl, VoiceModeDecl};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory};
 use crate::synthdef::{SynthDef, SynthDefBuilder};
@@ -7,6 +8,7 @@ use crate::ugens;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -23,9 +25,41 @@ pub struct UGenEntry {
     pub output_names: Vec<&'static str>,
 }
 
+/// Factory for a UGen kind whose construction needs a runtime-filled
+/// coefficient table, resolved by id against a [`crate::coeff_table::CoeffTableBank`]
+/// at graph-build time. `Arc`, not a bare `fn` pointer: unlike [`UGenEntry`]'s
+/// `factory`, this closure captures the resolved `Arc<CoeffTable>`, so it
+/// cannot be a plain function pointer (bare `fn` items cannot close over
+/// per-call data). This is the mechanism note in `src/ir/mod.rs`'s "Structural
+/// gap" doc comment resolves: a DSL/IR-reachable UGen kind can now carry
+/// runtime data, without touching how the ~40 existing bare-`fn`-factory
+/// kinds are registered or constructed.
+pub type TableUGenFactory = Arc<dyn Fn(Arc<CoeffTable>) -> Box<dyn UGen> + Send + Sync>;
+
+/// Metadata about a registered table-bound UGen type — the [`UGenEntry`]
+/// counterpart for kinds registered via
+/// [`UGenRegistry::register_table_bound`].
+#[derive(Clone)]
+pub struct TableUGenEntry {
+    /// Factory that creates an instance bound to a specific resolved table.
+    pub factory: TableUGenFactory,
+    /// Coarse category, as declared at registration (unlike [`UGenEntry`],
+    /// there is no construction-time probe instance to read this from: the
+    /// factory needs a table to build one).
+    pub category: UGenCategory,
+    /// Input port names (in order), covering this kind's ordinary
+    /// audio/control-rate ports — the bound table is not itself a port.
+    pub input_names: Vec<&'static str>,
+    /// Output port names.
+    pub output_names: Vec<&'static str>,
+}
+
 /// Registry of available UGen types, keyed by name.
 pub struct UGenRegistry {
     entries: BTreeMap<String, UGenEntry>,
+    /// Table-bound kinds, disjoint from `entries` by name (a kind is either
+    /// bare or table-bound, never both). See [`register_table_bound`](Self::register_table_bound).
+    table_bound: BTreeMap<String, TableUGenEntry>,
 }
 
 impl UGenRegistry {
@@ -33,6 +67,7 @@ impl UGenRegistry {
     pub fn new() -> Self {
         UGenRegistry {
             entries: BTreeMap::new(),
+            table_bound: BTreeMap::new(),
         }
     }
 
@@ -108,6 +143,47 @@ impl UGenRegistry {
     /// Iterate over all registered `(name, entry)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &UGenEntry)> {
         self.entries.iter()
+    }
+
+    /// Register a table-bound UGen kind: one whose construction requires a
+    /// resolved [`CoeffTable`], supplied at graph-build time (never at
+    /// registration time — this factory is called once per resolved
+    /// reference, not once here). `name` must not collide with a kind
+    /// already registered via [`register`](Self::register)/[`register_spec`](Self::register_spec)
+    /// or vice versa; whichever registration happens second silently
+    /// overwrites in its own map today (same last-write-wins behavior as the
+    /// bare-`fn` registry), so callers should keep the two name spaces
+    /// disjoint by convention.
+    pub fn register_table_bound(
+        &mut self,
+        name: impl Into<String>,
+        factory: TableUGenFactory,
+        category: UGenCategory,
+        inputs: &[InputSpec],
+        outputs: &[OutputSpec],
+    ) {
+        let input_names = inputs.iter().map(|i| i.name).collect();
+        let output_names = outputs.iter().map(|o| o.name).collect();
+        self.table_bound.insert(
+            name.into(),
+            TableUGenEntry {
+                factory,
+                category,
+                input_names,
+                output_names,
+            },
+        );
+    }
+
+    /// Look up a registered table-bound kind's metadata by name.
+    pub fn table_bound_entry(&self, name: &str) -> Option<&TableUGenEntry> {
+        self.table_bound.get(name)
+    }
+
+    /// Build an instance of table-bound kind `name`, bound to `table`.
+    /// Returns `None` if `name` is not registered as table-bound.
+    pub fn resolve_table_bound(&self, name: &str, table: Arc<CoeffTable>) -> Option<Box<dyn UGen>> {
+        self.table_bound.get(name).map(|e| (e.factory)(table))
     }
 }
 
