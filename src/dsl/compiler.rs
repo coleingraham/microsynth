@@ -148,12 +148,29 @@ impl UGenRegistry {
     /// Register a table-bound UGen kind: one whose construction requires a
     /// resolved [`CoeffTable`], supplied at graph-build time (never at
     /// registration time — this factory is called once per resolved
-    /// reference, not once here). `name` must not collide with a kind
-    /// already registered via [`register`](Self::register)/[`register_spec`](Self::register_spec)
-    /// or vice versa; whichever registration happens second silently
-    /// overwrites in its own map today (same last-write-wins behavior as the
-    /// bare-`fn` registry), so callers should keep the two name spaces
-    /// disjoint by convention.
+    /// reference, not once here).
+    ///
+    /// `name` should not collide with a kind already registered via
+    /// [`register`](Self::register)/[`register_spec`](Self::register_spec) —
+    /// callers should keep the two name spaces disjoint by convention — but
+    /// "disjoint by convention" is not enforced, and re-registering the
+    /// *same* name in the *same* map (bare-bare or table_bound-table_bound)
+    /// is unconditional last-write-wins, exactly like a plain `BTreeMap`
+    /// insert. A **cross-namespace** collision (a name registered once via
+    /// `register`/`register_spec` and once via `register_table_bound`) is
+    /// different and easy to misread as "last write wins" too: `entries` and
+    /// `table_bound` are separate maps, so neither registration overwrites
+    /// the other — both persist. What a colliding name resolves to then
+    /// depends on where you ask: `crate::ir`'s private `kind_arity` helper
+    /// prefers the bare entry unconditionally (registration order
+    /// irrelevant); node
+    /// construction (`IrSynthDef::compile`/`compile_with_tables`, via
+    /// `build_base`) is decided **per node**, by whether that specific
+    /// node has an [`IrTableBinding`](crate::ir::IrTableBinding) — bound
+    /// nodes use the table-bound factory, unbound nodes use the bare one,
+    /// again regardless of which was registered first or second. See
+    /// `tests` at the bottom of this file for both the same-map and
+    /// cross-namespace cases pinned explicitly.
     pub fn register_table_bound(
         &mut self,
         name: impl Into<String>,
@@ -456,5 +473,186 @@ pub struct CompileError {
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "compile error: {}", self.message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Rate;
+    use crate::ugens::Const;
+
+    fn bare_factory() -> Box<dyn UGen> {
+        Box::new(Const::new(1.0))
+    }
+
+    fn out_spec() -> [OutputSpec; 1] {
+        [OutputSpec {
+            name: "out",
+            rate: Rate::Audio,
+        }]
+    }
+
+    fn in_spec() -> [InputSpec; 1] {
+        [InputSpec {
+            name: "in",
+            rate: Rate::Audio,
+        }]
+    }
+
+    /// MOT-649 F12: re-registering the same name in the *same* map
+    /// (bare-bare) is unconditional last-write-wins, exactly like a plain
+    /// `BTreeMap` insert -- made observable via arity, since `register`'s
+    /// probe-derived `category` would otherwise hide which registration won.
+    #[test]
+    fn bare_bare_collision_is_last_write_wins() {
+        let mut reg = UGenRegistry::new();
+        reg.register("dup", bare_factory, &[], &out_spec());
+        reg.register("dup", bare_factory, &in_spec(), &out_spec());
+        assert_eq!(
+            reg.entry("dup").unwrap().input_names,
+            alloc::vec!["in"],
+            "the second register() call should win over the first, same map"
+        );
+    }
+
+    /// MOT-649 F12: same as above, for the table-bound map.
+    #[test]
+    fn table_bound_table_bound_collision_is_last_write_wins() {
+        let mut reg = UGenRegistry::new();
+        let factory: TableUGenFactory = Arc::new(|_table| Box::new(Const::new(1.0)));
+        reg.register_table_bound(
+            "dup",
+            factory.clone(),
+            UGenCategory::Utility,
+            &[],
+            &out_spec(),
+        );
+        reg.register_table_bound(
+            "dup",
+            factory,
+            UGenCategory::Utility,
+            &in_spec(),
+            &out_spec(),
+        );
+        assert_eq!(
+            reg.table_bound_entry("dup").unwrap().input_names,
+            alloc::vec!["in"],
+            "the second register_table_bound() call should win over the first, same map"
+        );
+    }
+
+    /// MOT-649 F12: a *cross-namespace* collision (same name registered once
+    /// via `register` and once via `register_table_bound`) does NOT
+    /// overwrite either map -- both persist. This is the case the module doc
+    /// warns is easy to misread as "last write wins": it isn't, at the
+    /// registry level.
+    #[test]
+    fn cross_namespace_collision_does_not_overwrite_either_map() {
+        let mut reg = UGenRegistry::new();
+        reg.register("dup", bare_factory, &[], &out_spec());
+        let factory: TableUGenFactory = Arc::new(|_table| Box::new(Const::new(2.0)));
+        reg.register_table_bound("dup", factory, UGenCategory::Utility, &[], &out_spec());
+
+        assert!(
+            reg.entry("dup").is_some(),
+            "the bare entry must survive a table-bound registration under the same name"
+        );
+        assert!(
+            reg.table_bound_entry("dup").is_some(),
+            "the table-bound entry must survive a bare registration under the same name"
+        );
+    }
+
+    /// MOT-649 F12: pins what a cross-namespace-colliding name actually
+    /// resolves to when compiled -- not registration order (bare was
+    /// registered *first* here, table-bound *second*), but whether the
+    /// specific IR node carries an `IrTableBinding`. Without one, the bare
+    /// factory renders (1.0); with one, the table-bound factory renders
+    /// (2.0) -- despite table-bound having been registered second in both
+    /// cases, and despite `validate()` never raising `MissingTableBinding`
+    /// for this kind (it isn't table-bound-*only*, since a bare entry also
+    /// exists).
+    #[cfg(feature = "ir")]
+    #[test]
+    fn colliding_name_dispatch_is_governed_by_table_binding_presence_not_registration_order() {
+        use crate::coeff_table::{CoeffTable, CoeffTableBank};
+        use crate::ir::{FORMAT_VERSION, IrNode, IrSynthDef, IrTableBinding, SynthDefClass};
+        use crate::{Engine, EngineConfig};
+
+        let mut reg = UGenRegistry::new();
+        reg.register("dup", bare_factory, &[], &out_spec()); // registered FIRST
+        let factory: TableUGenFactory = Arc::new(|_table| Box::new(Const::new(2.0)));
+        reg.register_table_bound("dup", factory, UGenCategory::Utility, &[], &out_spec()); // registered SECOND
+
+        let mut bank = CoeffTableBank::new();
+        let table = CoeffTable {
+            name: "unused".into(),
+            entries: alloc::vec![],
+        };
+        let id = bank.register(table);
+
+        let base_def = |table_bindings| IrSynthDef {
+            format_version: FORMAT_VERSION,
+            name: "colliding".into(),
+            class: SynthDefClass::Source,
+            output_channels: 1,
+            nodes: alloc::vec![IrNode::UGen {
+                kind: "dup".into(),
+                consts: alloc::vec![],
+            }],
+            edges: alloc::vec![],
+            params: alloc::vec![],
+            audio_inputs: alloc::vec![],
+            table_bindings,
+            output_node: 0,
+        };
+
+        let render_first_sample = |def: &crate::synthdef::SynthDef| -> f32 {
+            let mut engine = Engine::new(EngineConfig {
+                sample_rate: 44100.0,
+                block_size: 128,
+            });
+            let synth = engine.instantiate_synthdef(def);
+            engine.graph_mut().set_sink(synth.output_node());
+            engine.prepare();
+            let output = engine.render().expect("engine should produce output");
+            output.channel(0).samples()[0]
+        };
+
+        // No table_bindings entry for node 0: validate() does not demand
+        // one (this kind also has a bare entry, so it is not
+        // table-bound-only), and compile() uses the bare factory.
+        let unbound = base_def(alloc::vec![]);
+        unbound
+            .validate(&reg)
+            .expect("a colliding name with a bare entry needs no table binding");
+        let unbound_def = unbound
+            .compile(&reg)
+            .expect("compiles via the bare factory");
+        assert_eq!(
+            render_first_sample(&unbound_def),
+            1.0,
+            "no table binding on the node -> the bare factory (1.0) should render, \
+             even though table-bound was registered second"
+        );
+
+        // node 0 now carries an explicit table binding: build_base's
+        // per-node dispatch uses the table-bound factory instead, still
+        // regardless of registration order.
+        let bound = base_def(alloc::vec![IrTableBinding {
+            node: 0,
+            table_id: id.0,
+        }]);
+        bound.validate(&reg).expect("valid");
+        let bound_def = bound
+            .compile_with_tables(&reg, &bank)
+            .expect("resolves via the table-bound factory");
+        assert_eq!(
+            render_first_sample(&bound_def),
+            2.0,
+            "a table binding on the node -> the table-bound factory (2.0) should \
+             render, matching the module doc's stated per-node dispatch rule"
+        );
     }
 }
