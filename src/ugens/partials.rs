@@ -163,9 +163,13 @@ pub const NOISE_GAIN_KEY: &str = "noise_gain";
 /// [`NOISE_BAND_MAX_HZ`]. Read as one table-wide value (not per-entry) by
 /// [`noise_band_span`] — see that function's doc — and
 /// `docs/coeff-table-bank-format.md`'s Metadata section for the wire
-/// contract.
-pub const NOISE_BAND_MIN_HZ_KEY: &str = "noise_band_min_hz";
-pub const NOISE_BAND_MAX_HZ_KEY: &str = "noise_band_max_hz";
+/// contract. Defined in [`crate::coeff_table`] (not here) since
+/// `CoeffTable::from_bytes` enforces the per-table-consistency convention
+/// these two keys carry (MOT-641 QA F8) — the decoder needs to know these
+/// specific key names, so they live with the decoder, re-exported here for
+/// this ugen's own call sites and for external consumers that used to reach
+/// them at this path.
+pub use crate::coeff_table::{NOISE_BAND_MAX_HZ_KEY, NOISE_BAND_MIN_HZ_KEY};
 
 /// Default seed for the shared shaped-noise source. Mirrors `WhiteNoise`'s /
 /// `PinkNoise`'s fixed-default-seed convention (`ugens/noise.rs`); a voice
@@ -319,6 +323,13 @@ fn metadata_scalar(metadata: &[(alloc::string::String, f32)], key: &str, default
 /// a table, so a well-formed table's exporter writes the same span into every
 /// entry and any one of them is representative. A table with zero entries
 /// gets the hardcoded fallback (nothing to read).
+///
+/// "Any one of them is representative" is a decode-time-enforced fact, not
+/// just a convention, for any `table` that reached here via
+/// `CoeffTable::from_bytes` (MOT-641 QA F8: that decoder rejects a table
+/// whose entries disagree on these two keys). It remains only a convention —
+/// unenforced here — for a hand-built `CoeffTable` that bypassed decoding, as
+/// with every other decode-time check in this format.
 fn noise_band_span(table: &CoeffTable) -> (f32, f32) {
     match table.entries.first() {
         Some(e) => (
@@ -885,5 +896,60 @@ mod tests {
             "identity filter's impulse response is a single 1.0 sample, so \
              its power gain (sum of squares) must be exactly 1.0, got {gain}"
         );
+    }
+
+    /// MOT-641 QA F4: the placement-agreement checks elsewhere (this file's
+    /// other `noise_band_centers` tests, and `motif-soundmatch`'s own
+    /// `noise_band_mismatch_report` tests) compare a reimplementation against
+    /// itself or against another reimplementation of the same formula -- they
+    /// agree even if both sides are wrong the same way. `tests/fixtures/
+    /// noise_band_golden.json` is a checked-in, cross-boundary reference: the
+    /// peak (argmax) bin frequency of `channels.py::noise_basis`'s *actual*
+    /// returned basis matrix (motif-soundmatch), not a re-derivation of its
+    /// formula -- see that file's `_note`/`_method` fields and
+    /// `motif-soundmatch`'s `scripts/gen_noise_band_golden.py`. This asserts
+    /// `noise_band_centers` (the real function the ugen renders with)
+    /// reproduces it within the small residual expected from FFT-bin
+    /// quantization (<2% at every band across all three rates, per the
+    /// generator script's own measurement).
+    #[test]
+    fn noise_band_centers_matches_the_cross_boundary_golden() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("noise_band_golden.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let golden: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        let cases = golden["cases"]
+            .as_array()
+            .expect("golden has a cases array");
+        assert!(!cases.is_empty(), "golden has at least one case");
+
+        for case in cases {
+            let label = case["label"].as_str().unwrap_or("<unlabeled>");
+            let j_noise = case["n_bumps"].as_u64().expect("n_bumps") as usize;
+            let min_hz = case["min_hz"].as_f64().expect("min_hz") as f32;
+            let max_hz = case["max_hz"].as_f64().expect("max_hz") as f32;
+            let expected: alloc::vec::Vec<f32> = case["centers_hz"]
+                .as_array()
+                .expect("centers_hz")
+                .iter()
+                .map(|v| v.as_f64().expect("center") as f32)
+                .collect();
+
+            let actual = noise_band_centers(j_noise, min_hz, max_hz);
+            assert_eq!(actual.len(), expected.len(), "{label}: band count mismatch");
+            for (band, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+                let rel = (a - e).abs() / e.max(1.0);
+                assert!(
+                    rel < 0.02,
+                    "{label} band {band}: analytic noise_band_centers gave \
+                     {a}, golden (empirical, motif-soundmatch) says {e} \
+                     (rel diff {rel:.4}, expected <0.02 -- FFT-bin \
+                     quantization only)"
+                );
+            }
+        }
     }
 }

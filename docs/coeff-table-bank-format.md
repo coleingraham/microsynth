@@ -145,6 +145,19 @@ entry's worth (its first) rather than interpolating or varying it per
 entry — see `partials.rs`'s `noise_band_span` for the read side of this
 convention.
 
+This is enforced, not just documented (MOT-641 QA F8): `CoeffTable::from_bytes`
+rejects a table whose entries disagree on these two keys — one entry carrying
+only one of the pair, or two entries carrying different values — with
+`CoeffTableCodecError::InconsistentNoiseBandSpan` (`coeff_table.rs`). Every
+entry having neither key is a valid agreement (the whole table falls back
+together); a table with 0 or 1 entries trivially satisfies the rule. This
+check only runs at decode time, the same as `MalformedEntry` — a hand-built
+`CoeffTable` that bypasses `from_bytes` is not protected by it, same
+carve-out as every other decode-time check in this format.
+`motif-soundmatch`'s `channel_export.py::encode_coeff_table` makes the
+mirrored assertion at encode time, so a producer bug is caught before the
+bytes are even written, not only when microsynth later decodes them.
+
 Before MOT-641, the noise-band scalar bridged between the fixed
 smooth-noise basis a table's coefficients were fit against — defined by the
 analysis-side channel model (`motif-soundmatch`'s `channels.py`, MOT-633) as

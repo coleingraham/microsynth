@@ -1,0 +1,67 @@
+{
+  "_note": "MOT-641 QA F4 cross-boundary golden. The 'cases' data below is copied verbatim from motif-soundmatch's python/tests/fixtures/noise_band_golden.json (only the leading underscore-prefixed provenance fields differ, e.g. this one and _copied_from_soundmatch_commit) -- checked in here so BOTH repos assert the noise-band placement fix (PartialsNoise::noise_band_centers, partials.rs) against the same fixed, externally-derived reference instead of each side's own reimplementation. Consumed by src/ugens/partials.rs's #[cfg(test)] noise_band_centers_matches_the_cross_boundary_golden test. Do not hand-edit 'cases' -- regenerate on the motif-soundmatch side (see _regenerate_with below) and re-copy that block here.",
+  "_copied_from_soundmatch_commit": "4c9cf1c96072e0ea33dbc539e8dbf0513c4d1860 (motif-soundmatch, branch mot-641-noise-bridge) -- the commit that introduced this exact file there",
+  "_generator": "python/scripts/gen_noise_band_golden.py (motif-soundmatch)",
+  "_regenerate_with": "python3 scripts/gen_noise_band_golden.py  (run from python/, in motif-soundmatch, then copy tests/fixtures/noise_band_golden.json to this path)",
+  "_method": "peak (argmax) bin frequency of each column of channels.py::noise_basis's actual returned basis matrix -- an empirical measurement of the real function's output, not a re-derivation of its mel-edges formula. See the generator script's module docstring for why (and why peak, not centroid).",
+  "_generated_at_commit": "4cacc4268a68d0b7a6b5d788c0beb55913248cc2",
+  "cases": [
+    {
+      "label": "16 kHz stage-0",
+      "sr_hz": 16000.0,
+      "n_fft": 2048,
+      "hop": 512,
+      "n_bumps": 8,
+      "min_hz": 0.0,
+      "max_hz": 8000.0,
+      "centers_hz": [
+        226.5625,
+        523.4375,
+        921.875,
+        1445.3125,
+        2140.625,
+        3054.6875,
+        4265.625,
+        5875.0
+      ]
+    },
+    {
+      "label": "44.1 kHz real-recording",
+      "sr_hz": 44100.0,
+      "n_fft": 4096,
+      "hop": 1024,
+      "n_bumps": 8,
+      "min_hz": 0.0,
+      "max_hz": 22050.0,
+      "centers_hz": [
+        333.7646484375,
+        818.26171875,
+        1528.857421875,
+        2583.984375,
+        4145.1416015625,
+        6427.6611328125,
+        9797.607421875,
+        14750.244140625
+      ]
+    },
+    {
+      "label": "48 kHz real-recording",
+      "sr_hz": 48000.0,
+      "n_fft": 4096,
+      "hop": 1024,
+      "n_bumps": 8,
+      "min_hz": 0.0,
+      "max_hz": 24000.0,
+      "centers_hz": [
+        339.84375,
+        843.75,
+        1593.75,
+        2707.03125,
+        4371.09375,
+        6832.03125,
+        10488.28125,
+        15925.78125
+      ]
+    }
+  ]
+}

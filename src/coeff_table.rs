@@ -114,6 +114,21 @@ pub struct CoeffTable {
     pub entries: Vec<PitchEntry>,
 }
 
+/// Metadata keys (MOT-641) for the noise-band span a table's entries were fit
+/// against, in Hz — `microsynth::ugens::partials::PartialsNoise`'s
+/// [`noise_band_span`](crate::ugens::partials::PartialsNoise)-reading
+/// convention: physically stored per-entry (the wire format's only metadata
+/// slot), but **per-table** by convention (the noise basis a table's
+/// coefficients were fit against is one fixed thing for the whole table —
+/// band identity must not vary within it). [`CoeffTable::from_bytes`]
+/// enforces that convention at decode time (MOT-641 QA F8): every entry must
+/// carry the identical value for both keys, or neither. See
+/// `docs/coeff-table-bank-format.md`'s Metadata section for the full wire
+/// contract, and `partials.rs`'s `NOISE_BAND_MIN_HZ`/`NOISE_BAND_MAX_HZ` for
+/// the fallback span a consuming ugen uses when a table carries neither key.
+pub const NOISE_BAND_MIN_HZ_KEY: &str = "noise_band_min_hz";
+pub const NOISE_BAND_MAX_HZ_KEY: &str = "noise_band_max_hz";
+
 /// Errors from decoding a [`CoeffTable`] from bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoeffTableCodecError {
@@ -128,6 +143,14 @@ pub enum CoeffTableCodecError {
     /// An entry's `coefficients` length did not match
     /// `k_channels * (m_partials + j_noise)`.
     MalformedEntry { index: usize },
+    /// Two entries disagreed on [`NOISE_BAND_MIN_HZ_KEY`]/
+    /// [`NOISE_BAND_MAX_HZ_KEY`] metadata (one has it and the other doesn't,
+    /// or both have it at different values), or a single entry carried only
+    /// one of the two keys (MOT-641 QA F8) — see those constants' doc for why
+    /// this must hold table-wide. Names the first entry that broke the
+    /// pattern the earlier entries established, and that earlier index, for
+    /// diagnosis.
+    InconsistentNoiseBandSpan { first_entry: usize, index: usize },
 }
 
 /// Wire-format magic prefix. See `docs/coeff-table-bank-format.md`.
@@ -235,8 +258,58 @@ impl CoeffTable {
             }
             entries.push(entry);
         }
+        validate_noise_band_span_consistency(&entries)?;
         Ok(CoeffTable { name, entries })
     }
+}
+
+/// Looks up `key` in `metadata`, returning `None` if absent (distinct from
+/// [`PitchEntry`]'s own consumer-facing default-substituting lookup — this
+/// needs to know *presence*, not just value, to catch a lone key).
+fn metadata_value(metadata: &[(String, f32)], key: &str) -> Option<f32> {
+    metadata
+        .iter()
+        .find(|(k, _)| k.as_str() == key)
+        .map(|(_, v)| *v)
+}
+
+/// MOT-641 QA F8: every entry must agree on [`NOISE_BAND_MIN_HZ_KEY`]/
+/// [`NOISE_BAND_MAX_HZ_KEY`] — both present at the identical value, or both
+/// absent — across the whole table. A table with 0 or 1 entries trivially
+/// satisfies this (nothing to disagree with). See those constants' doc for
+/// why this is a decode-time, not just documented, rule.
+fn validate_noise_band_span_consistency(
+    entries: &[PitchEntry],
+) -> Result<(), CoeffTableCodecError> {
+    let mut baseline: Option<(usize, Option<(f32, f32)>)> = None;
+    for (index, entry) in entries.iter().enumerate() {
+        let min = metadata_value(&entry.metadata, NOISE_BAND_MIN_HZ_KEY);
+        let max = metadata_value(&entry.metadata, NOISE_BAND_MAX_HZ_KEY);
+        let this = match (min, max) {
+            (Some(a), Some(b)) => Some((a, b)),
+            (None, None) => None,
+            _ => {
+                // A lone key within a single entry is inconsistent on its
+                // own, independent of any other entry.
+                return Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                    first_entry: index,
+                    index,
+                });
+            }
+        };
+        match &baseline {
+            None => baseline = Some((index, this)),
+            Some((first_entry, expected)) => {
+                if *expected != this {
+                    return Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                        first_entry: *first_entry,
+                        index,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Errors from a [`CoeffTableBank`] operation.
@@ -400,6 +473,138 @@ mod tests {
         assert_eq!(
             CoeffTable::from_bytes(&bytes),
             Err(CoeffTableCodecError::MalformedEntry { index: 0 })
+        );
+    }
+
+    /// A two-entry table (K=1, M=1, J=0 — the noise-band span keys don't
+    /// interact with partial/noise coefficient counts, so the simplest
+    /// possible entry shape isolates the span-consistency check).
+    fn two_entry_table(metadata: [Vec<(String, f32)>; 2]) -> CoeffTable {
+        let [meta0, meta1] = metadata;
+        CoeffTable {
+            name: "span-consistency".into(),
+            entries: alloc::vec![
+                PitchEntry {
+                    f0_hz: 110.0,
+                    inharmonicity_stretch: 1.0,
+                    partial_freqs: alloc::vec![110.0],
+                    k_channels: 1,
+                    j_noise: 0,
+                    coefficients: alloc::vec![1.0],
+                    metadata: meta0,
+                },
+                PitchEntry {
+                    f0_hz: 220.0,
+                    inharmonicity_stretch: 1.0,
+                    partial_freqs: alloc::vec![220.0],
+                    k_channels: 1,
+                    j_noise: 0,
+                    coefficients: alloc::vec![1.0],
+                    metadata: meta1,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn from_bytes_accepts_a_table_where_no_entry_carries_a_noise_band_span() {
+        let table = two_entry_table([alloc::vec![], alloc::vec![]]);
+        let bytes = table.to_bytes();
+        assert_eq!(CoeffTable::from_bytes(&bytes), Ok(table));
+    }
+
+    #[test]
+    fn from_bytes_accepts_a_table_where_every_entry_agrees_on_the_span() {
+        let span = alloc::vec![
+            (NOISE_BAND_MIN_HZ_KEY.into(), 0.0),
+            (NOISE_BAND_MAX_HZ_KEY.into(), 8000.0),
+        ];
+        let table = two_entry_table([span.clone(), span]);
+        let bytes = table.to_bytes();
+        assert_eq!(CoeffTable::from_bytes(&bytes), Ok(table));
+    }
+
+    #[test]
+    fn from_bytes_rejects_entries_disagreeing_on_the_span_value() {
+        let table = two_entry_table([
+            alloc::vec![
+                (NOISE_BAND_MIN_HZ_KEY.into(), 0.0),
+                (NOISE_BAND_MAX_HZ_KEY.into(), 8000.0),
+            ],
+            alloc::vec![
+                (NOISE_BAND_MIN_HZ_KEY.into(), 0.0),
+                (NOISE_BAND_MAX_HZ_KEY.into(), 22_050.0),
+            ],
+        ]);
+        let bytes = table.to_bytes();
+        assert_eq!(
+            CoeffTable::from_bytes(&bytes),
+            Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                first_entry: 0,
+                index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_entries_where_only_some_carry_a_span() {
+        let table = two_entry_table([
+            alloc::vec![
+                (NOISE_BAND_MIN_HZ_KEY.into(), 0.0),
+                (NOISE_BAND_MAX_HZ_KEY.into(), 8000.0),
+            ],
+            alloc::vec![],
+        ]);
+        let bytes = table.to_bytes();
+        assert_eq!(
+            CoeffTable::from_bytes(&bytes),
+            Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                first_entry: 0,
+                index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_an_entry_carrying_only_one_span_key() {
+        let table = two_entry_table([
+            alloc::vec![(NOISE_BAND_MIN_HZ_KEY.into(), 0.0)],
+            alloc::vec![],
+        ]);
+        let bytes = table.to_bytes();
+        assert_eq!(
+            CoeffTable::from_bytes(&bytes),
+            Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                first_entry: 0,
+                index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn from_bytes_accepts_a_single_entry_table_regardless_of_span_metadata() {
+        // Nothing to disagree with at 0 or 1 entries.
+        let table = CoeffTable {
+            name: "one-entry".into(),
+            entries: alloc::vec![PitchEntry {
+                f0_hz: 110.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: alloc::vec![110.0],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: alloc::vec![1.0],
+                metadata: alloc::vec![(NOISE_BAND_MIN_HZ_KEY.into(), 0.0)],
+            }],
+        };
+        let bytes = table.to_bytes();
+        assert_eq!(
+            CoeffTable::from_bytes(&bytes),
+            Err(CoeffTableCodecError::InconsistentNoiseBandSpan {
+                first_entry: 0,
+                index: 0,
+            }),
+            "a lone key is still inconsistent even with only one entry -- \
+             that check is per-entry, not cross-entry"
         );
     }
 
