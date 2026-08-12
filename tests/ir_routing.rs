@@ -35,6 +35,7 @@ fn ir_gain_half_def() -> IrSynthDef {
         ],
         params: vec![],
         audio_inputs: vec![("in".to_string(), 0)],
+        table_bindings: vec![],
         output_node: 2,
     }
 }

@@ -60,6 +60,7 @@ pub mod math;
 pub mod modulation;
 pub mod noise;
 pub mod oscillators;
+pub mod partials;
 pub mod physical;
 pub mod playbuf;
 pub(crate) mod rng;
@@ -83,6 +84,7 @@ pub use math::*;
 pub use modulation::*;
 pub use noise::*;
 pub use oscillators::*;
+pub use partials::PartialsNoise;
 pub use physical::*;
 pub use playbuf::*;
 pub use spectral::*;
@@ -213,4 +215,19 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("sawTable", || Box::new(saw_table()));
     reg.register_spec("triTable", || Box::new(tri_table()));
     reg.register_spec("squareTable", || Box::new(square_table()));
+}
+
+/// Register every built-in **table-bound** UGen kind (MOT-634's
+/// `UGenRegistry::register_table_bound` mechanism) — disjoint from
+/// [`register_builtins`] because a table-bound kind's factory needs a
+/// resolved [`crate::coeff_table::CoeffTable`] at construction time, which no
+/// bare `fn() -> Box<dyn UGen>` factory can capture (see
+/// `docs/coeff-table-bank-format.md`). Call this alongside `register_builtins`
+/// from any host that resolves table-bound kinds (today: native / `ir`-feature
+/// tooling — `IrSynthDef::compile_with_tables` is the step that is
+/// `ir`-gated, not this registration).
+///
+/// Currently registers `partialsNoise` (`ugens::partials`, MOT-636).
+pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
+    partials::register(reg);
 }

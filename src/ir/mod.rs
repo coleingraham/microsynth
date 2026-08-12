@@ -26,6 +26,7 @@
 //! the DSL compiler uses, so `DSL → SynthDef` and `DSL → IR → SynthDef` render
 //! byte-identically by construction.
 
+use crate::coeff_table::{CoeffTable, CoeffTableBank};
 use crate::dsl::ast::{BinOp, Expr, SynthDefDecl};
 use crate::dsl::compiler::UGenRegistry;
 use crate::synthdef::{SynthDef, SynthDefBuilder};
@@ -33,6 +34,7 @@ use crate::ugens::{self, BinOpKind};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -59,7 +61,16 @@ pub use serialize::IrCodecError;
 /// — pre-existing version-1 single-def files decode unchanged. See the
 /// `ir::container` module's doc comment (source: `src/ir/container.rs`) for
 /// the container's format and the `busId` identity it defines.
-pub const FORMAT_VERSION: u16 = 2;
+///
+/// **Version 3** (bumped from 2) added [`IrTableBinding`]/`IrSynthDef::table_bindings`
+/// — the coefficient-table-bank id-reference mechanism (MOT-634; see that
+/// field's doc for what it does and why it lives here rather than as a new
+/// `IrNode` variant). Same back-compat shape as the version-2 bump: a
+/// version-2 (or 1) document has no trailing table-bindings section, and
+/// `from_bytes`/`from_json` default it to empty rather than erroring, so
+/// pre-existing documents still decode. `IrNode`'s own byte layout is again
+/// unchanged.
+pub const FORMAT_VERSION: u16 = 3;
 
 /// The structural class of a SynthDef — a discriminant carried in the wire
 /// format from day one so adding classes later is not a breaking bump. Only
@@ -110,6 +121,30 @@ pub struct IrParam {
     pub default: f32,
 }
 
+/// Binds node `node` (a table-bound [`IrNode::UGen`] kind — one registered
+/// via [`crate::dsl::compiler::UGenRegistry::register_table_bound`], not the
+/// ordinary bare-factory registry) to coefficient table `table_id` in a
+/// [`crate::coeff_table::CoeffTableBank`], resolved at
+/// [`IrSynthDef::compile_with_tables`] time.
+///
+/// A side table alongside `nodes`/`edges`/`params` — the same shape as
+/// [`IrParam`] — rather than a new [`IrNode`] variant, because a table
+/// reference is not a value flowing through the signal graph the way a
+/// `Const`/`Param` output is: it identifies which data a node's *construction*
+/// should be bound to, not a port any edge could carry. This is the "IR
+/// extension" arm of the id-reference mechanism this ticket owns; see
+/// `docs/coeff-table-bank-format.md` for the full design note, including why
+/// the DSL text surface does not (yet) expose an equivalent — that document
+/// covers the deliberate scope boundary of what this bump does and does not
+/// wire up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrTableBinding {
+    /// Index into `IrSynthDef::nodes` of the table-bound UGen node.
+    pub node: usize,
+    /// The table id to resolve against the bank passed to `compile_with_tables`.
+    pub table_id: u32,
+}
+
 /// The inspectable, serializable form of a synthesis graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrSynthDef {
@@ -124,6 +159,10 @@ pub struct IrSynthDef {
     pub params: Vec<IrParam>,
     /// Audio input nodes `(name, node_index)` — non-empty only for effects.
     pub audio_inputs: Vec<(String, usize)>,
+    /// Coefficient-table id references (MOT-634; format version 3+). Empty
+    /// for every document produced before this field existed, and for any
+    /// document that simply doesn't use table-bound UGen kinds.
+    pub table_bindings: Vec<IrTableBinding>,
     pub output_node: usize,
 }
 
@@ -148,6 +187,18 @@ pub enum IrError {
     ParamNotAParamNode { param: String, node: usize },
     /// A `Source` has an audio input, or an `Effect` has none.
     ShellViolation(String),
+    /// A `table_bindings` entry references a node that is not an
+    /// `IrNode::UGen` (a `Const`/`Param` has nothing to bind a table to).
+    TableBindingNotAUGenNode { node: usize },
+    /// A node whose kind is registered *only* as table-bound (no bare-factory
+    /// entry) has no `table_bindings` entry naming it — it can never be
+    /// constructed. This is the check that turns "forgot to bind a table"
+    /// into a validation error instead of a silently-unfilled node — see
+    /// `IrTableBinding`'s doc.
+    MissingTableBinding { node: usize, kind: String },
+    /// `compile_with_tables` could not resolve a `table_bindings` entry's id
+    /// against the bank it was given.
+    TableNotFound(u32),
 }
 
 impl fmt::Display for IrError {
@@ -170,6 +221,17 @@ impl fmt::Display for IrError {
                 )
             }
             IrError::ShellViolation(msg) => write!(f, "shell violation: {msg}"),
+            IrError::TableBindingNotAUGenNode { node } => {
+                write!(
+                    f,
+                    "table binding references node {node}, which is not a UGen"
+                )
+            }
+            IrError::MissingTableBinding { node, kind } => write!(
+                f,
+                "node {node} (kind {kind:?}) is table-bound-only but has no table_bindings entry"
+            ),
+            IrError::TableNotFound(id) => write!(f, "table id {id} not found in bank"),
         }
     }
 }
@@ -224,9 +286,28 @@ fn core_kind_arity(kind: &str) -> Option<usize> {
     }
 }
 
-/// Input arity of a UGen kind: core arithmetic, or the registry's port count.
+/// Input arity of a UGen kind: core arithmetic, the bare registry's port
+/// count, or (if neither) the table-bound registry's port count. Checking
+/// both registries here — rather than just the bare one — lets `validate`
+/// arity-check a table-bound-only kind's edges even though
+/// [`add_ugen_node`] (the bare-factory construction path `compile` uses)
+/// cannot build one; [`MissingTableBinding`](IrError::MissingTableBinding)
+/// is the separate check that catches a table-bound-only kind with no
+/// binding before it ever reaches construction.
 fn kind_arity(reg: &UGenRegistry, kind: &str) -> Option<usize> {
-    core_kind_arity(kind).or_else(|| reg.entry(kind).map(|e| e.input_names.len()))
+    core_kind_arity(kind)
+        .or_else(|| reg.entry(kind).map(|e| e.input_names.len()))
+        .or_else(|| reg.table_bound_entry(kind).map(|e| e.input_names.len()))
+}
+
+/// Whether `kind` is registered *only* as table-bound (no bare-factory
+/// entry and not a core arithmetic kind) — the condition
+/// [`IrError::MissingTableBinding`] guards against when unaccompanied by a
+/// `table_bindings` entry.
+fn is_table_bound_only(reg: &UGenRegistry, kind: &str) -> bool {
+    core_kind_arity(kind).is_none()
+        && reg.entry(kind).is_none()
+        && reg.table_bound_entry(kind).is_some()
 }
 
 /// Bounds-check a referenced node index, labelling the referrer for the error.
@@ -303,6 +384,28 @@ impl IrSynthDef {
             require_node(n, *node, "audio_input")?;
         }
 
+        // Table bindings: node in range and a UGen node.
+        for tb in &self.table_bindings {
+            require_node(n, tb.node, "table_binding.node")?;
+            if !matches!(self.nodes[tb.node], IrNode::UGen { .. }) {
+                return Err(IrError::TableBindingNotAUGenNode { node: tb.node });
+            }
+        }
+
+        // Every table-bound-only kind must have a binding — otherwise it can
+        // never be constructed by either compile path.
+        for (i, node) in self.nodes.iter().enumerate() {
+            if let IrNode::UGen { kind, .. } = node
+                && is_table_bound_only(reg, kind)
+                && !self.table_bindings.iter().any(|tb| tb.node == i)
+            {
+                return Err(IrError::MissingTableBinding {
+                    node: i,
+                    kind: kind.clone(),
+                });
+            }
+        }
+
         self.check_acyclic()?;
         self.check_shell()?;
         Ok(())
@@ -375,13 +478,71 @@ impl IrSynthDef {
     /// IR indices (so edges stay valid); inline `consts` are materialized as
     /// extra `Const` nodes appended afterwards.
     ///
+    /// A document whose `table_bindings` is non-empty cannot be compiled this
+    /// way: the node(s) it names are table-bound-only kinds with no bare
+    /// factory, so building them here fails with [`IrError::UnknownKind`].
+    /// Use [`compile_with_tables`](Self::compile_with_tables) for those.
+    ///
     /// Assumes the IR is valid; call [`validate`](Self::validate) first if the
     /// IR comes from an untrusted source.
     pub fn compile(&self, reg: &UGenRegistry) -> Result<SynthDef, IrError> {
+        let resolved: BTreeMap<usize, Arc<CoeffTable>> = BTreeMap::new();
+        let mut builder = self.build_base(reg, &resolved)?;
+        builder.set_output(self.output_node);
+        Ok(builder.build())
+    }
+
+    /// Like [`compile`](Self::compile), but also resolves every entry in
+    /// `table_bindings` against `bank` and binds the resulting table to its
+    /// node — the compile-time half of the coefficient-table-bank
+    /// id-reference mechanism (see [`IrTableBinding`]'s doc).
+    ///
+    /// Resolution is a snapshot: each bound node's factory closes over an
+    /// `Arc<CoeffTable>` cloned from the bank at this call, not a live
+    /// handle to the bank. A synth compiled this way does not observe a
+    /// later [`CoeffTableBank::replace`]/[`CoeffTableBank::free`] on the same
+    /// id — proving that a *later* `compile_with_tables` call sees updated
+    /// or removed content is how the replace/free paths are covered (see
+    /// `tests/coeff_table_bank.rs`), not live in-synth updates. Whether a
+    /// future consuming UGen wants live re-resolution per block (which would
+    /// need a bank handle reachable from `process()`, not just `compile`) is
+    /// left to whichever ticket adds that UGen.
+    ///
+    /// Errors with [`IrError::UnknownKind`] if a bound node's kind is not a
+    /// registered table-bound kind, and with [`IrError::TableNotFound`] if
+    /// its `table_id` is not currently registered in `bank`.
+    pub fn compile_with_tables(
+        &self,
+        reg: &UGenRegistry,
+        bank: &CoeffTableBank,
+    ) -> Result<SynthDef, IrError> {
+        let mut resolved: BTreeMap<usize, Arc<CoeffTable>> = BTreeMap::new();
+        for binding in &self.table_bindings {
+            let table = bank
+                .get(crate::coeff_table::TableId(binding.table_id))
+                .ok_or(IrError::TableNotFound(binding.table_id))?;
+            resolved.insert(binding.node, Arc::new(table.clone()));
+        }
+        let mut builder = self.build_base(reg, &resolved)?;
+        builder.set_output(self.output_node);
+        Ok(builder.build())
+    }
+
+    /// Shared node/edge/param/audio-input construction for
+    /// [`compile`](Self::compile) and
+    /// [`compile_with_tables`](Self::compile_with_tables). `resolved` maps a
+    /// node index to an already-resolved table for that node (empty for
+    /// plain `compile`); every other node is built exactly as `compile`
+    /// always has.
+    fn build_base(
+        &self,
+        reg: &UGenRegistry,
+        resolved: &BTreeMap<usize, Arc<CoeffTable>>,
+    ) -> Result<SynthDefBuilder, IrError> {
         let mut builder = SynthDefBuilder::new(self.name.clone());
 
         // Base nodes, in IR index order.
-        for node in &self.nodes {
+        for (i, node) in self.nodes.iter().enumerate() {
             match node {
                 IrNode::Const(v) => {
                     let v = *v;
@@ -392,7 +553,11 @@ impl IrSynthDef {
                     builder.add_node(move || Box::new(ugens::Param::new(v)));
                 }
                 IrNode::UGen { kind, .. } => {
-                    add_ugen_node(&mut builder, reg, kind)?;
+                    if let Some(table) = resolved.get(&i) {
+                        add_table_bound_ugen_node(&mut builder, reg, kind, table.clone())?;
+                    } else {
+                        add_ugen_node(&mut builder, reg, kind)?;
+                    }
                 }
             }
         }
@@ -420,13 +585,12 @@ impl IrSynthDef {
             builder.audio_input(name.clone(), *node);
         }
 
-        builder.set_output(self.output_node);
-        Ok(builder.build())
+        Ok(builder)
     }
 }
 
 /// Add a UGen node for `kind`, resolving core arithmetic kinds directly and
-/// everything else through the registry.
+/// everything else through the bare-factory registry.
 fn add_ugen_node(
     builder: &mut SynthDefBuilder,
     reg: &UGenRegistry,
@@ -443,6 +607,23 @@ fn add_ugen_node(
         .ok_or_else(|| IrError::UnknownKind(kind.to_string()))?
         .factory;
     Ok(builder.add_node(move || factory()))
+}
+
+/// Add a table-bound UGen node for `kind`, closing over `table` so every
+/// instance this factory produces (one per voice spawn) is bound to the same
+/// resolved table.
+fn add_table_bound_ugen_node(
+    builder: &mut SynthDefBuilder,
+    reg: &UGenRegistry,
+    kind: &str,
+    table: Arc<CoeffTable>,
+) -> Result<usize, IrError> {
+    let factory = reg
+        .table_bound_entry(kind)
+        .ok_or_else(|| IrError::UnknownKind(kind.to_string()))?
+        .factory
+        .clone();
+    Ok(builder.add_node(move || factory(table.clone())))
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +670,9 @@ pub fn from_decl(decl: &SynthDefDecl, reg: &UGenRegistry) -> IrSynthDef {
         edges: b.edges,
         params: b.params,
         audio_inputs: b.audio_inputs,
+        // The DSL cannot author a table binding today — see `IrTableBinding`'s
+        // doc for that scope boundary — so every decompiled document has none.
+        table_bindings: Vec::new(),
         output_node,
     }
 }

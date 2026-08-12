@@ -61,6 +61,7 @@ use alloc::string::String as AllocString;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::coeff_table::{CoeffTable, CoeffTableBank, TableId};
 use crate::curve::{GlideShape, GlideSpace};
 use crate::dsl::{self, UGenRegistry};
 use crate::engine::{Engine, EngineConfig};
@@ -128,6 +129,15 @@ static DEF_REGISTRY: WasmCell<Option<BTreeMap<AllocString, crate::synthdef::Synt
 
 /// Master effect synth (inserted between bus and graph sink).
 static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(None);
+
+/// The runtime coefficient-table bank (MOT-634) — see `crate::coeff_table`'s
+/// module doc for the wire-format contract and `docs/coeff-table-bank-format.md`
+/// for the full reference. Reset alongside the other session state by every
+/// `ms_init*`/`ms_routing_init` export below, same as `DEF_REGISTRY` etc.;
+/// unlike those, it holds no live graph references, so nothing about this
+/// reset is safety-load-bearing the way `BUS_NODE`'s is (see `ms_init`'s doc
+/// comment) — it's purely "a fresh session starts with an empty bank."
+static COEFF_TABLE_BANK: WasmCell<Option<CoeffTableBank>> = WasmCell::new(None);
 
 /// A multi-bus routing topology under construction/live, for the
 /// `ms_routing_*` export family below (see that section's doc comment). A
@@ -198,6 +208,7 @@ pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
         *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
+        *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
     }
 }
 
@@ -445,6 +456,7 @@ pub extern "C" fn ms_init(sample_rate: f32) {
         *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
+        *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
     }
 }
 
@@ -824,6 +836,7 @@ pub extern "C" fn ms_routing_init(sample_rate: f32) {
         *LEGATO_MODES.get_mut() = Some(BTreeMap::new());
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
+        *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
     }
 }
 
@@ -1400,6 +1413,108 @@ pub unsafe extern "C" fn ms_legato_slot_for(name_ptr: *const u8, name_len: usize
         Some(&slot) => slot as i64,
         None => -1,
     }
+}
+
+// ============================================================================
+// Coefficient-table bank exports (MOT-634)
+// ============================================================================
+//
+// The runtime-fillable, id-referenced coefficient-table bank: the mechanism
+// that lets a ugen consuming per-pitch coefficient data (a later ticket's
+// ugen, not this file) be built and shipped without any actual coefficient
+// content compiled into this source tree — every table this bank ever holds
+// arrives as bytes uploaded through these exports at runtime. See
+// `crate::coeff_table`'s module doc and `docs/coeff-table-bank-format.md`
+// for the wire format `data_ptr`/`data_len` below decodes.
+//
+// Upload follows the same pointer-plus-length-into-`ms_alloc`'d-memory
+// pattern as `ms_register_def`'s DSL source, generalized from UTF-8 text to
+// arbitrary bytes (the coefficient-table wire format is binary, not text).
+
+/// Register a new coefficient table, decoding it from the bytes at
+/// `data_ptr`/`data_len` (see `CoeffTable::from_bytes`). Returns the new
+/// table's id (always `> 0`), or `0` on failure: malformed bytes, an
+/// unsupported format version, or no session initialized
+/// (`ms_init`/`ms_init_with_bus`/`ms_routing_init` not yet called).
+///
+/// # Safety
+/// `data_ptr` must point to an initialized buffer of at least `data_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_coeff_table_register(data_ptr: *const u8, data_len: usize) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    let table = match CoeffTable::from_bytes(bytes) {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_mut() {
+        Some(b) => b,
+        None => return 0,
+    };
+    bank.register(table).0
+}
+
+/// Replace the content at an already-registered table id, in place — the id
+/// (and every graph reference already resolved against it) is unchanged; see
+/// `CoeffTableBank::replace`'s doc for why this is a distinct operation from
+/// free-then-register. Returns 0 on success, 1 on failure: malformed bytes,
+/// an unsupported format version, `id` not currently registered, or no
+/// session initialized.
+///
+/// # Safety
+/// `data_ptr` must point to an initialized buffer of at least `data_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_coeff_table_replace(
+    id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    let table = match CoeffTable::from_bytes(bytes) {
+        Ok(t) => t,
+        Err(_) => return 1,
+    };
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_mut() {
+        Some(b) => b,
+        None => return 1,
+    };
+    match bank.replace(TableId(id), table) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// Free a coefficient table by id. A no-op if `id` is not registered or no
+/// session is initialized.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_coeff_table_free(id: u32) {
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_mut() {
+        Some(b) => b,
+        None => return,
+    };
+    bank.free(TableId(id));
+}
+
+/// Resolve a table's id by the name it was registered/replaced under.
+/// Returns the id (`> 0`), or `0` if `name` is malformed UTF-8, no table has
+/// that name, or no session is initialized.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_coeff_table_id_for_name(name_ptr: *const u8, name_len: usize) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_ref() {
+        Some(b) => b,
+        None => return 0,
+    };
+    bank.id_for_name(name).map_or(0, |id| id.0)
 }
 
 // ============================================================================

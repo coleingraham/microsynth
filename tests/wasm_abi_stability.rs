@@ -81,6 +81,13 @@ fn test_new_exports_are_additive_not_replacements() {
         // signals (see their doc comments in src/web.rs).
         "ms_routing_bus_output",
         "ms_routing_effect_output",
+        // MOT-634: runtime coefficient-table bank + upload ABI. Register/replace/free
+        // by id, plus name->id resolution -- see src/web.rs's "Coefficient-table bank
+        // exports" section doc for the wire format these carry.
+        "ms_coeff_table_register",
+        "ms_coeff_table_replace",
+        "ms_coeff_table_free",
+        "ms_coeff_table_id_for_name",
     ];
     for name in new_names {
         assert!(

@@ -118,6 +118,26 @@ impl SynthDefBuilder {
         self.edges.push(SynthDefEdge { from, to, to_input });
     }
 
+    /// Replace the factory for an already-added node, keeping its index (and
+    /// therefore every edge/param/audio-input already wired to it) intact.
+    ///
+    /// Exists for the coefficient-table-bank id-reference mechanism
+    /// (`ir::IrSynthDef::compile_with_tables`): a table-bound node is first
+    /// added with an ordinary factory (so it participates in edge wiring
+    /// like any other node), then patched in place once its table id has
+    /// been resolved against a live `CoeffTableBank`. Not used by the plain
+    /// DSL/IR compile paths, which never need to revisit a node after
+    /// adding it.
+    ///
+    /// # Panics
+    /// Panics if `idx` is out of range.
+    pub fn replace_node<F>(&mut self, idx: usize, factory: F)
+    where
+        F: Fn() -> Box<dyn UGen> + Send + Sync + 'static,
+    {
+        self.factories[idx] = Box::new(factory);
+    }
+
     /// Name a parameter: associates a name with a specific node's input port.
     pub fn param(&mut self, name: impl Into<String>, node_index: usize, input_index: usize) {
         self.param_names
