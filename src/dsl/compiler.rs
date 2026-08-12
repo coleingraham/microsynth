@@ -158,19 +158,21 @@ impl UGenRegistry {
     /// is unconditional last-write-wins, exactly like a plain `BTreeMap`
     /// insert. A **cross-namespace** collision (a name registered once via
     /// `register`/`register_spec` and once via `register_table_bound`) is
-    /// different and easy to misread as "last write wins" too: `entries` and
-    /// `table_bound` are separate maps, so neither registration overwrites
-    /// the other — both persist. What a colliding name resolves to then
-    /// depends on where you ask: `crate::ir`'s private `kind_arity` helper
-    /// prefers the bare entry unconditionally (registration order
-    /// irrelevant); node
-    /// construction (`IrSynthDef::compile`/`compile_with_tables`, via
-    /// `build_base`) is decided **per node**, by whether that specific
-    /// node has an [`IrTableBinding`](crate::ir::IrTableBinding) — bound
-    /// nodes use the table-bound factory, unbound nodes use the bare one,
-    /// again regardless of which was registered first or second. See
-    /// `tests` at the bottom of this file for both the same-map and
-    /// cross-namespace cases pinned explicitly.
+    /// different: `entries` and `table_bound` are separate maps, so neither
+    /// registration overwrites the other — both persist, and the name is
+    /// legal to resolve either way. What a colliding name resolves to then
+    /// depends on **the node**, not on registration order, and both
+    /// `crate::ir`'s private `kind_arity` helper (which validation's
+    /// arity/port-range checks go through) and node construction
+    /// (`IrSynthDef::compile`/`compile_with_tables`, via `build_base`) agree
+    /// on the same rule (MOT-652): whether that specific node has an
+    /// [`IrTableBinding`](crate::ir::IrTableBinding) decides it — bound nodes
+    /// resolve/construct via the table-bound entry, unbound nodes via the
+    /// bare one, regardless of which was registered first or second. Because
+    /// both functions key off the same per-node fact, `validate()` never
+    /// signs off on an arity that construction then contradicts. See `tests`
+    /// at the bottom of this file for both the same-map and cross-namespace
+    /// cases pinned explicitly, including the collision-dispatch case.
     pub fn register_table_bound(
         &mut self,
         name: impl Into<String>,
@@ -654,5 +656,96 @@ mod tests {
             "a table binding on the node -> the table-bound factory (2.0) should \
              render, matching the module doc's stated per-node dispatch rule"
         );
+    }
+
+    /// MOT-652: a colliding name whose bare and table-bound entries have
+    /// *differing* arities is the case where `validate()` and construction
+    /// could disagree before this fix (arity checks always preferred the
+    /// bare entry, while construction dispatched per node). Same node, same
+    /// edge, only the presence of a table binding changes: unbound, the
+    /// edge targets an input port the 0-arity bare entry doesn't have, so
+    /// `validate()` must reject it; bound, the same port is valid against
+    /// the 1-arity table-bound entry, so `validate()` must accept it *and*
+    /// `compile_with_tables` must actually build successfully at that
+    /// arity -- proving the two layers now agree per node instead of just
+    /// per name.
+    #[cfg(feature = "ir")]
+    #[test]
+    fn colliding_name_with_differing_arities_agrees_between_validate_and_build() {
+        use crate::coeff_table::{CoeffTable, CoeffTableBank};
+        use crate::ir::{
+            FORMAT_VERSION, IrEdge, IrError, IrNode, IrSynthDef, IrTableBinding, SynthDefClass,
+        };
+
+        let mut reg = UGenRegistry::new();
+        // Bare "dup": 0 inputs.
+        reg.register("dup", bare_factory, &[], &out_spec());
+        // Table-bound "dup": 1 input -- a genuine arity collision.
+        let factory: TableUGenFactory = Arc::new(|_table| Box::new(Const::new(2.0)));
+        reg.register_table_bound(
+            "dup",
+            factory,
+            UGenCategory::Utility,
+            &in_spec(),
+            &out_spec(),
+        );
+
+        let mut bank = CoeffTableBank::new();
+        let table = CoeffTable {
+            name: "unused".into(),
+            entries: alloc::vec![],
+        };
+        let id = bank.register(table);
+
+        let base_def = |table_bindings| IrSynthDef {
+            format_version: FORMAT_VERSION,
+            name: "colliding_arity".into(),
+            class: SynthDefClass::Source,
+            output_channels: 1,
+            nodes: alloc::vec![
+                IrNode::Const(0.0),
+                IrNode::UGen {
+                    kind: "dup".into(),
+                    consts: alloc::vec![],
+                },
+            ],
+            edges: alloc::vec![IrEdge {
+                from: 0,
+                to: 1,
+                to_input: 0,
+            }],
+            params: alloc::vec![],
+            audio_inputs: alloc::vec![],
+            table_bindings,
+            output_node: 1,
+        };
+
+        // Unbound: dispatch uses the bare (0-input) entry, so input port 0
+        // is out of range -- validate() must reject it, matching that
+        // add_ugen_node/build_base could never wire this edge either.
+        let unbound = base_def(alloc::vec![]);
+        assert_eq!(
+            unbound.validate(&reg),
+            Err(IrError::InputOutOfRange {
+                node: 1,
+                input: 0,
+                arity: 0,
+            }),
+            "unbound node dispatches to the 0-arity bare entry, so port 0 is out of range"
+        );
+
+        // Bound: dispatch uses the table-bound (1-input) entry, so the same
+        // port 0 is in range -- validate() must accept it, and construction
+        // must actually succeed at that arity.
+        let bound = base_def(alloc::vec![IrTableBinding {
+            node: 1,
+            table_id: id.0,
+        }]);
+        bound.validate(&reg).expect(
+            "bound node dispatches to the 1-arity table-bound entry, so port 0 is in range",
+        );
+        bound
+            .compile_with_tables(&reg, &bank)
+            .expect("construction succeeds at the arity validate() just checked");
     }
 }
