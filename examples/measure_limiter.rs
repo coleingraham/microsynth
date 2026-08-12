@@ -18,6 +18,9 @@
 //! to a raw interleaved-stereo f32le PCM file as the first CLI argument to
 //! use it: `cargo run --example measure_limiter -- /path/to/mix.f32`.
 
+#[path = "common/wav.rs"]
+mod wav;
+
 use microsynth::ugens::*;
 use microsynth::*;
 use std::env;
@@ -371,7 +374,7 @@ fn main() {
 /// Requires `ffmpeg` on PATH; run manually with
 /// `cargo run --example measure_limiter -- --characterize`.
 fn characterize_against_ffmpeg() {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::process::Command;
 
     // DEBUG cross-check: the same independently-parameterized (48-tap Hann)
@@ -418,38 +421,6 @@ fn characterize_against_ffmpeg() {
             }
         }
         20.0 * peak.max(1e-9).log10()
-    }
-
-    fn write_wav_f32(channels: &[Vec<f32>], sample_rate: f32, path: &PathBuf) {
-        let num_channels = channels.len() as u16;
-        let num_samples = channels.first().map_or(0, |c| c.len());
-        let bits_per_sample: u16 = 32;
-        let byte_rate = sample_rate as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
-        let block_align = num_channels * (bits_per_sample / 8);
-        let data_size = num_samples as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
-        let file_size = 36 + data_size;
-
-        let mut buf: Vec<u8> = Vec::with_capacity(44 + data_size as usize);
-        buf.extend_from_slice(b"RIFF");
-        buf.extend_from_slice(&file_size.to_le_bytes());
-        buf.extend_from_slice(b"WAVE");
-        buf.extend_from_slice(b"fmt ");
-        buf.extend_from_slice(&16u32.to_le_bytes());
-        buf.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
-        buf.extend_from_slice(&num_channels.to_le_bytes());
-        buf.extend_from_slice(&(sample_rate as u32).to_le_bytes());
-        buf.extend_from_slice(&byte_rate.to_le_bytes());
-        buf.extend_from_slice(&block_align.to_le_bytes());
-        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
-        buf.extend_from_slice(b"data");
-        buf.extend_from_slice(&data_size.to_le_bytes());
-        for i in 0..num_samples {
-            for ch in channels {
-                let sample = ch.get(i).copied().unwrap_or(0.0);
-                buf.extend_from_slice(&sample.to_le_bytes());
-            }
-        }
-        fs::write(path, &buf).expect("failed to write WAV file");
     }
 
     /// `loudnorm`'s analysis-pass `input_tp`, independent of the TP target
@@ -584,7 +555,7 @@ fn characterize_against_ffmpeg() {
                     hann_reference_dbtp(&output[0], 8).max(hann_reference_dbtp(&output[1], 8));
 
                 let wav_path = dir.join(format!("{density_name}-{gain_db}dB-{ceiling_db}dBTP.wav"));
-                write_wav_f32(&output, sr, &wav_path);
+                wav::write_f32(&output, sr, &wav_path);
                 let ffmpeg_tp = ffmpeg_true_peak_dbtp(&wav_path);
 
                 let error = ffmpeg_tp - self_tp;

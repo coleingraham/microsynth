@@ -14,6 +14,9 @@
 //! data, consistent with "no learned instrument may be compiled into
 //! microsynth source" (RFC requirement 8).
 
+#[path = "common/wav.rs"]
+mod wav;
+
 use microsynth::coeff_table::{CoeffTable, PitchEntry};
 use microsynth::ugens::partials::PartialsNoise;
 use microsynth::ugens::*;
@@ -75,39 +78,6 @@ fn synthetic_dictionary() -> CoeffTable {
         name: "mot-636-demo".into(),
         entries,
     }
-}
-
-fn write_wav(samples: &[f32], sample_rate: f32, path: &Path) {
-    let num_channels: u16 = 1;
-    let bits_per_sample: u16 = 16;
-    let byte_rate = sample_rate as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
-    let block_align = num_channels * (bits_per_sample / 8);
-    let data_size = samples.len() as u32 * num_channels as u32 * (bits_per_sample as u32 / 8);
-    let file_size = 36 + data_size;
-
-    let mut buf: Vec<u8> = Vec::with_capacity(44 + data_size as usize);
-    buf.extend_from_slice(b"RIFF");
-    buf.extend_from_slice(&file_size.to_le_bytes());
-    buf.extend_from_slice(b"WAVE");
-    buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes());
-    buf.extend_from_slice(&1u16.to_le_bytes());
-    buf.extend_from_slice(&num_channels.to_le_bytes());
-    buf.extend_from_slice(&(sample_rate as u32).to_le_bytes());
-    buf.extend_from_slice(&byte_rate.to_le_bytes());
-    buf.extend_from_slice(&block_align.to_le_bytes());
-    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
-    buf.extend_from_slice(b"data");
-    buf.extend_from_slice(&data_size.to_le_bytes());
-    for &s in samples {
-        let pcm = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        buf.extend_from_slice(&pcm.to_le_bytes());
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("failed to create output directory");
-    }
-    fs::write(path, &buf).expect("failed to write WAV file");
 }
 
 fn main() {
@@ -177,7 +147,10 @@ fn main() {
     let channels = engine.render_offline(num_blocks);
     let samples = &channels[0][..num_samples.min(channels[0].len())];
 
-    write_wav(samples, SAMPLE_RATE, output_path);
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).expect("failed to create output directory");
+    }
+    wav::write_pcm16(&[samples], SAMPLE_RATE, output_path);
     println!(
         "Wrote {} samples ({:.2}s) to {}",
         samples.len(),
