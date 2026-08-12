@@ -102,11 +102,11 @@
 //! window) are, per the RFC, per-column scalars computed once by whichever
 //! producer built the table (the analysis side knows its own window/FFT
 //! config; this crate does not). This ugen reads them from each entry's
-//! open metadata slot (`docs/coeff-table-bank-format.md` Part 1) under the
-//! keys [`MAINLOBE_GAIN_KEY`] / [`NOISE_GAIN_KEY`], defaulting to `1.0` when
-//! absent (an un-annotated synthetic table, e.g. from a test, renders
-//! coefficients as amplitudes directly) — it applies the scalars, it does
-//! not derive them.
+//! open metadata slot under the keys [`MAINLOBE_GAIN_KEY`] / [`NOISE_GAIN_KEY`]
+//! — it applies the scalars, it does not derive them. The absent-key default
+//! is `docs/coeff-table-bank-format.md`'s Metadata section's contract to
+//! keep, not restated here; [`metadata_scalar`]'s call sites below are the
+//! implementation of it.
 
 use crate::buffer::{AudioBuffer, read_input};
 use crate::coeff_table::CoeffTable;
@@ -170,6 +170,17 @@ const NYQUIST_GUARD_FRACTION: f32 = 0.05;
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + t * (b - a)
+}
+
+/// Linear-interpolate coefficient `idx` between the low/high pitch-bracket
+/// entries' coefficient slice, treating an out-of-range index as silent
+/// (0.0) — the two bracket entries can carry different partial/noise
+/// support widths.
+#[inline]
+fn lerp_coeff(lo: &[f32], hi: &[f32], idx: usize, t: f32) -> f32 {
+    let c_lo = lo.get(idx).copied().unwrap_or(0.0);
+    let c_hi = hi.get(idx).copied().unwrap_or(0.0);
+    lerp(c_lo, c_hi, t)
 }
 
 /// Linear fade-to-zero for a partial whose instantaneous frequency is
@@ -533,9 +544,7 @@ impl UGen for PartialsNoise {
                     let noise_gain = lerp(e_lo.noise_gain, e_hi.noise_gain, t);
 
                     for (m, ph) in phase.iter_mut().enumerate() {
-                        let c_lo = e_lo.partial_coeffs.get(m).copied().unwrap_or(0.0);
-                        let c_hi = e_hi.partial_coeffs.get(m).copied().unwrap_or(0.0);
-                        let coeff = lerp(c_lo, c_hi, t);
+                        let coeff = lerp_coeff(&e_lo.partial_coeffs, &e_hi.partial_coeffs, m, t);
 
                         let partial_number = (m + 1) as f32;
                         let freq_m = partial_number * f0 * stretch;
@@ -560,9 +569,7 @@ impl UGen for PartialsNoise {
                         // independent generators, without J separate RNGs.
                         let noise_in = rng.next_bipolar();
                         for (j, state) in noise_state.iter_mut().enumerate() {
-                            let c_lo = e_lo.noise_coeffs.get(j).copied().unwrap_or(0.0);
-                            let c_hi = e_hi.noise_coeffs.get(j).copied().unwrap_or(0.0);
-                            let coeff = lerp(c_lo, c_hi, t);
+                            let coeff = lerp_coeff(&e_lo.noise_coeffs, &e_hi.noise_coeffs, j, t);
                             let (b0, b1, b2, a1, a2) = self.noise_biquad[j];
                             // Always tick, same reasoning as phase above:
                             // a silent band's filter memory must stay live.
