@@ -73,17 +73,24 @@
 //! amplitude tracks `gain` exactly through an interpolated glide.
 //!
 //! The **noise half does not inherit that bound in the same form.** Each
-//! band's contribution is `coeff_j * noise_gain * gain * filtered_j`, where
-//! `filtered_j` is a resonant biquad's *output*, not its input — and a
-//! stable IIR filter's worst-case gain against a bounded-magnitude input
-//! (`Rng::next_bipolar()` is uniform on `[-1, 1]`) is its impulse response's
-//! L1 norm `‖h_j‖₁` (`sum_n |h_j[n]|`), not 1. For [`NOISE_BAND_Q`]'s
-//! constant-peak-gain resonance, `‖h_j‖₁` measures **> 1** (QA measured a
-//! real rendered peak of 0.9028 at `gain = 0.9`, all L1 mass on one noise
-//! band, no metadata — exceeding the naive `gain * 1.0 = 0.9` bound; see
-//! `tests/partials_noise.rs`'s `noise_band_l1_bound_requires_the_filter_impulse_response_norm`,
-//! which reproduces that measurement and pins the correct bound: `coeff_j *
-//! noise_gain * gain * ‖h_j‖₁`, not `coeff_j * noise_gain * gain`).
+//! band's contribution is `coeff_j * noise_gain * gain * compensation_j *
+//! filtered_j`, where `filtered_j` is a resonant biquad's *output*, not its
+//! input, and `compensation_j` is the MOT-641 per-band power-gain scalar (see
+//! [`biquad_noise_power_gain`]/`noise_power_compensation`'s doc). A stable
+//! IIR filter's worst-case gain against a bounded-magnitude input (the
+//! unit-variance-rescaled noise source is uniform on `[-sqrt(3), sqrt(3)]` —
+//! see [`UNIT_VARIANCE_BIPOLAR_SCALE`]'s doc) is its impulse response's L1
+//! norm `‖h_j‖₁` (`sum_n |h_j[n]|`), not 1. For [`NOISE_BAND_Q`]'s
+//! constant-peak-gain resonance, `‖h_j‖₁` measures **> 1**, and
+//! `compensation_j` (a function of the impulse response's L2 norm, not its
+//! L1 norm) does not cancel that — the two norms differ for a resonant
+//! filter's impulse response, so the naive `gain * 1.0` bound is still
+//! violated after MOT-641's level fix, just by a different, compensation-
+//! scaled amount. See `tests/partials_noise.rs`'s
+//! `noise_band_l1_bound_requires_the_filter_impulse_response_norm`, which
+//! measures the actual rendered peak and pins the correct bound: `coeff_j *
+//! noise_gain * gain * compensation_j * sqrt(3) * ‖h_j‖₁`, not `coeff_j *
+//! noise_gain * gain`.
 //!
 //! This is not a headroom risk in practice: the exporter's shipped
 //! `noise_gain` values are ≈0.058 (`motif-soundmatch`'s
@@ -107,6 +114,26 @@
 //! is `docs/coeff-table-bank-format.md`'s Metadata section's contract to
 //! keep, not restated here; [`metadata_scalar`]'s call sites below are the
 //! implementation of it.
+//!
+//! `noise_gain`'s own derivation (`motif-soundmatch`'s
+//! `channel_export.py::noise_gain`) is explicit that it converts bump mass to
+//! generator amplitude "GIVEN a unit-variance noise source and an ideal
+//! (unity in-band gain) bandpass" — conditions this ugen did not actually
+//! meet before MOT-641 (`Rng::next_bipolar()` is not unit-variance, and
+//! [`NOISE_BAND_Q`]'s constant-peak-gain resonance is not unity-in-band-gain
+//! against a wideband source). [`UNIT_VARIANCE_BIPOLAR_SCALE`] and
+//! `noise_power_compensation` (see their docs) are what make those
+//! conditions actually hold at render time, rather than leaving them as an
+//! assumption the exporter's scalar alone cannot satisfy.
+//!
+//! The noise-band *placement* half of the bridge (MOT-641) works the same
+//! way: [`NOISE_BAND_MIN_HZ_KEY`]/[`NOISE_BAND_MAX_HZ_KEY`] metadata (falling
+//! back to [`NOISE_BAND_MIN_HZ`]/[`NOISE_BAND_MAX_HZ`] when absent) lets the
+//! table state the exact span its analysis-side noise basis `N` was built
+//! against, and [`noise_band_centers`]'s formula matches `channels.py`'s own
+//! bump-center formula exactly — so a table that supplies its true span
+//! renders noise bands at (up to `f32` rounding) the same center frequencies
+//! the analysis side fit against, not an approximation of them.
 
 use crate::buffer::{AudioBuffer, read_input};
 use crate::coeff_table::CoeffTable;
@@ -131,6 +158,19 @@ pub const MAINLOBE_GAIN_KEY: &str = "mainlobe_gain";
 /// Metadata key for the bump-mass -> noise-generator-gain conversion scalar.
 pub const NOISE_GAIN_KEY: &str = "noise_gain";
 
+/// Metadata keys (MOT-641) for the noise-band span a table's entries were fit
+/// against, in Hz. Either absent: falls back to [`NOISE_BAND_MIN_HZ`] /
+/// [`NOISE_BAND_MAX_HZ`]. Read as one table-wide value (not per-entry) by
+/// [`noise_band_span`] — see that function's doc — and
+/// `docs/coeff-table-bank-format.md`'s Metadata section for the wire
+/// contract. Defined in [`crate::coeff_table`] (not here) since
+/// `CoeffTable::from_bytes` enforces the per-table-consistency convention
+/// these two keys carry (MOT-641 QA F8) — the decoder needs to know these
+/// specific key names, so they live with the decoder, re-exported here for
+/// this ugen's own call sites and for external consumers that used to reach
+/// them at this path.
+pub use crate::coeff_table::{NOISE_BAND_MAX_HZ_KEY, NOISE_BAND_MIN_HZ_KEY};
+
 /// Default seed for the shared shaped-noise source. Mirrors `WhiteNoise`'s /
 /// `PinkNoise`'s fixed-default-seed convention (`ugens/noise.rs`); a voice
 /// spawn is expected to call [`UGen::reseed_noise`] for keyed, per-voice
@@ -141,17 +181,33 @@ const PARTIALS_NOISE_DEFAULT_SEED: u32 = 0x9A27_1E55;
 const DEFAULT_FREQ_HZ: f32 = 220.0;
 const DEFAULT_GAIN: f32 = 1.0;
 
-/// The fixed smooth-noise basis's frequency span. Table-independent by
-/// design (RFC: "`N` — a **fixed** bins x J smooth noise basis"): band
-/// identity (which center frequency "band index j" means) must not depend on
-/// which table, or which of a table's entries, is currently active, or a
-/// glide that changes `j_noise` between entries would reassign a band's
-/// frequency mid-note. Mel-spaced across a fixed, generous vocal/instrument
-/// range; the top end is clamped to the render sample rate's Nyquist in
-/// [`PartialsNoise::init`], not here (these two constants are computed once,
-/// before sample rate is known).
+/// The fallback smooth-noise basis frequency span (MOT-641): used only when a
+/// table's entries carry neither [`NOISE_BAND_MIN_HZ_KEY`] nor
+/// [`NOISE_BAND_MAX_HZ_KEY`] metadata (`docs/coeff-table-bank-format.md`'s
+/// documented fallback for a table without a band definition). A real fitted
+/// table instead carries the exact span its analysis-side noise basis `N` was
+/// built against (typically `[0, Nyquist]` at the analysis sample rate — see
+/// `motif-soundmatch`'s `channels.py::noise_basis`). Band identity (which
+/// center frequency "band index j" means) must not depend on which table, or
+/// which of a table's entries, is currently active, or a glide that changes
+/// `j_noise` between entries would reassign a band's frequency mid-note — so
+/// [`noise_band_span`] reads one table-wide value, and a well-formed table's
+/// exporter writes the same span into every entry. The top end is further
+/// clamped to the render sample rate's Nyquist in [`PartialsNoise::init`],
+/// not here (these two constants are computed once, before sample rate is
+/// known).
 const NOISE_BAND_MIN_HZ: f32 = 80.0;
 const NOISE_BAND_MAX_HZ: f32 = 12_000.0;
+
+/// `Rng::next_bipolar()` is uniform on `[-1, 1]`, variance `1/3` (std
+/// `≈0.5774`) — not the unit-variance source the exporter's `noise_gain`
+/// derivation (`motif-soundmatch`'s `channel_export.py::noise_gain`) assumes
+/// ("for zero-mean white noise of unit **variance**..."). `sqrt(3)` rescales
+/// a `[-1, 1]`-uniform sample to variance exactly 1 (`Var(k*U) = k^2 *
+/// Var(U)`, so `k = sqrt(1 / Var(U)) = sqrt(3)`), without touching
+/// `next_bipolar()`'s own documented `[-1, 1]` contract that `WhiteNoise` /
+/// `PinkNoise` and every other consumer still rely on (MOT-641).
+const UNIT_VARIANCE_BIPOLAR_SCALE: f32 = 1.732_050_8; // sqrt(3)
 
 /// Resonance of each fixed noise-band bandpass. Low (wide) on purpose: the
 /// RFC describes the noise basis as "smooth... bumps," not narrow spectral
@@ -219,18 +275,30 @@ fn mel_to_hz(mel: f32) -> f32 {
     700.0 * (10f32.powf(mel / 2595.0) - 1.0)
 }
 
-/// Mel-spaced, table-independent center frequencies for `j_max` fixed noise
-/// bands (raw — not yet clamped to a render sample rate's Nyquist; see
+/// Mel-spaced center frequencies for `j_max` noise bands over `[min_hz,
+/// max_hz]` (raw — not yet clamped to a render sample rate's Nyquist; see
 /// [`PartialsNoise::init`]).
-fn noise_band_centers(j_max: usize) -> Vec<f32> {
+///
+/// Band `j`'s center is the `(j+1)`-th interior point of `j_max + 2`
+/// equally-mel-spaced edges spanning `[min_hz, max_hz]`, i.e. its mel-space
+/// fraction is `frac_j = (j + 1) / (j_max + 1)`, not the naive per-band
+/// midpoint `frac_j = (j + 0.5) / j_max` this function used before MOT-641.
+/// This is not a stylistic choice: it is the *exact* formula
+/// `motif-soundmatch`'s `channels.py::noise_basis` uses for its own bump
+/// centers (edges via `linspace` over `j_max + 2` points, interior points
+/// kept) — matching it here, not just the span, is what makes the analysis
+/// and synthesis band centers coincide exactly (up to `f32` rounding) when a
+/// table's [`NOISE_BAND_MIN_HZ_KEY`]/[`NOISE_BAND_MAX_HZ_KEY`] metadata
+/// carries the same `[min_hz, max_hz]` the analysis side built `N` against.
+fn noise_band_centers(j_max: usize, min_hz: f32, max_hz: f32) -> Vec<f32> {
     if j_max == 0 {
         return Vec::new();
     }
-    let mel_lo = hz_to_mel(NOISE_BAND_MIN_HZ);
-    let mel_hi = hz_to_mel(NOISE_BAND_MAX_HZ);
+    let mel_lo = hz_to_mel(min_hz);
+    let mel_hi = hz_to_mel(max_hz);
     (0..j_max)
         .map(|j| {
-            let frac = (j as f32 + 0.5) / j_max as f32;
+            let frac = (j as f32 + 1.0) / (j_max as f32 + 1.0);
             mel_to_hz(lerp(mel_lo, mel_hi, frac))
         })
         .collect()
@@ -242,6 +310,74 @@ fn metadata_scalar(metadata: &[(alloc::string::String, f32)], key: &str, default
         .find(|(k, _)| k.as_str() == key)
         .map(|(_, v)| *v)
         .unwrap_or(default)
+}
+
+/// The noise-band span (`[min_hz, max_hz]`) [`noise_band_centers`] should use
+/// for `table`: one table-wide value, read from `table`'s first entry's
+/// metadata (falling back to [`NOISE_BAND_MIN_HZ`]/[`NOISE_BAND_MAX_HZ`] when
+/// either key is absent there). Deliberately reads the *raw* table entries
+/// (not [`EntryData`], which is already channel-resolved) — the span is a
+/// property of the table's analysis configuration, not of any one channel —
+/// and deliberately reads only entry 0 rather than per-entry, per
+/// [`NOISE_BAND_MIN_HZ`]'s doc: band identity must be one fixed thing across
+/// a table, so a well-formed table's exporter writes the same span into every
+/// entry and any one of them is representative. A table with zero entries
+/// gets the hardcoded fallback (nothing to read).
+///
+/// "Any one of them is representative" is a decode-time-enforced fact, not
+/// just a convention, for any `table` that reached here via
+/// `CoeffTable::from_bytes` (MOT-641 QA F8: that decoder rejects a table
+/// whose entries disagree on these two keys). It remains only a convention —
+/// unenforced here — for a hand-built `CoeffTable` that bypassed decoding, as
+/// with every other decode-time check in this format.
+fn noise_band_span(table: &CoeffTable) -> (f32, f32) {
+    match table.entries.first() {
+        Some(e) => (
+            metadata_scalar(&e.metadata, NOISE_BAND_MIN_HZ_KEY, NOISE_BAND_MIN_HZ),
+            metadata_scalar(&e.metadata, NOISE_BAND_MAX_HZ_KEY, NOISE_BAND_MAX_HZ),
+        ),
+        None => (NOISE_BAND_MIN_HZ, NOISE_BAND_MAX_HZ),
+    }
+}
+
+/// The white-noise power gain `Σ h[n]²` of a stable biquad's impulse
+/// response `h` — the output variance a unit-variance white-noise input
+/// produces (Parseval: `Var(y) = Var(x) · Σ h[n]²` for i.i.d. `x`). MOT-641's
+/// per-band [`PartialsNoise::noise_power_compensation`] is `1 /
+/// sqrt(biquad_noise_power_gain(..))`, so that after compensation a
+/// unit-variance input produces unit-variance output — the "ideal (unity
+/// in-band gain) bandpass" `motif-soundmatch`'s `noise_gain` derivation
+/// assumes, which [`NOISE_BAND_Q`]'s actual constant-peak-gain resonance does
+/// not provide on its own (a resonant filter passes only its own noise
+/// bandwidth, not the source's full power).
+///
+/// Computed by direct simulation (feed one unit impulse, sum squared
+/// output) rather than a closed form: exact in the limit, and simple enough
+/// to trust over a hand-derived Lyapunov solve. `n_samples` is sized from the
+/// filter's own ring/decay time constant (`tau ≈ Q · sample_rate / (π ·
+/// freq)` samples for a 2-pole resonator) so the truncated sum captures
+/// `1 - exp(-25) ≈ 1 - 1.4e-11` of the true (infinite) energy — comfortably
+/// below `f32` rounding noise — for any `freq`/`Q`/`sample_rate`, not just
+/// the ones this ugen happens to use today.
+fn biquad_noise_power_gain(
+    freq: f32,
+    q: f32,
+    sample_rate: f32,
+    coeffs: (f32, f32, f32, f32, f32),
+) -> f32 {
+    let (b0, b1, b2, a1, a2) = coeffs;
+    let f = freq.max(1.0);
+    let tau_samples = (q * sample_rate / (core::f32::consts::PI * f)).max(1.0);
+    let n = ((25.0 * tau_samples) as usize).clamp(64, 2_000_000);
+    let mut state = BiquadState::new();
+    let mut sum_sq = 0.0f32;
+    let mut x = 1.0f32;
+    for _ in 0..n {
+        let y = state.tick(x, b0, b1, b2, a1, a2);
+        x = 0.0;
+        sum_sq += y * y;
+    }
+    sum_sq
 }
 
 /// One dictionary pitch entry's precomputed, render-ready content: the
@@ -355,6 +491,15 @@ pub struct PartialsNoise {
     noise_biquad: Vec<(f32, f32, f32, f32, f32)>,
     /// Raw (pre-Nyquist-clamp) band centers, computed once at construction.
     noise_center_hz: Vec<f32>,
+    /// Per-band `1 / sqrt(biquad_noise_power_gain(..))` (MOT-641), fixed
+    /// alongside `noise_biquad` once sample rate is known in
+    /// [`init`](UGen::init). Restores each band's filtered output to
+    /// unit-variance-in/unit-variance-out — the "ideal (unity in-band gain)
+    /// bandpass" `noise_gain`'s derivation assumes — since [`NOISE_BAND_Q`]'s
+    /// actual constant-peak-gain resonance passes only its own noise
+    /// bandwidth, not the source's full power. See
+    /// [`biquad_noise_power_gain`]'s doc.
+    noise_power_compensation: Vec<f32>,
     rng: Rng,
     sample_rate: f32,
 }
@@ -417,7 +562,8 @@ impl PartialsNoise {
             .map(|e| e.noise_coeffs.len())
             .max()
             .unwrap_or(0);
-        let noise_center_hz = noise_band_centers(j_max);
+        let (band_min_hz, band_max_hz) = noise_band_span(&table);
+        let noise_center_hz = noise_band_centers(j_max, band_min_hz, band_max_hz);
         Ok(PartialsNoise {
             entries,
             j_max,
@@ -425,6 +571,7 @@ impl PartialsNoise {
             noise_state: alloc::vec![BiquadState::new(); j_max],
             noise_biquad: alloc::vec![(0.0, 0.0, 0.0, 0.0, 0.0); j_max],
             noise_center_hz,
+            noise_power_compensation: alloc::vec![1.0; j_max],
             rng: Rng::new(PARTIALS_NOISE_DEFAULT_SEED),
             sample_rate: 44100.0,
         })
@@ -482,7 +629,17 @@ impl UGen for PartialsNoise {
         for j in 0..self.j_max {
             let raw_center = self.noise_center_hz[j];
             let center = raw_center.min(nyquist * 0.9).max(20.0);
-            self.noise_biquad[j] = biquad_bpf_coeffs(center, NOISE_BAND_Q, self.sample_rate);
+            let coeffs = biquad_bpf_coeffs(center, NOISE_BAND_Q, self.sample_rate);
+            self.noise_biquad[j] = coeffs;
+            // Guard against a degenerate (near-zero) power gain -- unreachable
+            // for any center this method actually clamps to (`[20, nyquist *
+            // 0.9]` Hz at Q=1 never approaches the all-pole singularity a
+            // near-0 Hz or near-Nyquist center would produce), but a bound
+            // saves this from ever dividing by ~0 rather than relying on that
+            // reachability argument alone.
+            let power_gain =
+                biquad_noise_power_gain(center, NOISE_BAND_Q, self.sample_rate, coeffs).max(1e-12);
+            self.noise_power_compensation[j] = 1.0 / power_gain.sqrt();
         }
     }
 
@@ -567,7 +724,9 @@ impl UGen for PartialsNoise {
                         // One shared noise source through J parallel fixed
                         // bandpass filters — spectrally equivalent to J
                         // independent generators, without J separate RNGs.
-                        let noise_in = rng.next_bipolar();
+                        // Rescaled to unit variance (MOT-641): see
+                        // `UNIT_VARIANCE_BIPOLAR_SCALE`'s doc.
+                        let noise_in = rng.next_bipolar() * UNIT_VARIANCE_BIPOLAR_SCALE;
                         for (j, state) in noise_state.iter_mut().enumerate() {
                             let coeff = lerp_coeff(&e_lo.noise_coeffs, &e_hi.noise_coeffs, j, t);
                             let (b0, b1, b2, a1, a2) = self.noise_biquad[j];
@@ -575,7 +734,10 @@ impl UGen for PartialsNoise {
                             // a silent band's filter memory must stay live.
                             let filtered = state.tick(noise_in, b0, b1, b2, a1, a2);
                             if coeff != 0.0 {
-                                sample += coeff * noise_gain * gain * filtered;
+                                // Per-band power-gain compensation (MOT-641):
+                                // see `noise_power_compensation`'s doc.
+                                let compensation = self.noise_power_compensation[j];
+                                sample += coeff * noise_gain * gain * compensation * filtered;
                             }
                         }
                     }
@@ -627,4 +789,167 @@ pub fn register(reg: &mut UGenRegistry) {
             rate: Rate::Audio,
         }],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single band's mel-space fraction should be exactly `(j+1)/(j_max+1)`
+    /// (MOT-641's edges-based formula, matching `channels.py::noise_basis`),
+    /// not the pre-MOT-641 `(j+0.5)/j_max` midpoint formula.
+    #[test]
+    fn noise_band_centers_uses_the_edges_based_mel_fraction() {
+        // j_max = 1, span [0, 8000] Hz: frac = (0+1)/(1+1) = 0.5 exactly the
+        // mel midpoint of the span, closed-form checkable without floating
+        // the whole linspace machinery.
+        let centers = noise_band_centers(1, 0.0, 8000.0);
+        assert_eq!(centers.len(), 1);
+        let expected = mel_to_hz(0.5 * hz_to_mel(8000.0));
+        assert!(
+            (centers[0] - expected).abs() < 1e-3,
+            "expected {expected}, got {}",
+            centers[0]
+        );
+
+        // j_max = 3: fracs are 1/4, 2/4, 3/4 -- the middle band sits at
+        // exactly the mel midpoint regardless of j_max, since (j_max/2 +
+        // 0.5)/(j_max+1) == 0.5 only when j_max is odd and j is its middle
+        // index; check that directly for j_max=3, j=1: frac = 2/4 = 0.5.
+        let centers3 = noise_band_centers(3, 0.0, 8000.0);
+        assert_eq!(centers3.len(), 3);
+        assert!(
+            (centers3[1] - expected).abs() < 1e-3,
+            "middle band of an odd j_max should sit at the mel midpoint: \
+             expected {expected}, got {}",
+            centers3[1]
+        );
+    }
+
+    #[test]
+    fn noise_band_centers_empty_for_zero_bands() {
+        assert!(noise_band_centers(0, 0.0, 8000.0).is_empty());
+    }
+
+    #[test]
+    fn noise_band_span_falls_back_to_hardcoded_defaults_when_metadata_absent() {
+        let table = CoeffTable {
+            name: "no-span-metadata".into(),
+            entries: alloc::vec![crate::coeff_table::PitchEntry {
+                f0_hz: 220.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: alloc::vec![],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: alloc::vec![],
+                metadata: alloc::vec![],
+            }],
+        };
+        assert_eq!(
+            noise_band_span(&table),
+            (NOISE_BAND_MIN_HZ, NOISE_BAND_MAX_HZ)
+        );
+    }
+
+    #[test]
+    fn noise_band_span_falls_back_for_a_zero_entry_table() {
+        let table = CoeffTable {
+            name: "empty".into(),
+            entries: alloc::vec![],
+        };
+        assert_eq!(
+            noise_band_span(&table),
+            (NOISE_BAND_MIN_HZ, NOISE_BAND_MAX_HZ)
+        );
+    }
+
+    #[test]
+    fn noise_band_span_reads_the_first_entrys_metadata() {
+        let table = CoeffTable {
+            name: "with-span-metadata".into(),
+            entries: alloc::vec![crate::coeff_table::PitchEntry {
+                f0_hz: 220.0,
+                inharmonicity_stretch: 1.0,
+                partial_freqs: alloc::vec![],
+                k_channels: 1,
+                j_noise: 0,
+                coefficients: alloc::vec![],
+                metadata: alloc::vec![
+                    (NOISE_BAND_MIN_HZ_KEY.into(), 0.0),
+                    (NOISE_BAND_MAX_HZ_KEY.into(), 8000.0),
+                ],
+            }],
+        };
+        assert_eq!(noise_band_span(&table), (0.0, 8000.0));
+    }
+
+    /// `biquad_noise_power_gain`'s simulation should converge to the closed-
+    /// form Parseval identity `Σ h[n]² == Var(y) / Var(x)` for a
+    /// unit-variance-normalized DC-passthrough sanity case: a trivial
+    /// all-pass-at-DC-only biquad (`b0=1`, everything else 0) has `h[0]=1`,
+    /// `h[n]=0` otherwise, so its power gain is exactly 1.
+    #[test]
+    fn biquad_noise_power_gain_identity_filter_is_unity() {
+        let gain = biquad_noise_power_gain(1000.0, 1.0, 44_100.0, (1.0, 0.0, 0.0, 0.0, 0.0));
+        assert!(
+            (gain - 1.0).abs() < 1e-6,
+            "identity filter's impulse response is a single 1.0 sample, so \
+             its power gain (sum of squares) must be exactly 1.0, got {gain}"
+        );
+    }
+
+    /// MOT-641 QA F4: the placement-agreement checks elsewhere (this file's
+    /// other `noise_band_centers` tests, and `motif-soundmatch`'s own
+    /// `noise_band_mismatch_report` tests) compare a reimplementation against
+    /// itself or against another reimplementation of the same formula -- they
+    /// agree even if both sides are wrong the same way. `tests/fixtures/
+    /// noise_band_golden.json` is a checked-in, cross-boundary reference: the
+    /// peak (argmax) bin frequency of `channels.py::noise_basis`'s *actual*
+    /// returned basis matrix (motif-soundmatch), not a re-derivation of its
+    /// formula -- see that file's `_note`/`_method` fields and
+    /// `motif-soundmatch`'s `scripts/gen_noise_band_golden.py`. This asserts
+    /// `noise_band_centers` (the real function the ugen renders with)
+    /// reproduces it within the small residual expected from FFT-bin
+    /// quantization (<2% at every band across all three rates, per the
+    /// generator script's own measurement).
+    #[test]
+    fn noise_band_centers_matches_the_cross_boundary_golden() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("noise_band_golden.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let golden: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        let cases = golden["cases"]
+            .as_array()
+            .expect("golden has a cases array");
+        assert!(!cases.is_empty(), "golden has at least one case");
+
+        for case in cases {
+            let label = case["label"].as_str().unwrap_or("<unlabeled>");
+            let j_noise = case["n_bumps"].as_u64().expect("n_bumps") as usize;
+            let min_hz = case["min_hz"].as_f64().expect("min_hz") as f32;
+            let max_hz = case["max_hz"].as_f64().expect("max_hz") as f32;
+            let expected: alloc::vec::Vec<f32> = case["centers_hz"]
+                .as_array()
+                .expect("centers_hz")
+                .iter()
+                .map(|v| v.as_f64().expect("center") as f32)
+                .collect();
+
+            let actual = noise_band_centers(j_noise, min_hz, max_hz);
+            assert_eq!(actual.len(), expected.len(), "{label}: band count mismatch");
+            for (band, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+                let rel = (a - e).abs() / e.max(1.0);
+                assert!(
+                    rel < 0.02,
+                    "{label} band {band}: analytic noise_band_centers gave \
+                     {a}, golden (empirical, motif-soundmatch) says {e} \
+                     (rel diff {rel:.4}, expected <0.02 -- FFT-bin \
+                     quantization only)"
+                );
+            }
+        }
+    }
 }

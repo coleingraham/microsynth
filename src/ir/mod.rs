@@ -286,18 +286,41 @@ fn core_kind_arity(kind: &str) -> Option<usize> {
     }
 }
 
-/// Input arity of a UGen kind: core arithmetic, the bare registry's port
-/// count, or (if neither) the table-bound registry's port count. Checking
-/// both registries here — rather than just the bare one — lets `validate`
-/// arity-check a table-bound-only kind's edges even though
-/// [`add_ugen_node`] (the bare-factory construction path `compile` uses)
-/// cannot build one; [`MissingTableBinding`](IrError::MissingTableBinding)
-/// is the separate check that catches a table-bound-only kind with no
-/// binding before it ever reaches construction.
-fn kind_arity(reg: &UGenRegistry, kind: &str) -> Option<usize> {
-    core_kind_arity(kind)
-        .or_else(|| reg.entry(kind).map(|e| e.input_names.len()))
-        .or_else(|| reg.table_bound_entry(kind).map(|e| e.input_names.len()))
+/// Input arity of a UGen kind, matching exactly which factory
+/// [`build_base`](IrSynthDef::build_base) will use for *this* node: core
+/// arithmetic always wins; otherwise `table_bound` (whether this node has a
+/// `table_bindings` entry, i.e. whether `build_base` will route it through
+/// `add_table_bound_ugen_node` instead of [`add_ugen_node`]) selects which
+/// registry to consult, mirroring those two functions' lookups one-for-one:
+///
+/// - `table_bound = true`: only `reg.table_bound_entry(kind)` — same as
+///   `add_table_bound_ugen_node`, which never falls back to a bare entry
+///   even if one exists under the same name.
+/// - `table_bound = false`: `reg.entry(kind)` first — same as `add_ugen_node`,
+///   which never falls back to a table-bound entry even if one exists — but
+///   with *one* deliberate extra fallback to `reg.table_bound_entry(kind)`
+///   when no bare entry exists at all. That fallback is not about matching
+///   construction (an unbound node whose kind is table-bound-only can never
+///   be built by `add_ugen_node`); it exists purely so `validate`'s
+///   arity/port-range checks don't fail early with a generic `UnknownKind`
+///   for a table-bound-only kind that's simply missing its binding —
+///   [`MissingTableBinding`](IrError::MissingTableBinding) is the separate,
+///   more specific check that catches that case.
+///
+/// A name registered in *both* registries (see `UGenRegistry::register_table_bound`'s
+/// doc for how that arises) is exactly the case this per-node awareness
+/// exists for: without it, an arity check here could disagree with which
+/// factory `build_base` actually calls for a given node (MOT-652).
+fn kind_arity(reg: &UGenRegistry, kind: &str, table_bound: bool) -> Option<usize> {
+    core_kind_arity(kind).or_else(|| {
+        if table_bound {
+            reg.table_bound_entry(kind).map(|e| e.input_names.len())
+        } else {
+            reg.entry(kind)
+                .map(|e| e.input_names.len())
+                .or_else(|| reg.table_bound_entry(kind).map(|e| e.input_names.len()))
+        }
+    })
 }
 
 /// Whether `kind` is registered *only* as table-bound (no bare-factory
@@ -335,8 +358,9 @@ impl IrSynthDef {
         // Node kinds and inline-const ports.
         for (i, node) in self.nodes.iter().enumerate() {
             if let IrNode::UGen { kind, consts } = node {
-                let arity =
-                    kind_arity(reg, kind).ok_or_else(|| IrError::UnknownKind(kind.clone()))?;
+                let table_bound = self.table_bindings.iter().any(|tb| tb.node == i);
+                let arity = kind_arity(reg, kind, table_bound)
+                    .ok_or_else(|| IrError::UnknownKind(kind.clone()))?;
                 for &(input, _) in consts {
                     if input as usize >= arity {
                         return Err(IrError::InputOutOfRange {
@@ -416,7 +440,8 @@ impl IrSynthDef {
         match &self.nodes[i] {
             IrNode::Const(_) | IrNode::Param { .. } => Ok(0),
             IrNode::UGen { kind, .. } => {
-                kind_arity(reg, kind).ok_or_else(|| IrError::UnknownKind(kind.clone()))
+                let table_bound = self.table_bindings.iter().any(|tb| tb.node == i);
+                kind_arity(reg, kind, table_bound).ok_or_else(|| IrError::UnknownKind(kind.clone()))
             }
         }
     }

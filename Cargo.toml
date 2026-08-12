@@ -21,6 +21,12 @@ clap = { version = "4", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 
+[dev-dependencies]
+# Test-only: parses the cross-boundary placement golden (MOT-641 QA F4,
+# tests/fixtures/noise_band_golden.json) in src/ugens/partials.rs's own
+# #[cfg(test)] module. Never reachable from lib/wasm builds.
+serde_json = "1"
+
 [[bin]]
 name = "microsynth-cli"
 path = "src/bin/microsynth-cli.rs"
