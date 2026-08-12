@@ -28,6 +28,7 @@
 //! [`CoeffTableBank::replace`], called from data uploaded at runtime. That is
 //! the property this module exists to make true, not merely policy.
 
+use crate::wire::{Reader, WireError, put_f32, put_str, put_u16, put_u32};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -134,66 +135,17 @@ const MAGIC: &[u8] = b"MSCT";
 /// Wire-format version. Bump on any change to the byte layout below.
 const FORMAT_VERSION: u16 = 1;
 
-struct Writer(Vec<u8>);
-impl Writer {
-    fn new() -> Self {
-        Writer(Vec::new())
-    }
-    fn u16(&mut self, v: u16) {
-        self.0.extend_from_slice(&v.to_le_bytes());
-    }
-    fn u32(&mut self, v: u32) {
-        self.0.extend_from_slice(&v.to_le_bytes());
-    }
-    fn f32(&mut self, v: f32) {
-        self.0.extend_from_slice(&v.to_bits().to_le_bytes());
-    }
-    fn str(&mut self, s: &str) {
-        self.u32(s.len() as u32);
-        self.0.extend_from_slice(s.as_bytes());
-    }
-}
-
-struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0 }
-    }
-    fn take(&mut self, n: usize) -> Result<&'a [u8], CoeffTableCodecError> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .ok_or(CoeffTableCodecError::UnexpectedEof)?;
-        let slice = self
-            .buf
-            .get(self.pos..end)
-            .ok_or(CoeffTableCodecError::UnexpectedEof)?;
-        self.pos = end;
-        Ok(slice)
-    }
-    fn u16(&mut self) -> Result<u16, CoeffTableCodecError> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
-    }
-    fn u32(&mut self) -> Result<u32, CoeffTableCodecError> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-    fn usize32(&mut self) -> Result<usize, CoeffTableCodecError> {
-        Ok(self.u32()? as usize)
-    }
-    fn f32(&mut self) -> Result<f32, CoeffTableCodecError> {
-        Ok(f32::from_bits(u32::from_le_bytes(
-            self.take(4)?.try_into().unwrap(),
-        )))
-    }
-    fn str(&mut self) -> Result<String, CoeffTableCodecError> {
-        let len = self.usize32()?;
-        let bytes = self.take(len)?;
-        core::str::from_utf8(bytes)
-            .map(|s| s.into())
-            .map_err(|_| CoeffTableCodecError::BadUtf8)
+/// The read/write primitives themselves (little-endian ints/floats,
+/// length-prefixed strings, a bounds-checked cursor) live in [`crate::wire`],
+/// shared with `ir::serialize`'s codec — see that module's doc. Only the
+/// two failure modes intrinsic to those primitives travel as [`WireError`];
+/// this maps them onto this format's own error type so `?` composes.
+impl From<WireError> for CoeffTableCodecError {
+    fn from(e: WireError) -> Self {
+        match e {
+            WireError::UnexpectedEof => CoeffTableCodecError::UnexpectedEof,
+            WireError::BadUtf8 => CoeffTableCodecError::BadUtf8,
+        }
     }
 }
 
@@ -201,31 +153,31 @@ impl CoeffTable {
     /// Encode to the canonical wire form uploaded via `ms_coeff_table_register`
     /// / `ms_coeff_table_replace` — see `docs/coeff-table-bank-format.md`.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut w = Writer::new();
-        w.0.extend_from_slice(MAGIC);
-        w.u16(FORMAT_VERSION);
-        w.str(&self.name);
-        w.u32(self.entries.len() as u32);
+        let mut out = Vec::new();
+        out.extend_from_slice(MAGIC);
+        put_u16(&mut out, FORMAT_VERSION);
+        put_str(&mut out, &self.name);
+        put_u32(&mut out, self.entries.len() as u32);
         for e in &self.entries {
-            w.f32(e.f0_hz);
-            w.f32(e.inharmonicity_stretch);
-            w.u32(e.partial_freqs.len() as u32);
+            put_f32(&mut out, e.f0_hz);
+            put_f32(&mut out, e.inharmonicity_stretch);
+            put_u32(&mut out, e.partial_freqs.len() as u32);
             for &f in &e.partial_freqs {
-                w.f32(f);
+                put_f32(&mut out, f);
             }
-            w.u32(e.k_channels);
-            w.u32(e.j_noise);
-            w.u32(e.coefficients.len() as u32);
+            put_u32(&mut out, e.k_channels);
+            put_u32(&mut out, e.j_noise);
+            put_u32(&mut out, e.coefficients.len() as u32);
             for &c in &e.coefficients {
-                w.f32(c);
+                put_f32(&mut out, c);
             }
-            w.u32(e.metadata.len() as u32);
+            put_u32(&mut out, e.metadata.len() as u32);
             for (k, v) in &e.metadata {
-                w.str(k);
-                w.f32(*v);
+                put_str(&mut out, k);
+                put_f32(&mut out, *v);
             }
         }
-        w.0
+        out
     }
 
     /// Decode from bytes produced by [`to_bytes`](Self::to_bytes). Rejects a
@@ -244,7 +196,7 @@ impl CoeffTable {
         if version > FORMAT_VERSION {
             return Err(CoeffTableCodecError::UnsupportedVersion(version));
         }
-        let name = r.str()?;
+        let name = r.string()?;
         let entry_count = r.usize32()?;
         let mut entries = Vec::with_capacity(entry_count);
         for index in 0..entry_count {
@@ -265,7 +217,7 @@ impl CoeffTable {
             let meta_count = r.usize32()?;
             let mut metadata = Vec::with_capacity(meta_count);
             for _ in 0..meta_count {
-                let k = r.str()?;
+                let k = r.string()?;
                 let v = r.f32()?;
                 metadata.push((k, v));
             }

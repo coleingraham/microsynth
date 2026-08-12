@@ -7,6 +7,7 @@
 //! is the canonical one the content hash is computed over.
 
 use super::{IrEdge, IrNode, IrParam, IrSynthDef, IrTableBinding, SynthDefClass};
+use crate::wire::WireError;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -37,6 +38,20 @@ pub enum IrCodecError {
     BadJson(String),
 }
 
+/// The read/write primitives themselves (little-endian ints/floats,
+/// length-prefixed strings, a bounds-checked cursor) live in [`crate::wire`],
+/// shared with `coeff_table`'s codec — see that module's doc. Only the two
+/// failure modes intrinsic to those primitives travel as [`WireError`]; this
+/// maps them onto this format's own error type so `?` composes.
+impl From<WireError> for IrCodecError {
+    fn from(e: WireError) -> Self {
+        match e {
+            WireError::UnexpectedEof => IrCodecError::UnexpectedEof,
+            WireError::BadUtf8 => IrCodecError::BadUtf8,
+        }
+    }
+}
+
 impl fmt::Display for IrCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -54,67 +69,12 @@ impl fmt::Display for IrCodecError {
 // Binary encoding
 // ---------------------------------------------------------------------------
 
-pub(super) fn put_u16(out: &mut Vec<u8>, v: u16) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-pub(super) fn put_u32(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-pub(super) fn put_f32(out: &mut Vec<u8>, v: f32) {
-    out.extend_from_slice(&v.to_bits().to_le_bytes());
-}
-pub(super) fn put_str(out: &mut Vec<u8>, s: &str) {
-    put_u32(out, s.len() as u32);
-    out.extend_from_slice(s.as_bytes());
-}
-
-/// A cursor reading little-endian records with bounds checks. `pub(super)` so
-/// [`crate::ir::container`] can decode its own length-prefixed sections with
-/// the same primitives this module uses for `IrSynthDef`, rather than a second
-/// hand-rolled reader.
-pub(super) struct Reader<'a> {
-    pub(super) buf: &'a [u8],
-    pub(super) pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    pub(super) fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0 }
-    }
-    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], IrCodecError> {
-        let end = self.pos.checked_add(n).ok_or(IrCodecError::UnexpectedEof)?;
-        let slice = self
-            .buf
-            .get(self.pos..end)
-            .ok_or(IrCodecError::UnexpectedEof)?;
-        self.pos = end;
-        Ok(slice)
-    }
-    pub(super) fn u16(&mut self) -> Result<u16, IrCodecError> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
-    }
-    pub(super) fn u32(&mut self) -> Result<u32, IrCodecError> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-    pub(super) fn usize32(&mut self) -> Result<usize, IrCodecError> {
-        Ok(self.u32()? as usize)
-    }
-    pub(super) fn f32(&mut self) -> Result<f32, IrCodecError> {
-        Ok(f32::from_bits(u32::from_le_bytes(
-            self.take(4)?.try_into().unwrap(),
-        )))
-    }
-    pub(super) fn u8(&mut self) -> Result<u8, IrCodecError> {
-        Ok(self.take(1)?[0])
-    }
-    pub(super) fn string(&mut self) -> Result<String, IrCodecError> {
-        let len = self.usize32()?;
-        let bytes = self.take(len)?;
-        core::str::from_utf8(bytes)
-            .map(|s| s.to_string())
-            .map_err(|_| IrCodecError::BadUtf8)
-    }
-}
+// The write primitives and the bounds-checked `Reader` cursor live in
+// `crate::wire` (see that module's doc) — re-exported here at their
+// pre-existing names/paths so this module's own call sites, and
+// `crate::ir::container`'s (`super::serialize::{Reader, put_u16, ...}`),
+// are unchanged.
+pub(super) use crate::wire::{Reader, put_f32, put_str, put_u16, put_u32};
 
 fn class_tag(c: SynthDefClass) -> u8 {
     match c {

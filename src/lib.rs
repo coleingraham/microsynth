@@ -28,6 +28,7 @@ pub mod voice;
 // and compiling them on every target lets the native test suite drive the
 // raw C-ABI directly instead of only exercising it by proxy.
 pub mod web;
+mod wire;
 
 // Re-export core types for convenience.
 pub use buffer::{AudioBuffer, Block, MAX_BLOCK_SIZE};
