@@ -81,11 +81,12 @@ future field can travel in the format without a version bump: a decoder that
 doesn't recognize a key simply doesn't look for it; an encoder adds a key
 only when it has a value for it.
 
-Two keys are reserved today, both consumed by the direct-synthesis ugen
-(`microsynth::ugens::partials::PartialsNoise`, MOT-636) as the governing
-RFC's "deterministic bridge" — column mass -> sinusoid amplitude and bump
-mass -> noise-generator gain, both per-entry scalars an analysis-side
-producer computes once from its own window/FFT configuration:
+Four keys are reserved today, all consumed by the direct-synthesis ugen
+(`microsynth::ugens::partials::PartialsNoise`, MOT-636/MOT-641) as the
+governing RFC's "deterministic bridge" — column mass -> sinusoid amplitude
+and bump mass -> noise-generator gain, plus (MOT-641) the noise-band span a
+table's noise basis was fit against — all per-entry scalars an analysis-side
+producer computes once from its own window/FFT/basis configuration:
 
 - **`mainlobe_gain`** (f32): the analysis window's mainlobe-gain scalar —
   multiplies every partial coefficient in the entry to convert its L1 mass
@@ -94,32 +95,67 @@ producer computes once from its own window/FFT configuration:
 - **`noise_gain`** (f32): the expected-white-noise-magnitude scalar for the
   entry's noise bands — multiplies every noise-band coefficient to convert
   its bump mass into a noise-generator gain. Absent: defaults to `1.0`, same
-  treatment.
+  treatment. Derived assuming a unit-variance noise source and an ideal
+  (unity in-band gain) bandpass on the consuming side; `PartialsNoise`
+  (MOT-641) rescales its noise source and applies a per-band power-gain
+  compensation specifically so those two assumptions hold at render time —
+  see that ugen's module doc's "deterministic bridge" section.
+- **`noise_band_min_hz`** / **`noise_band_max_hz`** (f32, MOT-641): the Hz
+  span `[min, max]` the entry's noise-band columns were fit against (e.g.
+  `[0, Nyquist]` at the analysis sample rate — `motif-soundmatch`'s
+  `channels.py::noise_basis` mel-spans exactly this). Either absent: the
+  consuming ugen falls back to its own hardcoded default span (`[80,
+  12000]` Hz in `PartialsNoise` today — see `NOISE_BAND_MIN_HZ`/
+  `NOISE_BAND_MAX_HZ` in `partials.rs`). Present, a well-formed table writes
+  the *same* span into every entry (not varying entry-by-entry) — see the
+  next paragraph for why.
 
 Absent-key defaults are safe only for deliberately-unscaled synthetic tables
 (e.g. microsynth's own Rust-side test tables); a producer exporting real
-fitted dictionaries MUST write both keys explicitly, since a fitted table
-rendered at the 1.0 defaults plays its partials on the order of 1700x too
-hot (at `n_fft=1024`, the real `mainlobe_gain` scalar is ~5.8e-4, not 1.0).
-`motif-soundmatch`'s `channel_export.py` enforces this at encode time
-(`encode_coeff_table`'s `allow_unscaled` guard, MOT-649 F10); any other
-producer of this format must enforce an equivalent guard of its own.
+fitted dictionaries MUST write `mainlobe_gain`/`noise_gain` explicitly, since
+a fitted table rendered at the 1.0 defaults plays its partials on the order
+of 1700x too hot (at `n_fft=1024`, the real `mainlobe_gain` scalar is
+~5.8e-4, not 1.0). `motif-soundmatch`'s `channel_export.py` enforces this at
+encode time (`encode_coeff_table`'s `allow_unscaled` guard, MOT-649 F10);
+any other producer of this format must enforce an equivalent guard of its
+own. `noise_band_min_hz`/`noise_band_max_hz` are not held to this same
+enforced-at-encode-time bar: their absence degrades to a documented fallback
+span rather than an order-of-magnitude amplitude error, so a producer may
+omit them (e.g. a synthetic table with no real analysis-side basis to
+report).
 
-Both are per-entry, not per-column: the mainlobe/noise-magnitude
-relationship is fixed by a table's analysis-time window/FFT configuration,
-which today is constant across an entry's own partial/noise columns rather
-than varying column-by-column. Neither key encodes which of an entry's
-`k_channels` a consumer should render — that selection is a
-construction-time parameter of the consuming ugen (`PartialsNoise`'s
-`with_channel`), not carried in the wire format.
+All four are per-entry, not per-column: each relationship is fixed by a
+table's analysis-time window/FFT/basis configuration, which today is
+constant across an entry's own partial/noise columns rather than varying
+column-by-column. None of the four encodes which of an entry's `k_channels`
+a consumer should render — that selection is a construction-time parameter
+of the consuming ugen (`PartialsNoise`'s `with_channel`), not carried in the
+wire format.
 
-The noise-band scalar bridges between the fixed smooth-noise basis a
-table's coefficients were fit against — defined by the analysis-side
-channel model (`motif-soundmatch`'s `channels.py`, MOT-633) as
-mel-spaced/cepstral smooth bumps — and whatever fixed noise-band
-realization a consuming ugen renders with. The two must describe compatible
-band structure for the scalar to be meaningful; reconciling them is the
-concern of whichever producer/consumer pair is in play, not this document.
+`noise_band_min_hz`/`noise_band_max_hz` are additionally per-*table*, not
+truly per-entry, despite living in each entry's metadata slot: the noise
+basis a table's coefficients were fit against is one fixed thing for the
+whole table (RFC: "`N` — a **fixed** bins x J smooth noise basis"), so band
+identity (what center frequency "band index j" means) must not depend on
+which entry of the table is currently active — a glide that changed a
+band's frequency mid-note between two bracketing entries would be audible
+and wrong. A well-formed table's exporter therefore writes the identical
+span into every entry, and a consumer (`PartialsNoise`) reads only one
+entry's worth (its first) rather than interpolating or varying it per
+entry — see `partials.rs`'s `noise_band_span` for the read side of this
+convention.
+
+Before MOT-641, the noise-band scalar bridged between the fixed
+smooth-noise basis a table's coefficients were fit against — defined by the
+analysis-side channel model (`motif-soundmatch`'s `channels.py`, MOT-633) as
+mel-spaced/cepstral smooth bumps — and whatever fixed noise-band realization
+a consuming ugen happened to render with, with no mechanism for the two to
+describe the same band structure. `noise_band_min_hz`/`noise_band_max_hz`
+close that gap: a table that supplies its true fit span lets the consuming
+ugen's band-center formula (which MOT-641 also changed to match
+`channels.py::noise_basis`'s own mel-edges construction exactly, not just
+its span) place bands at the same center frequencies the analysis side fit
+against.
 
 No other metadata keys are reserved today.
 
