@@ -67,8 +67,11 @@ use crate::dsl::{self, UGenRegistry};
 use crate::engine::{Engine, EngineConfig};
 use crate::musical_sequence::schedule_musical_glides;
 use crate::musical_time::{MusicalGlideSegment, MusicalPosition, TimeConfig};
-use crate::ugens::register_builtins;
+use crate::ugens::{register_builtins, register_table_bound_builtins};
 use crate::voice::LegatoVoice;
+
+#[cfg(feature = "ir")]
+use crate::ir::IrSynthDef;
 
 #[cfg(feature = "web")]
 use wasm_bindgen::prelude::*;
@@ -184,6 +187,7 @@ static LEGATO_SLOTS: WasmCell<Option<BTreeMap<AllocString, usize>>> = WasmCell::
 pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
     register_builtins(&mut registry);
+    register_table_bound_builtins(&mut registry);
 
     let config = EngineConfig {
         sample_rate,
@@ -443,6 +447,7 @@ pub unsafe extern "C" fn ms_free(ptr: *mut u8, capacity: usize) {
 pub extern "C" fn ms_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
     register_builtins(&mut registry);
+    register_table_bound_builtins(&mut registry);
 
     let config = EngineConfig {
         sample_rate,
@@ -600,6 +605,74 @@ pub unsafe extern "C" fn ms_compile_def(source_ptr: *const u8, source_len: usize
         *BUS_NODE.get_mut() = Some(bus_id);
         *DEFS.get_mut() = Some(defs);
     }
+
+    0
+}
+
+/// Compile a table-bound SynthDef from a serialized [`crate::ir::IrSynthDef`]
+/// (the `ir::serialize` binary wire format — `IrSynthDef::to_bytes`/
+/// `from_bytes`) and load it as the render sink.
+///
+/// `ms_compile`/`ms_compile_def` take DSL source text through the plain
+/// (table-unaware) DSL compiler — the DSL lexer has no string/id-literal
+/// tokens, so a table reference cannot be written in DSL source at all (see
+/// `docs/coeff-table-bank-format.md`). This export takes the IR's own binary
+/// form instead, bypassing DSL text entirely, and resolves the IR's
+/// `table_bindings` against the session's coefficient-table bank (populated
+/// via `ms_coeff_table_register`/`ms_coeff_table_replace`) through
+/// [`crate::ir::IrSynthDef::compile_with_tables`] — the wasm-ABI
+/// reachability path for table-bound nodes (e.g. `partialsNoise`, MOT-640).
+///
+/// `ir_ptr`/`ir_len` must point to bytes produced by `IrSynthDef::to_bytes`
+/// (or an equivalent producer of the same wire format). Returns 0 on
+/// success, 1 on error: malformed/unsupported-version bytes, a failed
+/// `validate()` (e.g. a `table_bindings` entry naming a node whose kind
+/// isn't registered table-bound), or a `compile_with_tables` failure (e.g.
+/// an unregistered `table_id`).
+///
+/// # Safety
+/// `ir_ptr` must point to an initialized buffer of at least `ir_len` bytes
+/// that stays valid for the call.
+#[cfg(feature = "ir")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_compile_ir_with_tables(ir_ptr: *const u8, ir_len: usize) -> u32 {
+    let ir_bytes = unsafe { core::slice::from_raw_parts(ir_ptr, ir_len) };
+    let ir_def = match IrSynthDef::from_bytes(ir_bytes) {
+        Ok(def) => def,
+        Err(_) => return 1,
+    };
+
+    let registry = match unsafe { REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    if ir_def.validate(registry).is_err() {
+        return 1;
+    }
+
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_ref() {
+        Some(b) => b,
+        None => return 1,
+    };
+    let def = match ir_def.compile_with_tables(registry, bank) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+
+    let sr = engine.context().sample_rate;
+    *engine = Engine::new(EngineConfig {
+        sample_rate: sr,
+        block_size: 128,
+    });
+
+    let synth = engine.instantiate_synthdef(&def);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
 
     0
 }
@@ -820,6 +893,7 @@ pub extern "C" fn ms_free_done() -> u32 {
 pub extern "C" fn ms_routing_init(sample_rate: f32) {
     let mut registry = UGenRegistry::new();
     register_builtins(&mut registry);
+    register_table_bound_builtins(&mut registry);
 
     let config = EngineConfig {
         sample_rate,
@@ -1768,6 +1842,7 @@ impl WebSynth {
     pub fn new(sample_rate: f32, block_size: usize) -> WebSynth {
         let mut registry = UGenRegistry::new();
         register_builtins(&mut registry);
+        register_table_bound_builtins(&mut registry);
 
         let config = EngineConfig {
             sample_rate,
@@ -1906,6 +1981,7 @@ impl WebSynth {
 pub fn validate_dsl(source: &str) -> String {
     let mut registry = UGenRegistry::new();
     register_builtins(&mut registry);
+    register_table_bound_builtins(&mut registry);
     match dsl::compile(source, &registry) {
         Ok(defs) if defs.is_empty() => String::from("no synthdef found"),
         Ok(_) => String::new(),

@@ -56,29 +56,35 @@ mkdir -p "$SCRIPT_DIR/pkg"
 # --- Build 1: Raw WASM for AudioWorklet ---
 # Uses 'std' feature (for allocator + math) but NOT 'web' (no wasm-bindgen).
 # This produces a clean WASM module with only #[no_mangle] C exports.
+# 'ir' (MOT-640) is included so the wasm-ABI table-bound-node reachability
+# path (`ms_compile_ir_with_tables`, src/web.rs) is actually reachable here --
+# it is pure alloc+core (see Cargo.toml's `ir` feature comment), so this adds
+# no new dependency, only the IR codec + compile_with_tables code itself.
 echo ""
-echo "==> Building raw WASM for AudioWorklet (std, no wasm-bindgen)..."
+echo "==> Building raw WASM for AudioWorklet (std, ir, no wasm-bindgen)..."
 "$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
     --target-dir "$TARGET_DIR" \
     --target wasm32-unknown-unknown \
     --release \
-    --features std \
+    --features std,ir \
     --no-default-features
 
 cp "$WASM_OUTPUT" "$SCRIPT_DIR/pkg/microsynth_raw.wasm"
 echo "    -> pkg/microsynth_raw.wasm"
 
 # --- Build 2: wasm-bindgen WASM for main thread ---
-# Uses 'web' feature which pulls in wasm-bindgen + js-sys.
+# Uses 'web' feature which pulls in wasm-bindgen + js-sys, plus 'ir' (MOT-640,
+# see Build 1's comment above -- same reachability path, same zero-new-deps
+# rationale).
 echo ""
-echo "==> Building wasm-bindgen module for main thread (web feature)..."
+echo "==> Building wasm-bindgen module for main thread (web, ir features)..."
 "$CARGO" build \
     --manifest-path "$PROJECT_ROOT/Cargo.toml" \
     --target-dir "$TARGET_DIR" \
     --target wasm32-unknown-unknown \
     --release \
-    --features web \
+    --features web,ir \
     --no-default-features
 
 echo "    Running wasm-bindgen..."
