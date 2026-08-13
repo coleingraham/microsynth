@@ -283,13 +283,31 @@ pre-existing documents keep decoding unchanged.
   DSL source today. Extending the DSL surface, if a future consumer wants a
   text-authorable reference, is that consumer's decision, not assumed by
   this document.
-- **No wasm-bundle graph-compile reachability.** The wasm build profiles
-  compile with the `ir` crate feature off, so `compile_with_tables` is not
-  reachable from the `ms_compile`/`ms_register_def`/`ms_compile_def`
-  raw-ABI entry points, which go through the plain DSL compiler. The
-  upload/replace/free/lookup ABI (Part 3) works in every build regardless —
-  only the "bind a table id onto a specific compiled node" step is
-  `ir`-feature-gated (native/offline tooling) today.
+
+**Wasm-bundle graph-compile reachability (MOT-640): now provided.** Both
+`web/build.sh` wasm profiles (the raw AudioWorklet build and the
+wasm-bindgen main-thread build) now compile with the `ir` crate feature on —
+it is pure `alloc`+`core` (see `Cargo.toml`'s `ir` feature comment), so this
+adds no new dependency, only the IR codec + `compile_with_tables` code
+itself. A new raw export, `ms_compile_ir_with_tables(ir_ptr, ir_len)`
+(`src/web.rs`), takes a serialized `IrSynthDef` (the `ir::serialize` binary
+wire format — `IrSynthDef::to_bytes`/`from_bytes`) instead of DSL text,
+bypassing the DSL surface entirely (the lexer gap above is unchanged and not
+what this closes), and resolves the document's `table_bindings` against the
+session's coefficient-table bank via `IrSynthDef::compile_with_tables`
+before loading the result as the render sink. `ms_compile`/`ms_compile_def`
+(DSL text, table-unaware) are unchanged and remain reachable exactly as
+before — this is a new, additive entry point, not a replacement.
+`register_table_bound_builtins` is now called alongside `register_builtins`
+at every `UGenRegistry` construction site in `src/web.rs`, so
+`partialsNoise` (and any future table-bound kind) is resolvable by name
+wherever a document's `table_bindings` names it. Round-trip proof: upload a
+table via `ms_coeff_table_register`, build a `partialsNoise` `IrSynthDef`
+with a matching `table_bindings` entry, pass its serialized bytes to
+`ms_compile_ir_with_tables`, then render via `ms_render` — non-silence
+(`tests/wasm_ir_table_reachability.rs`). `tests/wasm_abi_stability.rs`
+tracks `ms_compile_ir_with_tables` as an addition, not a replacement, of the
+pre-existing raw-export surface.
 
 ## Consumers of this document
 
