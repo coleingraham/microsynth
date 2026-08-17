@@ -881,3 +881,42 @@ impl<'a> IrBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod required_consistency_tests {
+    use super::*;
+    use crate::node::UGen;
+
+    /// `core_kind_required`'s hardcoded per-port flags for the core
+    /// arithmetic kinds (`Add`/`Sub`/`Mul`/`Div`/`Neg`, which bypass
+    /// `UGenRegistry` entirely — see `kind_required`'s doc) are a second,
+    /// independent statement of the same fact `src/ugens/math.rs`'s
+    /// `BINOP_INPUTS`/`NegUGen`'s `ugen_spec!` already declare. Nothing
+    /// forces the two to move together; this probes the real `BinOpUGen`/
+    /// `NegUGen` instances and checks `core_kind_required` against their
+    /// own `spec()`, the same way `tests/registry_required_consistency.rs`
+    /// does for every registry-backed kind (which these five are not).
+    #[test]
+    fn core_kind_required_matches_the_ugens_it_constructs() {
+        for (name, op) in BINOPS {
+            let probe = ugens::BinOpUGen::new(op.kind());
+            let actual: Vec<bool> = probe.spec().inputs.iter().map(|i| i.required).collect();
+            let declared =
+                core_kind_required(name).unwrap_or_else(|| panic!("{name} should be a core kind"));
+            assert_eq!(
+                declared,
+                actual.as_slice(),
+                "{name}: core_kind_required disagrees with BinOpUGen::spec()"
+            );
+        }
+
+        let probe = ugens::NegUGen;
+        let actual: Vec<bool> = probe.spec().inputs.iter().map(|i| i.required).collect();
+        let declared = core_kind_required(NEG_KIND).expect("Neg should be a core kind");
+        assert_eq!(
+            declared,
+            actual.as_slice(),
+            "Neg: core_kind_required disagrees with NegUGen::spec()"
+        );
+    }
+}

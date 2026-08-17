@@ -215,6 +215,12 @@ impl UGenRegistry {
         self.table_bound.get(name)
     }
 
+    /// Iterate over all registered table-bound `(name, entry)` pairs —
+    /// the [`iter`](Self::iter) counterpart for the table-bound namespace.
+    pub fn table_bound_iter(&self) -> impl Iterator<Item = (&String, &TableUGenEntry)> {
+        self.table_bound.iter()
+    }
+
     /// Build an instance of table-bound kind `name`, bound to `table`.
     /// Returns `None` if `name` is not registered as table-bound.
     pub fn resolve_table_bound(&self, name: &str, table: Arc<CoeffTable>) -> Option<Box<dyn UGen>> {
@@ -322,6 +328,28 @@ impl<'a> Compiler<'a> {
                             args.len()
                         ),
                     });
+                }
+
+                // Positional args wire ports 0..args.len() as a prefix, leaving
+                // the rest unconnected (that's how an optional trailing port,
+                // e.g. a filter's "q", gets its own default). But a *required*
+                // port left in that gap is not a default case — it is a graph
+                // AudioGraph::prepare will refuse to render. Catch it here,
+                // as a CompileError naming the ugen and the missing port,
+                // instead of letting it reach that panic (or, before the
+                // required/optional split existed, an out-of-bounds index
+                // inside some UGen's own `process`).
+                for i in args.len()..entry.input_names.len() {
+                    if entry.required[i] {
+                        return Err(CompileError {
+                            message: alloc::format!(
+                                "{func_name}: required argument '{}' (port {i}) not supplied — \
+                                 got {} argument(s)",
+                                entry.input_names[i],
+                                args.len()
+                            ),
+                        });
+                    }
                 }
 
                 let factory = entry.factory;
