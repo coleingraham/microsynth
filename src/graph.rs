@@ -419,6 +419,35 @@ impl AudioGraph {
         }
     }
 
+    /// Force a node's noise generator(s) to a specific seed, overriding the
+    /// per-spawn seed `Engine::instantiate_synthdef` already assigned it (a
+    /// no-op for a node with no noise generator -- same pattern as
+    /// `set_node_value` on a node with no scalar to set). Reseeding is a
+    /// hard reset of the generator's internal LCG state, not a target to
+    /// glide toward.
+    ///
+    /// Exists so a caller that spawns several noise-bearing voices meant to
+    /// be perceived as ONE sound source (e.g. several `partialsNoise`
+    /// instances crossfaded together) can give them all the SAME seed --
+    /// their noise streams become sample-for-sample identical rather than
+    /// independent, so a crossfaded/mixed sum of them is coherent (adds
+    /// linearly) instead of incoherent (adds as the RMS sum of uncorrelated
+    /// sources, `sqrt(sum a_k^2)` rather than `sum a_k`). Without this, two
+    /// noise-bearing voices instantiated in the same synthdef always get
+    /// distinct seeds (`derive_noise_seed`'s `node_idx` term) -- correct and
+    /// desired when they are meant to sound like independent sources (e.g.
+    /// two different drum voices), wrong when they are meant to sound like
+    /// one.
+    pub fn reseed_node_noise(&mut self, id: NodeId, seed: u32) -> bool {
+        match self.nodes.get_mut(id.index()) {
+            Some(Some(slot)) => {
+                slot.ugen.reseed_noise(seed);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Set a target value with glide on a node (e.g. smooth parameter transition).
     /// Returns true if the node accepted the target.
     /// This does NOT require `prepare()` — it's safe to call between renders.
