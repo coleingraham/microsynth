@@ -223,9 +223,21 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 /// resolved [`crate::coeff_table::CoeffTable`] at construction time, which no
 /// bare `fn() -> Box<dyn UGen>` factory can capture (see
 /// `docs/coeff-table-bank-format.md`). Call this alongside `register_builtins`
-/// from any host that resolves table-bound kinds (today: native / `ir`-feature
-/// tooling — `IrSynthDef::compile_with_tables` is the step that is
-/// `ir`-gated, not this registration).
+/// from any host that resolves table-bound kinds. This registration is not
+/// itself `ir`-gated — `IrSynthDef::compile_with_tables` (the step that
+/// actually resolves a `table_bindings` entry) is the `ir`-gated one — so
+/// calling this unconditionally costs binary size even when `ir` is off and
+/// the registration goes unused (see `docs/coeff-table-bank-format.md`'s
+/// wasm-reachability section).
+///
+/// Callers today (MOT-640): all five `UGenRegistry` construction sites in
+/// `src/web.rs` (`ms_init_with_bus`, `ms_init`, `ms_routing_init`,
+/// `WebSynth::new`, `validate_dsl`) — every wasm entry point that builds a
+/// registry calls this. The two native-CLI registry sites in
+/// `src/bin/microsynth-cli.rs` do not call this yet; that binary isn't
+/// wasm-reachable (its `std` feature requirement excludes it from any `--lib`
+/// wasm build) and is a separate, real gap for a table-bound kind used
+/// natively via the CLI, not covered by MOT-640's wasm-reachability scope.
 ///
 /// Currently registers `partialsNoise` (`ugens::partials`, MOT-636).
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
