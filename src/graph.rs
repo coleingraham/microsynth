@@ -25,6 +25,12 @@ struct NodeSlot {
     output_channels: usize,
     /// Whether this node has been processed in the current block.
     processed: bool,
+    /// Whether `UGen::init` has been called on this node yet. `prepare()`
+    /// calls `init` at most once per node (see `init_nodes`): a node index
+    /// is never reused (`add_node` only ever pushes, `remove_node` tombstones
+    /// in place), so this flag's lifetime matches the one `UGen` instance
+    /// living at this slot and can never leak onto a later, unrelated node.
+    initialized: bool,
 }
 
 /// A directed acyclic audio processing graph.
@@ -102,6 +108,7 @@ impl AudioGraph {
             output: AudioBuffer::new(1, 1), // placeholder, resized in prepare()
             output_channels: 1,
             processed: false,
+            initialized: false,
         }));
         self.dirty = true;
         id
@@ -341,10 +348,24 @@ impl AudioGraph {
         }
     }
 
-    /// Call init on all nodes.
+    /// Call `init` on every node that has not been initialized yet.
+    ///
+    /// `prepare()` runs on every structural change (a node or edge added or
+    /// removed), not just once at startup. Calling `init` unconditionally
+    /// here would re-run it on nodes that are already live and rendering --
+    /// and for a lot of `UGen` impls, `init` is a full state reset (envelope
+    /// stage, oscillator/ramp phase, delay-line write cursor, playback
+    /// position, ...), so an unrelated voice spawning or freeing elsewhere in
+    /// the graph would restart or glitch every other already-running voice.
+    /// Gating on `NodeSlot::initialized` makes `init` run exactly once per
+    /// node, at the first `prepare()` after it was added, while still
+    /// covering nodes added since the last `prepare()`.
     fn init_nodes(&mut self, context: &ProcessContext) {
         for slot in self.nodes.iter_mut().flatten() {
-            slot.ugen.init(context);
+            if !slot.initialized {
+                slot.ugen.init(context);
+                slot.initialized = true;
+            }
         }
     }
 
