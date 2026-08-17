@@ -324,6 +324,28 @@ impl<'a> Compiler<'a> {
                     });
                 }
 
+                // Positional args wire ports 0..args.len() as a prefix, leaving
+                // the rest unconnected (that's how an optional trailing port,
+                // e.g. a filter's "q", gets its own default). But a *required*
+                // port left in that gap is not a default case — it is a graph
+                // AudioGraph::prepare will refuse to render. Catch it here,
+                // as a CompileError naming the ugen and the missing port,
+                // instead of letting it reach that panic (or, before the
+                // required/optional split existed, an out-of-bounds index
+                // inside some UGen's own `process`).
+                for i in args.len()..entry.input_names.len() {
+                    if entry.required[i] {
+                        return Err(CompileError {
+                            message: alloc::format!(
+                                "{func_name}: required argument '{}' (port {i}) not supplied — \
+                                 got {} argument(s)",
+                                entry.input_names[i],
+                                args.len()
+                            ),
+                        });
+                    }
+                }
+
                 let factory = entry.factory;
                 let node_idx = self.builder.add_node(move || factory());
 
