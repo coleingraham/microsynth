@@ -318,7 +318,7 @@ impl UGen for NegUGen {
         inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let input = require_input(inputs, 0, "Neg", "in");
+        let input = require_input(inputs, 0, self.spec().name, "in");
         for ch in 0..output.num_channels() {
             let in_ch = ch % input.num_channels();
             let in_samples = input.channel(in_ch).samples();
