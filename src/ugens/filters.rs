@@ -4,7 +4,7 @@
 //! Coefficients are recalculated per-sample to support audio-rate modulation
 //! of cutoff frequency and Q.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::ugens::delayline::DelayLine;
@@ -39,7 +39,8 @@ impl UGen for OnePole {
     ugen_spec!(
         "OnePole",
         category = Filter,
-        inputs = ["in", "coeff"],
+        inputs = ["in"],
+        optional_inputs = ["coeff"],
         outputs = ["out"]
     );
 
@@ -52,11 +53,11 @@ impl UGen for OnePole {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let coeff_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let coeff_buf = inputs.get(1).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
@@ -304,7 +305,8 @@ macro_rules! biquad_ugen {
             ugen_spec!(
                 $name,
                 category = Filter,
-                inputs = ["in", "freq", "q"],
+                inputs = ["in"],
+                optional_inputs = ["freq", "q"],
                 outputs = ["out"]
             );
 
@@ -319,12 +321,12 @@ macro_rules! biquad_ugen {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
-                let in_buf = inputs[0];
-                let freq_buf = inputs.get(1).copied();
-                let q_buf = inputs.get(2).copied();
+                let in_buf = require_input(inputs, 0, self.spec().name, "in");
+                let freq_buf = inputs.get(1).copied().flatten();
+                let q_buf = inputs.get(2).copied().flatten();
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
@@ -433,7 +435,8 @@ macro_rules! biquad_gain_ugen {
             ugen_spec!(
                 $name,
                 category = Filter,
-                inputs = ["in", "freq", "q", "gain"],
+                inputs = ["in"],
+                optional_inputs = ["freq", "q", "gain"],
                 outputs = ["out"]
             );
 
@@ -448,13 +451,13 @@ macro_rules! biquad_gain_ugen {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
-                let in_buf = inputs[0];
-                let freq_buf = inputs.get(1).copied();
-                let q_buf = inputs.get(2).copied();
-                let gain_buf = inputs.get(3).copied();
+                let in_buf = require_input(inputs, 0, self.spec().name, "in");
+                let freq_buf = inputs.get(1).copied().flatten();
+                let q_buf = inputs.get(2).copied().flatten();
+                let gain_buf = inputs.get(3).copied().flatten();
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
@@ -550,9 +553,10 @@ impl UGen for ParametricEq3 {
     ugen_spec!(
         "ParametricEq3",
         category = Filter,
-        inputs = [
-            "in", "lowFreq", "lowGain", "lowQ", "midFreq", "midGain", "midQ", "highFreq",
-            "highGain", "highQ"
+        inputs = ["in"],
+        optional_inputs = [
+            "lowFreq", "lowGain", "lowQ", "midFreq", "midGain", "midQ", "highFreq", "highGain",
+            "highQ"
         ],
         outputs = ["out"]
     );
@@ -570,19 +574,19 @@ impl UGen for ParametricEq3 {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let low_freq_buf = inputs.get(1).copied();
-        let low_gain_buf = inputs.get(2).copied();
-        let low_q_buf = inputs.get(3).copied();
-        let mid_freq_buf = inputs.get(4).copied();
-        let mid_gain_buf = inputs.get(5).copied();
-        let mid_q_buf = inputs.get(6).copied();
-        let high_freq_buf = inputs.get(7).copied();
-        let high_gain_buf = inputs.get(8).copied();
-        let high_q_buf = inputs.get(9).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let low_freq_buf = inputs.get(1).copied().flatten();
+        let low_gain_buf = inputs.get(2).copied().flatten();
+        let low_q_buf = inputs.get(3).copied().flatten();
+        let mid_freq_buf = inputs.get(4).copied().flatten();
+        let mid_gain_buf = inputs.get(5).copied().flatten();
+        let mid_q_buf = inputs.get(6).copied().flatten();
+        let high_freq_buf = inputs.get(7).copied().flatten();
+        let high_gain_buf = inputs.get(8).copied().flatten();
+        let high_q_buf = inputs.get(9).copied().flatten();
         let sr = self.sample_rate;
         let nyquist = sr * 0.5;
 
@@ -659,7 +663,8 @@ impl UGen for CombFilter {
     ugen_spec!(
         "CombFilter",
         category = Filter,
-        inputs = ["in", "delay", "feedback"],
+        inputs = ["in"],
+        optional_inputs = ["delay", "feedback"],
         outputs = ["out"]
     );
 
@@ -676,12 +681,12 @@ impl UGen for CombFilter {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let delay_buf = inputs.get(1).copied();
-        let fb_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let delay_buf = inputs.get(1).copied().flatten();
+        let fb_buf = inputs.get(2).copied().flatten();
         if self.line.is_empty() {
             return;
         }
@@ -872,7 +877,8 @@ impl UGen for GVerb {
     ugen_spec!(
         "GVerb",
         category = Filter,
-        inputs = ["in", "roomsize", "damping", "wet", "dry"],
+        inputs = ["in"],
+        optional_inputs = ["roomsize", "damping", "wet", "dry"],
         outputs = ["out"]
     );
 
@@ -900,17 +906,19 @@ impl UGen for GVerb {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let params = GVerbParams {
-            roomsize: inputs.get(1).copied(),
-            damping: inputs.get(2).copied(),
-            wet: inputs.get(3).copied(),
-            dry: inputs.get(4).copied(),
+            roomsize: inputs.get(1).copied().flatten(),
+            damping: inputs.get(2).copied().flatten(),
+            wet: inputs.get(3).copied().flatten(),
+            dry: inputs.get(4).copied().flatten(),
         };
 
-        let in_ch = inputs[0].channel(0).samples();
+        let in_ch = require_input(inputs, 0, self.spec().name, "in")
+            .channel(0)
+            .samples();
 
         Self::render_side(
             &mut self.combs_l,
@@ -1000,8 +1008,8 @@ impl UGen for Compressor {
     ugen_spec!(
         "Compressor",
         category = Filter,
-        inputs = [
-            "in",
+        inputs = ["in"],
+        optional_inputs = [
             "sidechain",
             "threshold",
             "ratio",
@@ -1024,16 +1032,16 @@ impl UGen for Compressor {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let sc_buf = inputs.get(1).copied().unwrap_or(in_buf);
-        let thresh_buf = inputs.get(2).copied();
-        let ratio_buf = inputs.get(3).copied();
-        let attack_buf = inputs.get(4).copied();
-        let release_buf = inputs.get(5).copied();
-        let makeup_buf = inputs.get(6).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let sc_buf = inputs.get(1).copied().flatten().unwrap_or(in_buf);
+        let thresh_buf = inputs.get(2).copied().flatten();
+        let ratio_buf = inputs.get(3).copied().flatten();
+        let attack_buf = inputs.get(4).copied().flatten();
+        let release_buf = inputs.get(5).copied().flatten();
+        let makeup_buf = inputs.get(6).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let in_ch = channel_wrapped(in_buf, ch);
@@ -1385,7 +1393,8 @@ impl UGen for Limiter {
     ugen_spec!(
         "Limiter",
         category = Filter,
-        inputs = ["in", "ceiling", "release"],
+        inputs = ["in"],
+        optional_inputs = ["ceiling", "release"],
         outputs = ["out"]
     );
 
@@ -1419,12 +1428,12 @@ impl UGen for Limiter {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let ceiling_buf = inputs.get(1).copied();
-        let release_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let ceiling_buf = inputs.get(1).copied().flatten();
+        let release_buf = inputs.get(2).copied().flatten();
         if self.delays[0].is_empty() {
             return;
         }

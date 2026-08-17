@@ -1,6 +1,6 @@
 //! Utility UGens: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -28,7 +28,12 @@ impl Pan2 {
 }
 
 impl UGen for Pan2 {
-    ugen_spec!("Pan2", inputs = ["in", "pos"], outputs = ["out"]);
+    ugen_spec!(
+        "Pan2",
+        inputs = ["in"],
+        optional_inputs = ["pos"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -41,11 +46,11 @@ impl UGen for Pan2 {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let pos_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, "Pan2", "in");
+        let pos_buf = inputs.get(1).copied().flatten();
         let quarter_pi = core::f32::consts::FRAC_PI_4;
 
         // Output channel 0 = left, channel 1 = right
@@ -101,10 +106,10 @@ impl UGen for Mix {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
+        let in_buf = require_input(inputs, 0, "Mix", "in");
         let out = output.channel_mut(0).samples_mut();
 
         // Sum all input channels into the output
@@ -158,11 +163,11 @@ impl UGen for SampleAndHold {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let trig_buf = inputs[1];
+        let in_buf = require_input(inputs, 0, "SampleAndHold", "in");
+        let trig_buf = require_input(inputs, 1, "SampleAndHold", "trig");
 
         for ch in 0..output.num_channels() {
             let mut held = self.held_value;
@@ -218,7 +223,12 @@ impl Impulse {
 }
 
 impl UGen for Impulse {
-    ugen_spec!("Impulse", inputs = ["freq"], outputs = ["out"]);
+    ugen_spec!(
+        "Impulse",
+        inputs = [],
+        optional_inputs = ["freq"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -234,10 +244,10 @@ impl UGen for Impulse {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
+        let freq_buf = inputs.first().copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
         for ch in 0..output.num_channels() {
@@ -299,7 +309,12 @@ impl Lag {
 }
 
 impl UGen for Lag {
-    ugen_spec!("Lag", inputs = ["in", "time"], outputs = ["out"]);
+    ugen_spec!(
+        "Lag",
+        inputs = ["in"],
+        optional_inputs = ["time"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -312,11 +327,11 @@ impl UGen for Lag {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let time_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, "Lag", "in");
+        let time_buf = inputs.get(1).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
@@ -364,7 +379,12 @@ impl Clip {
 }
 
 impl UGen for Clip {
-    ugen_spec!("Clip", inputs = ["in", "lo", "hi"], outputs = ["out"]);
+    ugen_spec!(
+        "Clip",
+        inputs = ["in"],
+        optional_inputs = ["lo", "hi"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -372,12 +392,12 @@ impl UGen for Clip {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let lo_buf = inputs.get(1).copied();
-        let hi_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, "Clip", "in");
+        let lo_buf = inputs.get(1).copied().flatten();
+        let hi_buf = inputs.get(2).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let in_ch = channel_wrapped(in_buf, ch);

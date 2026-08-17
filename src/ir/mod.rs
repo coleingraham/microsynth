@@ -199,6 +199,14 @@ pub enum IrError {
     /// `compile_with_tables` could not resolve a `table_bindings` entry's id
     /// against the bank it was given.
     TableNotFound(u32),
+    /// A UGen node leaves a `required` input port (per
+    /// [`InputSpec::required`](crate::node::InputSpec::required)) with
+    /// neither a connected edge nor an inline const value. Compiling this
+    /// document would build a graph `AudioGraph::prepare` refuses to render
+    /// (it panics on exactly this condition) — `validate` catches it first,
+    /// so a malformed/untrusted document is rejected as a `Result::Err`
+    /// rather than reaching that panic.
+    RequiredInputUnconnected { node: usize, input: usize },
 }
 
 impl fmt::Display for IrError {
@@ -232,6 +240,10 @@ impl fmt::Display for IrError {
                 "node {node} (kind {kind:?}) is table-bound-only but has no table_bindings entry"
             ),
             IrError::TableNotFound(id) => write!(f, "table id {id} not found in bank"),
+            IrError::RequiredInputUnconnected { node, input } => write!(
+                f,
+                "node {node}: required input port {input} has no connected edge or inline const"
+            ),
         }
     }
 }
@@ -323,6 +335,36 @@ fn kind_arity(reg: &UGenRegistry, kind: &str, table_bound: bool) -> Option<usize
     })
 }
 
+/// Per-port `required` flags of a core kind (binops: both required; `Neg`:
+/// its one port required — matching `BINOP_INPUTS`/`NegUGen`'s own spec in
+/// `src/ugens/math.rs`), or `None` if not core.
+fn core_kind_required(kind: &str) -> Option<&'static [bool]> {
+    if binop_kind(kind).is_some() {
+        Some(&[true, true])
+    } else if kind == NEG_KIND {
+        Some(&[true])
+    } else {
+        None
+    }
+}
+
+/// Per-port `required` flags of a UGen kind (same order as [`kind_arity`]'s
+/// arity, and resolved by the identical bare-vs-table-bound rule — see that
+/// function's doc for why the rule has to match `build_base`'s factory choice
+/// node-for-node). `None` only when `kind` is unknown, which `validate`'s
+/// earlier `UnknownKind` check has already rejected by the time this runs.
+fn kind_required<'a>(reg: &'a UGenRegistry, kind: &str, table_bound: bool) -> Option<&'a [bool]> {
+    core_kind_required(kind).or_else(|| {
+        if table_bound {
+            reg.table_bound_entry(kind).map(|e| e.required.as_slice())
+        } else {
+            reg.entry(kind)
+                .map(|e| e.required.as_slice())
+                .or_else(|| reg.table_bound_entry(kind).map(|e| e.required.as_slice()))
+        }
+    })
+}
+
 /// Whether `kind` is registered *only* as table-bound (no bare-factory
 /// entry and not a core arithmetic kind) — the condition
 /// [`IrError::MissingTableBinding`] guards against when unaccompanied by a
@@ -384,6 +426,33 @@ impl IrSynthDef {
                     input: e.to_input,
                     arity,
                 });
+            }
+        }
+
+        // Required input ports: every `required` port (InputSpec::required)
+        // must be satisfied by either a connected edge or an inline const —
+        // both become a real `AudioGraph` edge once `compile`/`build_base`
+        // materializes inline consts as `Const` nodes, so either one counts
+        // as "connected" from `AudioGraph::prepare`'s perspective. Rejecting
+        // the gap here, as a `Result::Err`, is the compile-time counterpart
+        // to `AudioGraph::prepare`'s panic on the same condition for a
+        // graph built directly (not through IR) — this is the layer meant
+        // for untrusted/external documents, so it must not panic.
+        for (i, node) in self.nodes.iter().enumerate() {
+            if let IrNode::UGen { kind, consts } = node {
+                let table_bound = self.table_bindings.iter().any(|tb| tb.node == i);
+                let required = kind_required(reg, kind, table_bound)
+                    .ok_or_else(|| IrError::UnknownKind(kind.clone()))?;
+                for (input, &is_required) in required.iter().enumerate() {
+                    if !is_required {
+                        continue;
+                    }
+                    let has_edge = self.edges.iter().any(|e| e.to == i && e.to_input == input);
+                    let has_const = consts.iter().any(|&(c_input, _)| c_input as usize == input);
+                    if !has_edge && !has_const {
+                        return Err(IrError::RequiredInputUnconnected { node: i, input });
+                    }
+                }
             }
         }
 

@@ -1,6 +1,6 @@
 //! Envelope UGens: Line, XLine, Perc, ExpPerc, ASR, ADSR.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -84,7 +84,8 @@ macro_rules! ramp_ugen {
             ugen_spec!(
                 $name,
                 category = Envelope,
-                inputs = ["start", "end", "dur"],
+                inputs = [],
+                optional_inputs = ["start", "end", "dur"],
                 outputs = ["out"]
             );
 
@@ -106,14 +107,14 @@ macro_rules! ramp_ugen {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
                 // On first block, latch start/end/dur from the first sample.
                 if !self.initialized {
-                    let raw_start = read_input(inputs.first().copied(), 0, 0, $start_default);
-                    let raw_end = read_input(inputs.get(1).copied(), 0, 0, $end_default);
-                    let dur = read_input(inputs.get(2).copied(), 0, 0, 1.0).max(0.0);
+                    let raw_start = read_input(inputs.first().copied().flatten(), 0, 0, $start_default);
+                    let raw_end = read_input(inputs.get(1).copied().flatten(), 0, 0, $end_default);
+                    let dur = read_input(inputs.get(2).copied().flatten(), 0, 0, 1.0).max(0.0);
 
                     let (start, end) = ($prepare)(raw_start, raw_end);
 
@@ -260,7 +261,8 @@ macro_rules! perc_ugen {
             ugen_spec!(
                 $name,
                 category = Envelope,
-                inputs = ["attack", "release"],
+                inputs = [],
+                optional_inputs = ["attack", "release"],
                 outputs = ["out"]
             );
 
@@ -280,11 +282,11 @@ macro_rules! perc_ugen {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
-                let attack_buf = inputs.first().copied();
-                let release_buf = inputs.get(1).copied();
+                let attack_buf = inputs.first().copied().flatten();
+                let release_buf = inputs.get(1).copied().flatten();
 
                 for ch in 0..output.num_channels() {
                     let mut level = self.level;
@@ -412,7 +414,8 @@ impl UGen for ASR {
     ugen_spec!(
         "ASR",
         category = Envelope,
-        inputs = ["gate", "attack", "release"],
+        inputs = ["gate"],
+        optional_inputs = ["attack", "release"],
         outputs = ["out"]
     );
 
@@ -429,12 +432,12 @@ impl UGen for ASR {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let gate_buf = inputs[0];
-        let attack_buf = inputs.get(1).copied();
-        let release_buf = inputs.get(2).copied();
+        let gate_buf = require_input(inputs, 0, self.spec().name, "gate");
+        let attack_buf = inputs.get(1).copied().flatten();
+        let release_buf = inputs.get(2).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut level = self.level;
@@ -553,7 +556,8 @@ impl UGen for ADSR {
     ugen_spec!(
         "ADSR",
         category = Envelope,
-        inputs = ["gate", "attack", "decay", "sustain", "release"],
+        inputs = ["gate"],
+        optional_inputs = ["attack", "decay", "sustain", "release"],
         outputs = ["out"]
     );
 
@@ -570,14 +574,14 @@ impl UGen for ADSR {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let gate_buf = inputs[0];
-        let attack_buf = inputs.get(1).copied();
-        let decay_buf = inputs.get(2).copied();
-        let sustain_buf = inputs.get(3).copied();
-        let release_buf = inputs.get(4).copied();
+        let gate_buf = require_input(inputs, 0, self.spec().name, "gate");
+        let attack_buf = inputs.get(1).copied().flatten();
+        let decay_buf = inputs.get(2).copied().flatten();
+        let sustain_buf = inputs.get(3).copied().flatten();
+        let release_buf = inputs.get(4).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut level = self.level;

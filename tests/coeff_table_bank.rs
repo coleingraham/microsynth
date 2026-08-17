@@ -53,7 +53,7 @@ impl UGen for CoeffSumProbe {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let sum: f32 = self

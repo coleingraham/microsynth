@@ -61,7 +61,8 @@ macro_rules! phase_osc {
             ugen_spec!(
                 $name,
                 category = Oscillator,
-                inputs = ["freq" $(, $port)?],
+                inputs = [],
+                optional_inputs = ["freq" $(, $port)?],
                 outputs = ["out"]
             );
 
@@ -76,10 +77,10 @@ macro_rules! phase_osc {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
-                let freq_buf = inputs.first().copied();
+                let freq_buf = inputs.first().copied().flatten();
                 let inv_sr = 1.0 / self.sample_rate;
 
                 for ch in 0..output.num_channels() {
@@ -93,7 +94,7 @@ macro_rules! phase_osc {
 
                         *out_sample = ($sample)(
                             phase
-                            $(, read_input(inputs.get(1).copied(), ch, i, $default))?
+                            $(, read_input(inputs.get(1).copied().flatten(), ch, i, $default))?
                         );
 
                         phase += freq * inv_sr;

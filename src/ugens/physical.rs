@@ -75,7 +75,8 @@ impl UGen for Pluck {
     ugen_spec!(
         "Pluck",
         category = Physical,
-        inputs = ["freq", "decay", "trig"],
+        inputs = [],
+        optional_inputs = ["freq", "decay", "trig"],
         outputs = ["out"]
     );
 
@@ -102,12 +103,12 @@ impl UGen for Pluck {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
-        let decay_buf = inputs.get(1).copied();
-        let trig_buf = inputs.get(2).copied();
+        let freq_buf = inputs.first().copied().flatten();
+        let decay_buf = inputs.get(1).copied().flatten();
+        let trig_buf = inputs.get(2).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut write_pos = self.write_pos;
@@ -218,7 +219,8 @@ impl UGen for Bowed {
     ugen_spec!(
         "Bowed",
         category = Physical,
-        inputs = ["freq", "pressure", "position"],
+        inputs = [],
+        optional_inputs = ["freq", "pressure", "position"],
         outputs = ["out"]
     );
 
@@ -241,12 +243,12 @@ impl UGen for Bowed {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
-        let pressure_buf = inputs.get(1).copied();
-        let position_buf = inputs.get(2).copied();
+        let freq_buf = inputs.first().copied().flatten();
+        let pressure_buf = inputs.get(1).copied().flatten();
+        let position_buf = inputs.get(2).copied().flatten();
         let max_len = self.nut_delay.len();
         if max_len == 0 {
             return;

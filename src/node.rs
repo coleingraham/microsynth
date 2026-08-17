@@ -21,6 +21,16 @@ pub struct InputSpec {
     pub name: &'static str,
     /// The rate this input expects.
     pub rate: Rate,
+    /// Whether this port must be connected for the graph to be renderable.
+    ///
+    /// A `true` port left unconnected is a construction error: `AudioGraph::prepare`
+    /// fails loud (panics, naming the node/port) rather than letting `process` run
+    /// with a missing signal it was written to assume is present. A `false` port is
+    /// a deliberate default-when-unconnected case — its `process` impl reads it via
+    /// [`crate::buffer::read_input`] with an explicit per-UGen default, and
+    /// "unconnected" is a real, distinct state from "connected to silence" (see
+    /// `UGen::process`'s `inputs` doc).
+    pub required: bool,
 }
 
 /// Descriptor for a node output port.
@@ -106,13 +116,23 @@ pub trait UGen: Send {
     /// Process one block of audio/control data.
     ///
     /// - `context`: global engine state (sample rate, block size, time)
-    /// - `inputs`: one `AudioBuffer` per input port, read-only
+    /// - `inputs`: one slot per input port declared in `spec().inputs`, in the
+    ///   same order — `inputs.len() == spec().inputs.len()` always. Slot `i` is
+    ///   `Some(&AudioBuffer)` if port `i` is connected, `None` if it is not.
+    ///   Position is stable: an unconnected port never shifts a later port's
+    ///   buffer down into its slot (see `AudioGraph::render`'s doc). A `required`
+    ///   port (per `InputSpec::required`) is guaranteed `Some` here — `prepare()`
+    ///   refuses to leave the graph renderable otherwise — so `process` impls may
+    ///   unwrap those (prefer [`crate::buffer::require_input`], which panics with
+    ///   a message naming the culprit if this invariant is ever violated). An
+    ///   optional port stays `None` when unconnected; read it with
+    ///   [`crate::buffer::read_input`], which takes an explicit default.
     /// - `output`: the output buffer to write into; channel count has been
     ///   pre-set by the graph according to `output_channels`.
     fn process(
         &mut self,
         context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     );
 

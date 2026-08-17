@@ -1,6 +1,6 @@
 //! Arithmetic UGens: Const, Param, BinOp, Neg.
 
-use crate::buffer::AudioBuffer;
+use crate::buffer::{AudioBuffer, require_input};
 use crate::context::{ProcessContext, Rate};
 use crate::curve::{GlideShape, GlideSpace, glide_fraction};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
@@ -32,7 +32,7 @@ impl UGen for Const {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         for ch in 0..output.num_channels() {
@@ -110,7 +110,7 @@ impl UGen for Param {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         if self.samples_remaining == 0 {
@@ -243,10 +243,12 @@ static BINOP_INPUTS: [InputSpec; 2] = [
     InputSpec {
         name: "a",
         rate: Rate::Audio,
+        required: true,
     },
     InputSpec {
         name: "b",
         rate: Rate::Audio,
+        required: true,
     },
 ];
 
@@ -276,11 +278,12 @@ impl UGen for BinOpUGen {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let a = inputs[0];
-        let b = inputs[1];
+        let name = self.spec().name;
+        let a = require_input(inputs, 0, name, "a");
+        let b = require_input(inputs, 1, name, "b");
         let op: fn(f32, f32) -> f32 = match self.kind {
             BinOpKind::Add => |a, b| a + b,
             BinOpKind::Sub => |a, b| a - b,
@@ -312,10 +315,10 @@ impl UGen for NegUGen {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let input = inputs[0];
+        let input = require_input(inputs, 0, "Neg", "in");
         for ch in 0..output.num_channels() {
             let in_ch = ch % input.num_channels();
             let in_samples = input.channel(in_ch).samples();

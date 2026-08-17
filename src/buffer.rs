@@ -169,6 +169,34 @@ pub fn read_input(buf: Option<&AudioBuffer>, ch: usize, i: usize, default: f32) 
     }
 }
 
+/// Unwrap a `process`-time input slot known to be a **required** port.
+///
+/// `AudioGraph::prepare` refuses to leave a graph renderable if a `required`
+/// port (`InputSpec::required`) has no connected source, so by the time
+/// `process` runs, `inputs[port]` for a required port is guaranteed `Some`.
+/// This makes that invariant explicit and gives a clear panic — naming the
+/// UGen and port — if it is ever violated (e.g. a `process` impl called
+/// directly, bypassing `prepare`), instead of silently shifting a later
+/// port's buffer into this one's place or indexing out of bounds.
+///
+/// `ugen_name`/`port_name` are the same strings as `UGenSpec::name` and
+/// `InputSpec::name` for the port being read — pass them literally, they are
+/// only for the panic message.
+#[inline]
+pub fn require_input<'a>(
+    inputs: &[Option<&'a AudioBuffer>],
+    port: usize,
+    ugen_name: &str,
+    port_name: &str,
+) -> &'a AudioBuffer {
+    inputs.get(port).copied().flatten().unwrap_or_else(|| {
+        panic!(
+            "{ugen_name}: required input port {port} ({port_name}) is unconnected at process() \
+             time — this should have been caught by AudioGraph::prepare()"
+        )
+    })
+}
+
 /// Borrow a whole input channel with SuperCollider-style channel wrapping.
 ///
 /// The block-level counterpart to [`read_input`]: where `read_input` reads one

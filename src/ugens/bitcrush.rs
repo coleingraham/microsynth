@@ -2,7 +2,7 @@
 //!
 //! Lo-fi digital degradation effects for retro/vintage textures.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -46,7 +46,8 @@ impl UGen for Bitcrusher {
     ugen_spec!(
         "Bitcrusher",
         category = Effect,
-        inputs = ["in", "bits", "downsample"],
+        inputs = ["in"],
+        optional_inputs = ["bits", "downsample"],
         outputs = ["out"]
     );
 
@@ -60,12 +61,12 @@ impl UGen for Bitcrusher {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let bits_buf = inputs.get(1).copied();
-        let ds_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let bits_buf = inputs.get(1).copied().flatten();
+        let ds_buf = inputs.get(2).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut hold = self.hold_sample;
