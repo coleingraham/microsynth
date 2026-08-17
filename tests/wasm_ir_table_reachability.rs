@@ -126,6 +126,45 @@ fn upload_bind_and_render_partials_noise_through_wasm_abi() {
     );
 }
 
+/// Same round trip, but through `ms_routing_init`'s `UGenRegistry`
+/// construction site instead of `ms_init`'s -- a second of the five
+/// `register_table_bound_builtins` call sites in `src/web.rs` (F13:
+/// previously only `ms_init`'s site was exercised). `ms_compile_ir_with_tables`
+/// replaces the engine and its sink outright, so it renders the compiled
+/// table-bound def directly regardless of the routing session
+/// `ms_routing_init` set up -- this test is only proving that entry point's
+/// `REGISTRY` has `partialsNoise` resolvable by name, the same property the
+/// `ms_init` version proves for its own site.
+#[test]
+fn upload_bind_and_render_partials_noise_through_routing_init() {
+    let _guard = lock();
+    web::ms_routing_init(44100.0);
+
+    let table_bytes = synthetic_table().to_bytes();
+    let (tptr, tlen) = alloc_bytes(&table_bytes);
+    let table_id = unsafe { web::ms_coeff_table_register(tptr, tlen) };
+    free_bytes(tptr, tlen);
+    assert!(table_id > 0, "table upload should succeed");
+
+    let ir_bytes = partials_noise_ir_bytes(table_id);
+    let (iptr, ilen) = alloc_bytes(&ir_bytes);
+    let status = unsafe { web::ms_compile_ir_with_tables(iptr, ilen) };
+    free_bytes(iptr, ilen);
+    assert_eq!(
+        status, 0,
+        "compiling the table-bound IR should succeed through the ms_routing_init registry site"
+    );
+
+    let mut left = [0.0f32; 128];
+    let mut right = [0.0f32; 128];
+    unsafe { web::ms_render(left.as_mut_ptr(), right.as_mut_ptr()) };
+
+    assert!(
+        left.iter().any(|&s| s != 0.0),
+        "table-bound partialsNoise compiled via ms_routing_init's registry should render non-silence"
+    );
+}
+
 /// An IR document whose `table_bindings` names a table id that was never
 /// registered fails `ms_compile_ir_with_tables` cleanly (1), rather than
 /// panicking or silently building an unfilled node.

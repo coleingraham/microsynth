@@ -62,6 +62,19 @@ a decoder rejects an entry whose stored count doesn't match this product
 (`CoeffTableCodecError::MalformedEntry`) rather than accepting a payload a
 consumer could only misinterpret.
 
+**No padding slots.** This is a normative statement of what that equality
+means, not just a decode-time check: each entry's coefficient row is
+*exactly* `partial_freq_count + j_noise` values wide, at that entry's own
+width — never a wider, uniform width shared across a batch of differently-
+sized entries. A producer that fits internally at such a wider width (e.g. a
+fixed `C_max` across a batch of pitches whose partial counts vary) must mask
+or slice each entry down to its own `partial_freq_count + j_noise` before
+encoding — not merely truncate a wider vector and ship the prefix. Once
+sliced, each channel's row must itself be a full simplex — sum to ~1 over
+that entry's own `partial_freq_count + j_noise` slots — because **the ugen
+does not renormalize at read time**: a stored row that isn't already a
+simplex at its own width decodes and is used exactly as stored, silently.
+
 ### Why both explicit partial frequencies and a stretch factor
 
 `partial_freqs` is the fixed, explicit frequency list this entry was built
@@ -274,30 +287,22 @@ section in the binary form and no `table_bindings` key in the JSON form;
 both decoders default it to an empty list rather than erroring, so
 pre-existing documents keep decoding unchanged.
 
-### What this mechanism does not (yet) provide
+### Wasm-bundle graph-compile reachability (MOT-640)
 
-- **No DSL text syntax.** The DSL lexer has no string/id-literal tokens, and
-  none were added here. A table-bound kind is reachable only by
-  constructing (or programmatically producing) an `IrSynthDef` with a
-  `table_bindings` entry — there is no way to write a table reference in
-  DSL source today. Extending the DSL surface, if a future consumer wants a
-  text-authorable reference, is that consumer's decision, not assumed by
-  this document.
-
-**Wasm-bundle graph-compile reachability (MOT-640): now provided.** Both
-`web/build.sh` wasm profiles (the raw AudioWorklet build and the
-wasm-bindgen main-thread build) now compile with the `ir` crate feature on —
-it is pure `alloc`+`core` (see `Cargo.toml`'s `ir` feature comment), so this
-adds no new dependency, only the IR codec + `compile_with_tables` code
-itself. A new raw export, `ms_compile_ir_with_tables(ir_ptr, ir_len)`
-(`src/web.rs`), takes a serialized `IrSynthDef` (the `ir::serialize` binary
-wire format — `IrSynthDef::to_bytes`/`from_bytes`) instead of DSL text,
-bypassing the DSL surface entirely (the lexer gap above is unchanged and not
-what this closes), and resolves the document's `table_bindings` against the
-session's coefficient-table bank via `IrSynthDef::compile_with_tables`
-before loading the result as the render sink. `ms_compile`/`ms_compile_def`
-(DSL text, table-unaware) are unchanged and remain reachable exactly as
-before — this is a new, additive entry point, not a replacement.
+**Provided from this crate's own build scripts.** Both `web/build.sh` wasm
+profiles (the raw AudioWorklet build and the wasm-bindgen main-thread build)
+compile with the `ir` crate feature on — it is pure `alloc`+`core` (see
+`Cargo.toml`'s `ir` feature comment), so this adds no new dependency, only
+the IR codec + `compile_with_tables` code itself. A new raw export,
+`ms_compile_ir_with_tables(ir_ptr, ir_len)` (`src/web.rs`), takes a
+serialized `IrSynthDef` (the `ir::serialize` binary wire format —
+`IrSynthDef::to_bytes`/`from_bytes`) instead of DSL text, bypassing the DSL
+surface entirely (the lexer gap below is unchanged and not what this
+closes), and resolves the document's `table_bindings` against the session's
+coefficient-table bank via `IrSynthDef::compile_with_tables` before loading
+the result as the render sink. `ms_compile`/`ms_compile_def` (DSL text,
+table-unaware) are unchanged and remain reachable exactly as before — this
+is a new, additive entry point, not a replacement.
 `register_table_bound_builtins` is now called alongside `register_builtins`
 at every `UGenRegistry` construction site in `src/web.rs`, so
 `partialsNoise` (and any future table-bound kind) is resolvable by name
@@ -308,6 +313,26 @@ with a matching `table_bindings` entry, pass its serialized bytes to
 (`tests/wasm_ir_table_reachability.rs`). `tests/wasm_abi_stability.rs`
 tracks `ms_compile_ir_with_tables` as an addition, not a replacement, of the
 pre-existing raw-export surface.
+
+**Not provided by an external build that doesn't opt into `ir`.** This
+crate's own `Cargo.toml` `std` feature does not itself enable `ir`
+(`default = ["std", "ir"]` enables both only via the default set; a build
+invoked with `--features std --no-default-features` — as an external
+build script may do — gets `std` alone, without `ir`, and without this
+export). A wasm build produced that way does not contain
+`ms_compile_ir_with_tables` regardless of what this section says about
+`web/build.sh`; that gap belongs to whichever build script made that
+feature choice, not to this document's mechanism.
+
+### What this mechanism does not (yet) provide
+
+- **No DSL text syntax.** The DSL lexer has no string/id-literal tokens, and
+  none were added here. A table-bound kind is reachable only by
+  constructing (or programmatically producing) an `IrSynthDef` with a
+  `table_bindings` entry — there is no way to write a table reference in
+  DSL source today. Extending the DSL surface, if a future consumer wants a
+  text-authorable reference, is that consumer's decision, not assumed by
+  this document.
 
 ## Consumers of this document
 
