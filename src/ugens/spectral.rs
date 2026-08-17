@@ -11,7 +11,7 @@
 //! - [`SpectralBlur`]: Temporal magnitude smoothing.
 //! - [`Convolution`]: FFT-based overlap-add convolution.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::spectral::complex::Complex;
@@ -56,7 +56,8 @@ impl UGen for SpectralFreeze {
     ugen_spec!(
         "SpectralFreeze",
         category = Effect,
-        inputs = ["in", "trig"],
+        inputs = ["in"],
+        optional_inputs = ["trig"],
         outputs = ["out"]
     );
 
@@ -79,11 +80,11 @@ impl UGen for SpectralFreeze {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let trig_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let trig_buf = inputs.get(1).copied().flatten();
         let stft = self.stft.as_mut().unwrap();
         let fft_size = stft.fft_size();
 
@@ -166,7 +167,8 @@ impl UGen for PitchShift {
     ugen_spec!(
         "PitchShift",
         category = Effect,
-        inputs = ["in", "shift"],
+        inputs = ["in"],
+        optional_inputs = ["shift"],
         outputs = ["out"]
     );
 
@@ -190,11 +192,11 @@ impl UGen for PitchShift {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let shift_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let shift_buf = inputs.get(1).copied().flatten();
         let stft = self.stft.as_mut().unwrap();
         let fft_size = stft.fft_size();
         let hop_size = stft.hop_size();
@@ -298,7 +300,8 @@ impl UGen for SpectralFilter {
     ugen_spec!(
         "SpectralFilter",
         category = Effect,
-        inputs = ["in", "freq", "bandwidth", "gain"],
+        inputs = ["in"],
+        optional_inputs = ["freq", "bandwidth", "gain"],
         outputs = ["out"]
     );
 
@@ -318,13 +321,13 @@ impl UGen for SpectralFilter {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let freq_buf = inputs.get(1).copied();
-        let bw_buf = inputs.get(2).copied();
-        let gain_buf = inputs.get(3).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let freq_buf = inputs.get(1).copied().flatten();
+        let bw_buf = inputs.get(2).copied().flatten();
+        let gain_buf = inputs.get(3).copied().flatten();
         let stft = self.stft.as_mut().unwrap();
         let fft_size = stft.fft_size();
 
@@ -396,7 +399,8 @@ impl UGen for SpectralGate {
     ugen_spec!(
         "SpectralGate",
         category = Effect,
-        inputs = ["in", "threshold"],
+        inputs = ["in"],
+        optional_inputs = ["threshold"],
         outputs = ["out"]
     );
 
@@ -415,11 +419,11 @@ impl UGen for SpectralGate {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let thresh_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let thresh_buf = inputs.get(1).copied().flatten();
         let stft = self.stft.as_mut().unwrap();
         let fft_size = stft.fft_size();
 
@@ -491,7 +495,8 @@ impl UGen for SpectralBlur {
     ugen_spec!(
         "SpectralBlur",
         category = Effect,
-        inputs = ["in", "blur"],
+        inputs = ["in"],
+        optional_inputs = ["blur"],
         outputs = ["out"]
     );
 
@@ -512,11 +517,11 @@ impl UGen for SpectralBlur {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let blur_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let blur_buf = inputs.get(1).copied().flatten();
         let stft = self.stft.as_mut().unwrap();
         let fft_size = stft.fft_size();
 
@@ -631,7 +636,8 @@ impl UGen for Convolution {
     ugen_spec!(
         "Convolution",
         category = Effect,
-        inputs = ["in", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["mix"],
         outputs = ["out"]
     );
 
@@ -659,11 +665,11 @@ impl UGen for Convolution {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let mix_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let mix_buf = inputs.get(1).copied().flatten();
         let fft_size = self.fft_size;
 
         if fft_size == 0 || !self.ir_loaded {

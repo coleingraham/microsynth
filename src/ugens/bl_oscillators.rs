@@ -82,7 +82,8 @@ macro_rules! bl_osc {
             ugen_spec!(
                 $name,
                 category = Oscillator,
-                inputs = ["freq" $(, $port)?],
+                inputs = [],
+                optional_inputs = ["freq" $(, $port)?],
                 outputs = ["out"]
             );
 
@@ -98,10 +99,10 @@ macro_rules! bl_osc {
             fn process(
                 &mut self,
                 _context: &ProcessContext,
-                inputs: &[&AudioBuffer],
+                inputs: &[Option<&AudioBuffer>],
                 output: &mut AudioBuffer,
             ) {
-                let freq_buf = inputs.first().copied();
+                let freq_buf = inputs.first().copied().flatten();
                 let inv_sr = 1.0 / self.sample_rate;
 
                 for ch in 0..output.num_channels() {
@@ -116,7 +117,7 @@ macro_rules! bl_osc {
                         *out_sample = ($sample)(
                             phase,
                             dt
-                            $(, read_input(inputs.get(1).copied(), ch, i, $default))?
+                            $(, read_input(inputs.get(1).copied().flatten(), ch, i, $default))?
                             $(, &mut $state)?
                         );
 
@@ -218,7 +219,7 @@ mod tests {
         freq.channel_mut(0).samples_mut().fill(40_000.0);
         let mut out = AudioBuffer::mono(ctx.block_size);
 
-        osc.process(&ctx, &[&freq], &mut out); // must not panic
+        osc.process(&ctx, &[Some(&freq)], &mut out); // must not panic
         assert!(out.channel(0).samples().iter().all(|s| s.is_finite()));
     }
 }

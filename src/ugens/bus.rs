@@ -69,6 +69,11 @@ impl Bus {
             specs.push(InputSpec {
                 name: "in",
                 rate: Rate::Audio,
+                // Every slot is optional: a bus with only some of its 64
+                // slots wired is the normal case (unused voice/effect
+                // capacity), and an unconnected slot contributes silence to
+                // the sum below — never a construction error.
+                required: false,
             });
         }
         // Leak once — Bus nodes are infrastructure and live for the engine's lifetime
@@ -103,7 +108,18 @@ impl Bus {
 pub struct AudioIn;
 
 impl UGen for AudioIn {
-    ugen_spec!("AudioIn", inputs = ["in"], outputs = ["out"]);
+    // `in` is optional, not required: `process` already treats an
+    // unconnected AudioIn as silence (the routing system normally always
+    // wires it when instantiating an effect, but nothing upstream of
+    // `AudioGraph::prepare` guarantees that), and this preserves that
+    // existing, deliberately-coded tolerance exactly rather than turning it
+    // into a new prepare()-time panic.
+    ugen_spec!(
+        "AudioIn",
+        inputs = [],
+        optional_inputs = ["in"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, _context: &ProcessContext) {}
     fn reset(&mut self) {}
@@ -116,14 +132,16 @@ impl UGen for AudioIn {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        if inputs.is_empty() {
-            output.clear();
-            return;
-        }
-        let input = inputs[0];
+        let input = match inputs.first().copied().flatten() {
+            Some(input) => input,
+            None => {
+                output.clear();
+                return;
+            }
+        };
         for ch in 0..output.num_channels() {
             let in_ch = ch % input.num_channels();
             let in_samples = input.channel(in_ch).samples();
@@ -159,14 +177,16 @@ impl UGen for Bus {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         // Clear output
         output.clear();
 
-        // Sum all connected inputs
-        for input in inputs {
+        // Sum all connected inputs (unconnected slots contribute nothing —
+        // summation is order-independent, so skipping `None` slots here
+        // produces the same result as the old compacted-slice iteration did).
+        for input in inputs.iter().flatten() {
             for ch in 0..output.num_channels() {
                 let in_ch = ch % input.num_channels();
                 let in_samples = input.channel(in_ch).samples();

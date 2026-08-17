@@ -49,7 +49,8 @@ impl UGen for WaveTable {
     ugen_spec!(
         "WaveTable",
         category = Oscillator,
-        inputs = ["freq"],
+        inputs = [],
+        optional_inputs = ["freq"],
         outputs = ["out"]
     );
 
@@ -69,7 +70,7 @@ impl UGen for WaveTable {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let waveform = match &self.waveform {
@@ -80,7 +81,7 @@ impl UGen for WaveTable {
             }
         };
 
-        let freq_buf = inputs.first().copied();
+        let freq_buf = inputs.first().copied().flatten();
         let table_len = waveform.num_frames() as f64;
         if table_len == 0.0 {
             output.clear();

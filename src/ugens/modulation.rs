@@ -2,7 +2,7 @@
 //!
 //! Time-modulated delay effects for spatial width and movement.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::ugens::delayline::DelayLine;
@@ -57,7 +57,8 @@ impl UGen for Chorus {
     ugen_spec!(
         "Chorus",
         category = Effect,
-        inputs = ["in", "rate", "depth", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["rate", "depth", "mix"],
         outputs = ["out"]
     );
 
@@ -81,13 +82,13 @@ impl UGen for Chorus {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let rate_buf = inputs.get(1).copied();
-        let depth_buf = inputs.get(2).copied();
-        let mix_buf = inputs.get(3).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let rate_buf = inputs.get(1).copied().flatten();
+        let depth_buf = inputs.get(2).copied().flatten();
+        let mix_buf = inputs.get(3).copied().flatten();
         if self.line.is_empty() {
             return;
         }
@@ -181,7 +182,8 @@ impl UGen for Flanger {
     ugen_spec!(
         "Flanger",
         category = Effect,
-        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["rate", "depth", "feedback", "mix"],
         outputs = ["out"]
     );
 
@@ -200,14 +202,14 @@ impl UGen for Flanger {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let rate_buf = inputs.get(1).copied();
-        let depth_buf = inputs.get(2).copied();
-        let fb_buf = inputs.get(3).copied();
-        let mix_buf = inputs.get(4).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let rate_buf = inputs.get(1).copied().flatten();
+        let depth_buf = inputs.get(2).copied().flatten();
+        let fb_buf = inputs.get(3).copied().flatten();
+        let mix_buf = inputs.get(4).copied().flatten();
         if self.line.is_empty() {
             return;
         }
@@ -296,7 +298,8 @@ impl UGen for Phaser {
     ugen_spec!(
         "Phaser",
         category = Effect,
-        inputs = ["in", "rate", "depth", "feedback", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["rate", "depth", "feedback", "mix"],
         outputs = ["out"]
     );
 
@@ -313,14 +316,14 @@ impl UGen for Phaser {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let rate_buf = inputs.get(1).copied();
-        let depth_buf = inputs.get(2).copied();
-        let fb_buf = inputs.get(3).copied();
-        let mix_buf = inputs.get(4).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let rate_buf = inputs.get(1).copied().flatten();
+        let depth_buf = inputs.get(2).copied().flatten();
+        let fb_buf = inputs.get(3).copied().flatten();
+        let mix_buf = inputs.get(4).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
         for ch in 0..output.num_channels() {
@@ -430,14 +433,8 @@ impl UGen for WowFlutter {
     ugen_spec!(
         "WowFlutter",
         category = Effect,
-        inputs = [
-            "in",
-            "wowRate",
-            "wowDepth",
-            "flutterRate",
-            "flutterDepth",
-            "mix"
-        ],
+        inputs = ["in"],
+        optional_inputs = ["wowRate", "wowDepth", "flutterRate", "flutterDepth", "mix"],
         outputs = ["out"]
     );
 
@@ -458,15 +455,15 @@ impl UGen for WowFlutter {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let wow_rate_buf = inputs.get(1).copied();
-        let wow_depth_buf = inputs.get(2).copied();
-        let flutter_rate_buf = inputs.get(3).copied();
-        let flutter_depth_buf = inputs.get(4).copied();
-        let mix_buf = inputs.get(5).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let wow_rate_buf = inputs.get(1).copied().flatten();
+        let wow_depth_buf = inputs.get(2).copied().flatten();
+        let flutter_rate_buf = inputs.get(3).copied().flatten();
+        let flutter_depth_buf = inputs.get(4).copied().flatten();
+        let mix_buf = inputs.get(5).copied().flatten();
         if self.line.is_empty() {
             return;
         }

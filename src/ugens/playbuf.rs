@@ -56,7 +56,12 @@ impl PlayBuf {
 }
 
 impl UGen for PlayBuf {
-    ugen_spec!("PlayBuf", inputs = ["rate", "trig"], outputs = ["out"]);
+    ugen_spec!(
+        "PlayBuf",
+        inputs = [],
+        optional_inputs = ["rate", "trig"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -81,7 +86,7 @@ impl UGen for PlayBuf {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let sample = match &self.sample {
@@ -92,8 +97,8 @@ impl UGen for PlayBuf {
             }
         };
 
-        let rate_buf = inputs.first().copied();
-        let trig_buf = inputs.get(1).copied();
+        let rate_buf = inputs.first().copied().flatten();
+        let trig_buf = inputs.get(1).copied().flatten();
         let num_frames = sample.num_frames() as f64;
         let rate_ratio = sample.sample_rate() / self.sample_rate;
 

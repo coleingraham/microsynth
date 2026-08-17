@@ -58,7 +58,7 @@ impl UGen for WhiteNoise {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         for ch in 0..output.num_channels() {
@@ -129,7 +129,7 @@ impl UGen for PinkNoise {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         // Normalization factor: sum of 16 rows plus one white noise sample.
@@ -218,7 +218,8 @@ impl UGen for VinylCrackle {
     ugen_spec!(
         "VinylCrackle",
         category = Noise,
-        inputs = ["density", "amount", "seed"],
+        inputs = [],
+        optional_inputs = ["density", "amount", "seed"],
         outputs = ["out"]
     );
 
@@ -238,12 +239,12 @@ impl UGen for VinylCrackle {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let density_buf = inputs.first().copied();
-        let amount_buf = inputs.get(1).copied();
-        let seed_buf = inputs.get(2).copied();
+        let density_buf = inputs.first().copied().flatten();
+        let amount_buf = inputs.get(1).copied().flatten();
+        let seed_buf = inputs.get(2).copied().flatten();
 
         if !self.seeded {
             let seed_val = read_input(seed_buf, 0, 0, VINYL_CRACKLE_DEFAULT_SEED as f32);
