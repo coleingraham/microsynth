@@ -215,6 +215,12 @@ impl UGenRegistry {
         self.table_bound.get(name)
     }
 
+    /// Iterate over all registered table-bound `(name, entry)` pairs —
+    /// the [`iter`](Self::iter) counterpart for the table-bound namespace.
+    pub fn table_bound_iter(&self) -> impl Iterator<Item = (&String, &TableUGenEntry)> {
+        self.table_bound.iter()
+    }
+
     /// Build an instance of table-bound kind `name`, bound to `table`.
     /// Returns `None` if `name` is not registered as table-bound.
     pub fn resolve_table_bound(&self, name: &str, table: Arc<CoeffTable>) -> Option<Box<dyn UGen>> {
