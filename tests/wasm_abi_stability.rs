@@ -88,6 +88,11 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_coeff_table_replace",
         "ms_coeff_table_free",
         "ms_coeff_table_id_for_name",
+        // MOT-640: wasm-ABI reachability for table-bound nodes. Takes a
+        // serialized `ir::IrSynthDef` (not DSL text) and resolves its
+        // `table_bindings` via `IrSynthDef::compile_with_tables` -- see
+        // src/web.rs's doc comment on this export.
+        "ms_compile_ir_with_tables",
     ];
     for name in new_names {
         assert!(
