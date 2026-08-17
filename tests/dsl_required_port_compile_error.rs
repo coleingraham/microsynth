@@ -114,3 +114,37 @@ fn ms_compile_returns_an_error_code_for_an_under_supplied_required_port() {
         ),
     }
 }
+
+/// `ms_compile_def` (the "compile and register, don't spawn yet" sibling of
+/// `ms_compile`, used by callers that want to spawn multiple voices from one
+/// compiled def) shares `dsl::compile` underneath, so it is fixed by the same
+/// `Expr::App` change -- but it is worth its own test: before that fix, this
+/// was the worst-behaved of the three entry points. It returned success (0),
+/// registered the malformed def into `DEFS`, and only panicked later, inside
+/// `ms_spawn_voice`'s `engine.prepare()` call -- at spawn time, arbitrarily
+/// far from the actual compile call and with no error ever surfaced from
+/// compilation itself. This asserts both halves stay fixed: the compile call
+/// returns nonzero, and nothing gets registered for a later spawn to detonate
+/// on.
+#[test]
+fn ms_compile_def_rejects_an_under_supplied_required_port_and_registers_nothing() {
+    let _guard = lock();
+    web::ms_init(44100.0);
+    let (ptr, len) = alloc_str(UNDER_SUPPLIED_SOURCE);
+    let compile_result = unsafe { web::ms_compile_def(ptr, len) };
+    free_str(ptr, len);
+
+    assert_ne!(
+        compile_result, 0,
+        "ms_compile_def should return a nonzero error code for an under-supplied \
+         required port, not report success"
+    );
+
+    let spawn_result = web::ms_spawn_voice();
+    assert_eq!(
+        spawn_result, 0,
+        "ms_compile_def must not have registered a def for a failed compile -- \
+         ms_spawn_voice returning nonzero here would mean it spawned (and \
+         engine.prepare()'d) a graph with an unconnected required port"
+    );
+}
