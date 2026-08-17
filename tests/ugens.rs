@@ -519,7 +519,12 @@ fn test_mix_sums_channels() {
         fn output_channels(&self, _: &[usize]) -> usize {
             3
         }
-        fn process(&mut self, _: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
+        fn process(
+            &mut self,
+            _: &ProcessContext,
+            _: &[Option<&AudioBuffer>],
+            output: &mut AudioBuffer,
+        ) {
             output.channel_mut(0).fill(1.0);
             output.channel_mut(1).fill(2.0);
             output.channel_mut(2).fill(3.0);
@@ -565,7 +570,12 @@ fn test_sample_and_hold() {
             self.sample_rate = ctx.sample_rate;
         }
         fn reset(&mut self) {}
-        fn process(&mut self, ctx: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
+        fn process(
+            &mut self,
+            ctx: &ProcessContext,
+            _: &[Option<&AudioBuffer>],
+            output: &mut AudioBuffer,
+        ) {
             let out = output.channel_mut(0).samples_mut();
             for (i, sample) in out.iter_mut().enumerate() {
                 *sample = (ctx.sample_offset as f32 + i as f32) / self.sample_rate;
@@ -707,7 +717,12 @@ fn test_oscillator_multichannel_expansion() {
         fn output_channels(&self, _: &[usize]) -> usize {
             2
         }
-        fn process(&mut self, _: &ProcessContext, _: &[&AudioBuffer], output: &mut AudioBuffer) {
+        fn process(
+            &mut self,
+            _: &ProcessContext,
+            _: &[Option<&AudioBuffer>],
+            output: &mut AudioBuffer,
+        ) {
             output.channel_mut(0).fill(440.0);
             output.channel_mut(1).fill(880.0);
         }
@@ -2496,7 +2511,7 @@ impl UGen for HotSignalSource {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let out = output.channel_mut(0).samples_mut();
@@ -2694,7 +2709,7 @@ impl UGen for StereoHotSignalSource {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         let n = output.channel(0).samples().len();

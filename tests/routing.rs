@@ -34,7 +34,7 @@ impl UGen for ConstGen {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        _inputs: &[&AudioBuffer],
+        _inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
         for ch in 0..output.num_channels() {

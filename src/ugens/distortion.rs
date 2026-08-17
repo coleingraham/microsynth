@@ -3,7 +3,7 @@
 //! Soft clipping, overdrive, and wavefolder effects for adding harmonic saturation.
 //! These complement the hard `Clip` UGen in `utility`.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 
@@ -40,7 +40,8 @@ impl UGen for SoftClip {
     ugen_spec!(
         "SoftClip",
         category = Effect,
-        inputs = ["in", "drive"],
+        inputs = ["in"],
+        optional_inputs = ["drive"],
         outputs = ["out"]
     );
 
@@ -50,11 +51,11 @@ impl UGen for SoftClip {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let drive_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let drive_buf = inputs.get(1).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let in_ch = channel_wrapped(in_buf, ch);
@@ -110,7 +111,8 @@ impl UGen for Overdrive {
     ugen_spec!(
         "Overdrive",
         category = Effect,
-        inputs = ["in", "drive", "tone", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["drive", "tone", "mix"],
         outputs = ["out"]
     );
 
@@ -123,13 +125,13 @@ impl UGen for Overdrive {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let drive_buf = inputs.get(1).copied();
-        let tone_buf = inputs.get(2).copied();
-        let mix_buf = inputs.get(3).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let drive_buf = inputs.get(1).copied().flatten();
+        let tone_buf = inputs.get(2).copied().flatten();
+        let mix_buf = inputs.get(3).copied().flatten();
 
         for ch in 0..output.num_channels() {
             let mut y1 = self.y1;
@@ -208,7 +210,8 @@ impl UGen for WaveFolder {
     ugen_spec!(
         "WaveFolder",
         category = Effect,
-        inputs = ["in", "drive", "symmetry"],
+        inputs = ["in"],
+        optional_inputs = ["drive", "symmetry"],
         outputs = ["out"]
     );
 
@@ -218,12 +221,12 @@ impl UGen for WaveFolder {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let drive_buf = inputs.get(1).copied();
-        let sym_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let drive_buf = inputs.get(1).copied().flatten();
+        let sym_buf = inputs.get(2).copied().flatten();
 
         let half_pi = core::f32::consts::FRAC_PI_2;
 

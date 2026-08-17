@@ -2,7 +2,7 @@
 //!
 //! Tools for stereo image manipulation and stereo delay effects.
 
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::ugens::delayline::DelayLine;
@@ -51,7 +51,8 @@ impl UGen for StereoWidth {
     ugen_spec!(
         "StereoWidth",
         category = Effect,
-        inputs = ["in", "width"],
+        inputs = ["in"],
+        optional_inputs = ["width"],
         outputs = ["out"]
     );
 
@@ -72,11 +73,11 @@ impl UGen for StereoWidth {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let width_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let width_buf = inputs.get(1).copied().flatten();
         if self.delay.is_empty() {
             return;
         }
@@ -151,7 +152,8 @@ impl UGen for PingPongDelay {
     ugen_spec!(
         "PingPongDelay",
         category = Effect,
-        inputs = ["in", "time", "feedback", "mix"],
+        inputs = ["in"],
+        optional_inputs = ["time", "feedback", "mix"],
         outputs = ["out"]
     );
 
@@ -174,13 +176,13 @@ impl UGen for PingPongDelay {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let time_buf = inputs.get(1).copied();
-        let fb_buf = inputs.get(2).copied();
-        let mix_buf = inputs.get(3).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let time_buf = inputs.get(1).copied().flatten();
+        let fb_buf = inputs.get(2).copied().flatten();
+        let mix_buf = inputs.get(3).copied().flatten();
         if self.line_l.is_empty() {
             return;
         }

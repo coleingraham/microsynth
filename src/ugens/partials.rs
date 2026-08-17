@@ -619,7 +619,8 @@ impl UGen for PartialsNoise {
     ugen_spec!(
         "PartialsNoise",
         category = Oscillator,
-        inputs = ["freq", "gain"],
+        inputs = [],
+        optional_inputs = ["freq", "gain"],
         outputs = ["out"]
     );
 
@@ -661,11 +662,11 @@ impl UGen for PartialsNoise {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
-        let gain_buf = inputs.get(1).copied();
+        let freq_buf = inputs.first().copied().flatten();
+        let gain_buf = inputs.get(1).copied().flatten();
         let sr = self.sample_rate.max(1.0);
         let inv_sr = 1.0 / sr;
         let nyquist = sr * 0.5;
@@ -778,10 +779,14 @@ pub fn register(reg: &mut UGenRegistry) {
             InputSpec {
                 name: "freq",
                 rate: Rate::Audio,
+                // Matches PartialsNoise's own `ugen_spec!` (both ports are
+                // optional there, defaulted via `read_input` in `process`).
+                required: false,
             },
             InputSpec {
                 name: "gain",
                 rate: Rate::Audio,
+                required: false,
             },
         ],
         &[OutputSpec {

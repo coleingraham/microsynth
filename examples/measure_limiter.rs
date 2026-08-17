@@ -53,7 +53,7 @@ impl UGen for PlaybackSource {
     fn process(
         &mut self,
         _context: &context::ProcessContext,
-        _inputs: &[&buffer::AudioBuffer],
+        _inputs: &[Option<&buffer::AudioBuffer>],
         output: &mut buffer::AudioBuffer,
     ) {
         let out = output.channel_mut(0).samples_mut();
@@ -130,7 +130,7 @@ impl UGen for StereoPlaybackSource {
     fn process(
         &mut self,
         _context: &context::ProcessContext,
-        _inputs: &[&buffer::AudioBuffer],
+        _inputs: &[Option<&buffer::AudioBuffer>],
         output: &mut buffer::AudioBuffer,
     ) {
         let n = output.channel(0).samples().len();

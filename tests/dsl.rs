@@ -22,6 +22,7 @@ impl UGen for TestGain {
             inputs: &[InputSpec {
                 name: "in",
                 rate: Rate::Audio,
+                required: true,
             }],
             outputs: &[OutputSpec {
                 name: "out",
@@ -36,10 +37,10 @@ impl UGen for TestGain {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let input = inputs[0];
+        let input = inputs[0].unwrap();
         for ch in 0..output.num_channels() {
             let in_ch = ch % input.num_channels();
             let in_samples = input.channel(in_ch).samples();
@@ -63,10 +64,12 @@ impl UGen for TestMix {
                 InputSpec {
                     name: "a",
                     rate: Rate::Audio,
+                    required: true,
                 },
                 InputSpec {
                     name: "b",
                     rate: Rate::Audio,
+                    required: true,
                 },
             ],
             outputs: &[OutputSpec {
@@ -82,11 +85,11 @@ impl UGen for TestMix {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let a = inputs[0];
-        let b = inputs[1];
+        let a = inputs[0].unwrap();
+        let b = inputs[1].unwrap();
         for ch in 0..output.num_channels() {
             let a_ch = ch % a.num_channels();
             let b_ch = ch % b.num_channels();
@@ -108,6 +111,7 @@ fn make_registry() -> UGenRegistry {
         &[InputSpec {
             name: "in",
             rate: Rate::Audio,
+            required: true,
         }],
         &[OutputSpec {
             name: "out",
@@ -121,10 +125,12 @@ fn make_registry() -> UGenRegistry {
             InputSpec {
                 name: "a",
                 rate: Rate::Audio,
+                required: true,
             },
             InputSpec {
                 name: "b",
                 rate: Rate::Audio,
+                required: true,
             },
         ],
         &[OutputSpec {

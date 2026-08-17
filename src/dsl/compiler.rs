@@ -21,6 +21,13 @@ pub struct UGenEntry {
     pub category: UGenCategory,
     /// Input port names (in order). The compiler maps positional args to these.
     pub input_names: Vec<&'static str>,
+    /// Whether each input port (same order/length as `input_names`) is
+    /// required — mirrors [`InputSpec::required`] for each port. Consulted by
+    /// [`crate::ir::IrSynthDef::validate`] to reject a required port with no
+    /// connected source (edge or inline const) before it ever reaches
+    /// [`crate::graph::AudioGraph::prepare`], which enforces the same
+    /// invariant for already-constructed graphs (see that function's doc).
+    pub required: Vec<bool>,
     /// Output port names.
     pub output_names: Vec<&'static str>,
 }
@@ -50,6 +57,9 @@ pub struct TableUGenEntry {
     /// Input port names (in order), covering this kind's ordinary
     /// audio/control-rate ports — the bound table is not itself a port.
     pub input_names: Vec<&'static str>,
+    /// Whether each input port (same order/length as `input_names`) is
+    /// required — see [`UGenEntry::required`]'s doc.
+    pub required: Vec<bool>,
     /// Output port names.
     pub output_names: Vec<&'static str>,
 }
@@ -90,6 +100,7 @@ impl UGenRegistry {
         outputs: &[OutputSpec],
     ) {
         let input_names = inputs.iter().map(|i| i.name).collect();
+        let required = inputs.iter().map(|i| i.required).collect();
         let output_names = outputs.iter().map(|o| o.name).collect();
         let category = factory().spec().category;
         self.entries.insert(
@@ -98,6 +109,7 @@ impl UGenRegistry {
                 factory,
                 category,
                 input_names,
+                required,
                 output_names,
             },
         );
@@ -118,6 +130,7 @@ impl UGenRegistry {
         let probe = factory();
         let spec = probe.spec();
         let input_names = spec.inputs.iter().map(|i| i.name).collect();
+        let required = spec.inputs.iter().map(|i| i.required).collect();
         let output_names = spec.outputs.iter().map(|o| o.name).collect();
         self.entries.insert(
             name.into(),
@@ -125,6 +138,7 @@ impl UGenRegistry {
                 factory,
                 category: spec.category,
                 input_names,
+                required,
                 output_names,
             },
         );
@@ -182,6 +196,7 @@ impl UGenRegistry {
         outputs: &[OutputSpec],
     ) {
         let input_names = inputs.iter().map(|i| i.name).collect();
+        let required = inputs.iter().map(|i| i.required).collect();
         let output_names = outputs.iter().map(|o| o.name).collect();
         self.table_bound.insert(
             name.into(),
@@ -189,6 +204,7 @@ impl UGenRegistry {
                 factory,
                 category,
                 input_names,
+                required,
                 output_names,
             },
         );
@@ -197,6 +213,12 @@ impl UGenRegistry {
     /// Look up a registered table-bound kind's metadata by name.
     pub fn table_bound_entry(&self, name: &str) -> Option<&TableUGenEntry> {
         self.table_bound.get(name)
+    }
+
+    /// Iterate over all registered table-bound `(name, entry)` pairs —
+    /// the [`iter`](Self::iter) counterpart for the table-bound namespace.
+    pub fn table_bound_iter(&self) -> impl Iterator<Item = (&String, &TableUGenEntry)> {
+        self.table_bound.iter()
     }
 
     /// Build an instance of table-bound kind `name`, bound to `table`.
@@ -306,6 +328,28 @@ impl<'a> Compiler<'a> {
                             args.len()
                         ),
                     });
+                }
+
+                // Positional args wire ports 0..args.len() as a prefix, leaving
+                // the rest unconnected (that's how an optional trailing port,
+                // e.g. a filter's "q", gets its own default). But a *required*
+                // port left in that gap is not a default case — it is a graph
+                // AudioGraph::prepare will refuse to render. Catch it here,
+                // as a CompileError naming the ugen and the missing port,
+                // instead of letting it reach that panic (or, before the
+                // required/optional split existed, an out-of-bounds index
+                // inside some UGen's own `process`).
+                for i in args.len()..entry.input_names.len() {
+                    if entry.required[i] {
+                        return Err(CompileError {
+                            message: alloc::format!(
+                                "{func_name}: required argument '{}' (port {i}) not supplied — \
+                                 got {} argument(s)",
+                                entry.input_names[i],
+                                args.len()
+                            ),
+                        });
+                    }
                 }
 
                 let factory = entry.factory;
@@ -499,6 +543,7 @@ mod tests {
         [InputSpec {
             name: "in",
             rate: Rate::Audio,
+            required: true,
         }]
     }
 

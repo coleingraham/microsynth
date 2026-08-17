@@ -65,7 +65,8 @@ impl UGen for FmOsc {
     ugen_spec!(
         "FmOsc",
         category = Oscillator,
-        inputs = ["freq", "ratio", "index", "feedback"],
+        inputs = [],
+        optional_inputs = ["freq", "ratio", "index", "feedback"],
         outputs = ["out"]
     );
 
@@ -82,13 +83,13 @@ impl UGen for FmOsc {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
-        let ratio_buf = inputs.get(1).copied();
-        let index_buf = inputs.get(2).copied();
-        let feedback_buf = inputs.get(3).copied();
+        let freq_buf = inputs.first().copied().flatten();
+        let ratio_buf = inputs.get(1).copied().flatten();
+        let index_buf = inputs.get(2).copied().flatten();
+        let feedback_buf = inputs.get(3).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
         for ch in 0..output.num_channels() {

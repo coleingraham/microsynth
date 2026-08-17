@@ -96,7 +96,12 @@ fn lfo_eval(phase: f32, shape: f32) -> f32 {
 }
 
 impl UGen for Lfo {
-    ugen_spec!("Lfo", inputs = ["freq", "shape"], outputs = ["out"]);
+    ugen_spec!(
+        "Lfo",
+        inputs = [],
+        optional_inputs = ["freq", "shape"],
+        outputs = ["out"]
+    );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
@@ -109,11 +114,11 @@ impl UGen for Lfo {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let freq_buf = inputs.first().copied();
-        let shape_buf = inputs.get(1).copied();
+        let freq_buf = inputs.first().copied().flatten();
+        let shape_buf = inputs.get(1).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
         for ch in 0..output.num_channels() {

@@ -169,14 +169,22 @@ impl AudioGraph {
     /// Resolve, once, which source node feeds each input port of each node.
     /// This moves the per-input edge-list scan out of the per-block render
     /// path and into `prepare()` (called only after structural changes).
+    ///
+    /// Also the fail-loud checkpoint for required ports: a `required` port
+    /// (`InputSpec::required`) with no connected source panics *here*, before
+    /// `render()` (and therefore `UGen::process`) ever sees this graph state.
+    /// The alternative — degrading a missing required input to a zero/silent
+    /// buffer, or leaving it for `process` to discover mid-render — would
+    /// trade one silent-misrouting hazard for another; see this crate's
+    /// `UGen::process` doc and `InputSpec::required`.
     fn resolve_inputs(&mut self) {
         let n = self.nodes.len();
         self.input_sources.clear();
         self.input_sources.resize(n, Vec::new());
 
         for idx in 0..n {
-            let num_inputs = match &self.nodes[idx] {
-                Some(slot) => slot.ugen.spec().inputs.len(),
+            let spec = match &self.nodes[idx] {
+                Some(slot) => slot.ugen.spec(),
                 None => {
                     self.input_sources[idx].clear();
                     continue;
@@ -186,7 +194,7 @@ impl AudioGraph {
             let node_id = NodeId(idx as u32);
             let sources = &mut self.input_sources[idx];
             sources.clear();
-            for input_idx in 0..num_inputs {
+            for (input_idx, input_spec) in spec.inputs.iter().enumerate() {
                 let src = self
                     .edges
                     .iter()
@@ -194,6 +202,16 @@ impl AudioGraph {
                     .map(|e| e.from)
                     // Only keep the source if the node still exists.
                     .filter(|from| self.nodes[from.index()].is_some());
+
+                if src.is_none() && input_spec.required {
+                    panic!(
+                        "AudioGraph::prepare: node {} ({}) has an unconnected required \
+                         input port {} ({}) — connect a source to this port before \
+                         calling prepare()",
+                        idx, spec.name, input_idx, input_spec.name
+                    );
+                }
+
                 sources.push(src);
             }
         }
@@ -224,23 +242,35 @@ impl AudioGraph {
                 continue;
             }
 
-            // Gather source output buffer pointers into reusable scratch.
+            // Gather source output buffer pointers into reusable scratch, one
+            // slot per input port (preserving position: an unconnected port
+            // pushes a null pointer rather than being skipped, so a later
+            // port's buffer never shifts down into an earlier port's slot —
+            // see `resolve_inputs`'s doc and `UGen::process`'s `inputs` doc).
             // SAFETY: topological order guarantees every source node has
             // already been processed this block and will not be mutated again,
             // so these pointers stay valid for this node's `process` call.
             self.input_ptr_scratch.clear();
-            for src_id in self.input_sources[idx].iter().flatten() {
-                let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
-                self.input_ptr_scratch
-                    .push(&src_slot.output as *const AudioBuffer);
+            for src in self.input_sources[idx].iter() {
+                match src {
+                    Some(src_id) => {
+                        let src_slot = self.nodes[src_id.index()].as_ref().unwrap();
+                        self.input_ptr_scratch
+                            .push(&src_slot.output as *const AudioBuffer);
+                    }
+                    None => self.input_ptr_scratch.push(core::ptr::null()),
+                }
             }
 
-            // View the gathered `*const AudioBuffer` scratch as `&[&AudioBuffer]`
-            // (identical layout). This borrows nothing tracked, so the mutable
-            // borrow of the destination node below is permitted.
-            let input_refs: &[&AudioBuffer] = unsafe {
+            // View the gathered `*const AudioBuffer` scratch (null = unconnected)
+            // as `&[Option<&AudioBuffer>]`. This is sound by the null-pointer
+            // optimization: `Option<&T>` is guaranteed to have the same layout
+            // as a nullable `*const T`, with `None` represented by null. This
+            // borrows nothing tracked, so the mutable borrow of the destination
+            // node below is permitted.
+            let input_refs: &[Option<&AudioBuffer>] = unsafe {
                 core::slice::from_raw_parts(
-                    self.input_ptr_scratch.as_ptr() as *const &AudioBuffer,
+                    self.input_ptr_scratch.as_ptr() as *const Option<&AudioBuffer>,
                     self.input_ptr_scratch.len(),
                 )
             };
@@ -385,6 +415,35 @@ impl AudioGraph {
     pub fn set_node_value(&mut self, id: NodeId, value: f32) -> bool {
         match self.nodes.get_mut(id.index()) {
             Some(Some(slot)) => slot.ugen.set_value(value),
+            _ => false,
+        }
+    }
+
+    /// Force a node's noise generator(s) to a specific seed, overriding the
+    /// per-spawn seed `Engine::instantiate_synthdef` already assigned it (a
+    /// no-op for a node with no noise generator -- same pattern as
+    /// `set_node_value` on a node with no scalar to set). Reseeding is a
+    /// hard reset of the generator's internal LCG state, not a target to
+    /// glide toward.
+    ///
+    /// Exists so a caller that spawns several noise-bearing voices meant to
+    /// be perceived as ONE sound source (e.g. several `partialsNoise`
+    /// instances crossfaded together) can give them all the SAME seed --
+    /// their noise streams become sample-for-sample identical rather than
+    /// independent, so a crossfaded/mixed sum of them is coherent (adds
+    /// linearly) instead of incoherent (adds as the RMS sum of uncorrelated
+    /// sources, `sqrt(sum a_k^2)` rather than `sum a_k`). Without this, two
+    /// noise-bearing voices instantiated in the same synthdef always get
+    /// distinct seeds (`derive_noise_seed`'s `node_idx` term) -- correct and
+    /// desired when they are meant to sound like independent sources (e.g.
+    /// two different drum voices), wrong when they are meant to sound like
+    /// one.
+    pub fn reseed_node_noise(&mut self, id: NodeId, seed: u32) -> bool {
+        match self.nodes.get_mut(id.index()) {
+            Some(Some(slot)) => {
+                slot.ugen.reseed_noise(seed);
+                true
+            }
             _ => false,
         }
     }

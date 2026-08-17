@@ -3,7 +3,7 @@
 //! - [`Delay`]: Simple read-only delay line.
 //! - [`FeedbackDelay`]: Delay line with feedback (output feeds back into input).
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input};
+use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::ugens::delayline::DelayLine;
@@ -38,7 +38,8 @@ impl UGen for Delay {
     ugen_spec!(
         "Delay",
         category = Effect,
-        inputs = ["in", "time"],
+        inputs = ["in"],
+        optional_inputs = ["time"],
         outputs = ["out"]
     );
 
@@ -55,11 +56,11 @@ impl UGen for Delay {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let time_buf = inputs.get(1).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let time_buf = inputs.get(1).copied().flatten();
         if self.line.is_empty() {
             return;
         }
@@ -122,7 +123,8 @@ impl UGen for FeedbackDelay {
     ugen_spec!(
         "FeedbackDelay",
         category = Effect,
-        inputs = ["in", "time", "feedback"],
+        inputs = ["in"],
+        optional_inputs = ["time", "feedback"],
         outputs = ["out"]
     );
 
@@ -139,12 +141,12 @@ impl UGen for FeedbackDelay {
     fn process(
         &mut self,
         _context: &ProcessContext,
-        inputs: &[&AudioBuffer],
+        inputs: &[Option<&AudioBuffer>],
         output: &mut AudioBuffer,
     ) {
-        let in_buf = inputs[0];
-        let time_buf = inputs.get(1).copied();
-        let fb_buf = inputs.get(2).copied();
+        let in_buf = require_input(inputs, 0, self.spec().name, "in");
+        let time_buf = inputs.get(1).copied().flatten();
+        let fb_buf = inputs.get(2).copied().flatten();
         if self.line.is_empty() {
             return;
         }
