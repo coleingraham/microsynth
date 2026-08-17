@@ -69,11 +69,21 @@ width — never a wider, uniform width shared across a batch of differently-
 sized entries. A producer that fits internally at such a wider width (e.g. a
 fixed `C_max` across a batch of pitches whose partial counts vary) must mask
 or slice each entry down to its own `partial_freq_count + j_noise` before
-encoding — not merely truncate a wider vector and ship the prefix. Once
-sliced, each channel's row must itself be a full simplex — sum to ~1 over
-that entry's own `partial_freq_count + j_noise` slots — because **the ugen
-does not renormalize at read time**: a stored row that isn't already a
-simplex at its own width decodes and is used exactly as stored, silently.
+encoding — not merely truncate a wider vector and ship the prefix.
+
+**Summing to ~1 is not a wire invariant.** An un-gated softmax naturally
+produces a row that sums to ~1 over its own `partial_freq_count + j_noise`
+slots, but this format does not require that, and a decoder does not check
+for it. A producer may legitimately zero one or more slots deliberately —
+evidence gating a partial or noise band it has no support for in the source
+material it fit against — leaving the row's sum below 1. That is a valid,
+intentional row, not a malformed one. The actual invariant is narrower and
+purely mechanical: **the ugen does not renormalize at read time**. A stored
+row, whatever it sums to, decodes and is used exactly as stored, silently —
+so a producer's gating decision (or any other deliberate sub-unity weighting)
+travels through to render output unchanged, and a producer that *does* want
+its row's mass preserved end to end must ensure that at fit/export time,
+not rely on any renormalization downstream.
 
 ### Why both explicit partial frequencies and a stretch factor
 
