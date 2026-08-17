@@ -625,10 +625,26 @@ pub unsafe extern "C" fn ms_compile_def(source_ptr: *const u8, source_len: usize
 ///
 /// `ir_ptr`/`ir_len` must point to bytes produced by `IrSynthDef::to_bytes`
 /// (or an equivalent producer of the same wire format). Returns 0 on
-/// success, 1 on error: malformed/unsupported-version bytes, a failed
-/// `validate()` (e.g. a `table_bindings` entry naming a node whose kind
-/// isn't registered table-bound), or a `compile_with_tables` failure (e.g.
-/// an unregistered `table_id`).
+/// success, 1 on any of six distinct failure causes, collapsed to the same
+/// code deliberately — matching `ms_compile`/`ms_compile_def`'s own 0/1
+/// convention rather than introducing a differently-shaped error surface
+/// for this one export:
+///
+/// 1. `ir_bytes` fail to decode as an `IrSynthDef` (malformed or
+///    unsupported-version bytes, `IrSynthDef::from_bytes`).
+/// 2. No `ms_init`/`ms_init_with_bus`/`ms_routing_init` (or equivalent) has
+///    run yet, so the session has no `UGenRegistry` to validate/compile
+///    against.
+/// 3. The decoded document fails `validate()` — e.g. a `table_bindings`
+///    entry names a node whose kind isn't registered table-bound.
+/// 4. No coefficient-table bank exists for the session (same
+///    not-yet-initialized case as cause 2, checked separately because the
+///    bank and the registry are distinct globals).
+/// 5. `compile_with_tables` itself fails — e.g. a `table_bindings` entry
+///    names a `table_id` that was never uploaded via
+///    `ms_coeff_table_register`/`ms_coeff_table_replace`.
+/// 6. No engine exists for the session (same not-yet-initialized case as
+///    causes 2 and 4, checked separately for the same reason).
 ///
 /// # Safety
 /// `ir_ptr` must point to an initialized buffer of at least `ir_len` bytes
