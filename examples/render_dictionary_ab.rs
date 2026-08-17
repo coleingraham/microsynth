@@ -44,28 +44,18 @@
 
 #[path = "common/wav.rs"]
 mod wav;
+#[path = "common/raw_env.rs"]
+mod raw_env;
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank};
 use microsynth::curve::{GlideShape, GlideSpace};
 use microsynth::dsl::compiler::UGenRegistry;
 use microsynth::ir::{IrNode, IrSynthDef, IrTableBinding, SynthDefClass};
 use microsynth::{Engine, EngineConfig};
+use raw_env::read_f32_raw;
 use std::env;
 use std::fs;
 use std::path::Path;
-
-fn read_f32_raw(path: &Path) -> Vec<f32> {
-    let bytes = fs::read(path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
-    assert!(
-        bytes.len().is_multiple_of(4),
-        "{path:?} length {} is not a multiple of 4",
-        bytes.len()
-    );
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
 
 /// A single-node IR document: `Param("freq")` and `Param("gain")` feeding a
 /// table-bound `partialsNoise` node, bound to `table_id`, as its own output.

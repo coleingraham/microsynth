@@ -29,28 +29,18 @@
 
 #[path = "common/wav.rs"]
 mod wav;
+#[path = "common/raw_env.rs"]
+mod raw_env;
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank};
 use microsynth::curve::{GlideShape, GlideSpace};
 use microsynth::dsl::compiler::UGenRegistry;
 use microsynth::ir::{IrEdge, IrNode, IrParam, IrSynthDef, IrTableBinding, SynthDefClass};
 use microsynth::{Engine, EngineConfig};
+use raw_env::read_f32_raw;
 use std::env;
 use std::fs;
 use std::path::Path;
-
-fn read_f32_raw(path: &Path) -> Vec<f32> {
-    let bytes = fs::read(path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
-    assert!(
-        bytes.len().is_multiple_of(4),
-        "{path:?} length {} is not a multiple of 4",
-        bytes.len()
-    );
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
 
 /// K voices, each a table-bound `partialsNoise` fed the shared `freq` param
 /// and its own `gain_k` param, summed via a chain of `Add` nodes (`K-1` of
@@ -225,6 +215,26 @@ fn main() {
         block_size,
     });
     let synth = engine.instantiate_synthdef(&def);
+
+    // Coherent-noise fix: the K voices are meant to be heard as ONE crossfaded
+    // sound source, not K independent ones, but `instantiate_synthdef` gives
+    // every node a distinct noise seed by default (`derive_noise_seed`'s own
+    // node-index term -- correct for independent sources, wrong here). Force
+    // every voice's noise generator to the SAME seed so their noise streams
+    // are sample-for-sample identical: the crossfade gain envelopes (which sum
+    // to 1 by construction, see mot668_channels_ab_export.py's own docstring)
+    // then sum the shared noise coherently too, not as the RMS sum of
+    // uncorrelated sources. Node layout is `channels_ir`'s own: voices occupy
+    // IR indices `1+k .. 1+2k`.
+    let voice_base = 1 + k;
+    let shared_noise_seed = 0x5EED_0000u32;
+    for i in 0..k {
+        let voice_node_id = synth.node_ids()[voice_base + i];
+        engine
+            .graph_mut()
+            .reseed_node_noise(voice_node_id, shared_noise_seed);
+    }
+
     engine.graph_mut().set_sink(synth.output_node());
     engine.prepare();
 
