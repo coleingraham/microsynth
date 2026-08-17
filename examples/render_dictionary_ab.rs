@@ -42,10 +42,10 @@
 //! `num_samples`); this example asserts that rather than silently truncating to
 //! the shorter one.
 
-#[path = "common/wav.rs"]
-mod wav;
 #[path = "common/raw_env.rs"]
 mod raw_env;
+#[path = "common/wav.rs"]
+mod wav;
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank};
 use microsynth::curve::{GlideShape, GlideSpace};

@@ -27,10 +27,10 @@
 //! frame-rate -> audio-rate upsampling convention `render_dictionary_ab`
 //! already uses); this example asserts that rather than silently truncating.
 
-#[path = "common/wav.rs"]
-mod wav;
 #[path = "common/raw_env.rs"]
 mod raw_env;
+#[path = "common/wav.rs"]
+mod wav;
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank};
 use microsynth::curve::{GlideShape, GlideSpace};
