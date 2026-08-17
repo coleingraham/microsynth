@@ -27,10 +27,10 @@
 //! frame-rate -> audio-rate upsampling convention `render_dictionary_ab`
 //! already uses); this example asserts that rather than silently truncating.
 
-#[path = "common/wav.rs"]
-mod wav;
 #[path = "common/raw_env.rs"]
 mod raw_env;
+#[path = "common/wav.rs"]
+mod wav;
 
 use microsynth::coeff_table::{CoeffTable, CoeffTableBank};
 use microsynth::curve::{GlideShape, GlideSpace};
@@ -230,9 +230,19 @@ fn main() {
     let shared_noise_seed = 0x5EED_0000u32;
     for i in 0..k {
         let voice_node_id = synth.node_ids()[voice_base + i];
-        engine
+        let reseeded = engine
             .graph_mut()
             .reseed_node_noise(voice_node_id, shared_noise_seed);
+        assert!(
+            reseeded,
+            "voice {i} (node index {}) did not accept a noise reseed -- \
+             `reseed_node_noise` returns false only when the node index \
+             doesn't resolve to a live slot, which means channels_ir's node \
+             layout (voices at 1+k..1+2k) has drifted from this offset. \
+             Silently continuing here would degrade the coherent-noise fix \
+             above to a no-op without any signal that it happened.",
+            voice_node_id.index()
+        );
     }
 
     engine.graph_mut().set_sink(synth.output_node());

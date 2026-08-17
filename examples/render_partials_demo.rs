@@ -35,9 +35,13 @@ const DEFAULT_OUTPUT: &str = "/Volumes/T7/nmf-channels/mot-636/demo.wav";
 /// slightly with pitch, so the timbre visibly brightens/darkens across the
 /// glide -- otherwise every entry would sound identical and the render
 /// wouldn't demonstrate table interpolation at all), plus `J` = 2 small
-/// noise bands. Every entry is separately normalized to L1 == 1 (the RFC's
-/// channel-parameterization invariant this ugen relies on for simplex
-/// closure).
+/// noise bands. Every entry is separately normalized to L1 == 1 -- this
+/// demo's own choice, for a consistent output level across the glide, not
+/// something `PartialsNoise` requires: the ugen never renormalizes at read
+/// time, so a row that summed to less than 1 (e.g. a real, evidence-gated
+/// dictionary with some slots deliberately zeroed) would render exactly as
+/// stored, just quieter. See `docs/coeff-table-bank-format.md`'s
+/// "Summing to ~1 is not a wire invariant" note.
 fn synthetic_dictionary() -> CoeffTable {
     let f0s = [220.0f32, 262.0, 311.0, 370.0, 440.0];
     let m_partials = 6;
