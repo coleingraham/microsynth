@@ -93,6 +93,11 @@ fn test_new_exports_are_additive_not_replacements() {
         // `table_bindings` via `IrSynthDef::compile_with_tables` -- see
         // src/web.rs's doc comment on this export.
         "ms_compile_ir_with_tables",
+        // Named-IR registration: like `ms_register_def`, but the source is
+        // an `ir::IrSynthDef`'s JSON text form (`IrSynthDef::from_json`)
+        // rather than DSL source -- see src/web.rs's doc comment on this
+        // export.
+        "ms_register_def_ir",
     ];
     for name in new_names {
         assert!(
