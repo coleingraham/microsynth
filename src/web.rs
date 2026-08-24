@@ -284,6 +284,103 @@ pub unsafe extern "C" fn ms_register_def(
     0
 }
 
+/// Register a named SynthDef from its versioned IR JSON form — the
+/// named-IR registration bridge for a def that arrives as
+/// [`crate::ir::IrSynthDef`] JSON (`IrSynthDef::from_json`) rather than DSL
+/// source text, e.g. a SynthDef fit/harvested externally and serialized as
+/// IR JSON, with no DSL source ever written for it.
+///
+/// Mirrors [`ms_register_def`]'s shape exactly (decode → compile → insert
+/// into the same `DEF_REGISTRY` under `name`), swapping the DSL compiler for
+/// the IR path: `IrSynthDef::from_json` → `validate` → `compile_with_tables`.
+/// `compile_with_tables` is used unconditionally rather than branching on
+/// whether the def has any `table_bindings`: when `table_bindings` is empty,
+/// `compile_with_tables` resolves nothing and builds from the same empty
+/// `resolved` map `compile` itself uses (see `compile_with_tables`'s doc), so
+/// the two produce identical output for a binding-free def and there is no
+/// reason to carry two code paths here — one call always honors
+/// `table_bindings` when present and is a no-op superset of `compile`
+/// otherwise.
+///
+/// An IR def carries no `voice` declaration (that syntax is DSL-only — see
+/// `dsl::compile_with_voice_modes`), so registering one through this export
+/// never adds a `LEGATO_MODES` entry; a def registered this way is always an
+/// ordinary polyphonic def, never mono/legato.
+///
+/// Returns 0 on success, 1 on any of the following, collapsed to the same
+/// code deliberately — matching `ms_register_def`'s own 0/1 convention
+/// rather than introducing a differently-shaped error surface for this one
+/// export (same rationale as [`ms_compile_ir_with_tables`]'s doc comment):
+///
+/// 1. `name_ptr`/`json_ptr` bytes are not valid UTF-8.
+/// 2. `json` fails to parse as `IrSynthDef` JSON (`IrSynthDef::from_json`).
+/// 3. No `ms_init`/`ms_init_with_bus`/`ms_routing_init` (or equivalent) has
+///    run yet, so the session has no `UGenRegistry` to validate/compile
+///    against.
+/// 4. The decoded document fails `validate()` — e.g. an unknown UGen kind or
+///    an out-of-range edge/const port.
+/// 5. No coefficient-table bank exists for the session (same
+///    not-yet-initialized case as cause 3, checked separately because the
+///    bank and the registry are distinct globals).
+/// 6. `compile_with_tables` itself fails — e.g. a `table_bindings` entry
+///    names a `table_id` that was never uploaded.
+/// 7. No `DEF_REGISTRY` exists for the session (same not-yet-initialized
+///    case as causes 3 and 5, checked separately for the same reason).
+///
+/// # Safety
+/// `name_ptr`/`json_ptr` must each point to an initialized buffer of at
+/// least `name_len`/`json_len` bytes that stays valid for the call.
+#[cfg(feature = "ir")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_register_def_ir(
+    name_ptr: *const u8,
+    name_len: usize,
+    json_ptr: *const u8,
+    json_len: usize,
+) -> u32 {
+    let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match core::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let json_bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    let json = match core::str::from_utf8(json_bytes) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    let ir_def = match IrSynthDef::from_json(json) {
+        Ok(def) => def,
+        Err(_) => return 1,
+    };
+
+    let registry = match unsafe { REGISTRY.get_mut() }.as_ref() {
+        Some(r) => r,
+        None => return 1,
+    };
+    if ir_def.validate(registry).is_err() {
+        return 1;
+    }
+
+    let bank = match unsafe { COEFF_TABLE_BANK.get_mut() }.as_ref() {
+        Some(b) => b,
+        None => return 1,
+    };
+    let def = match ir_def.compile_with_tables(registry, bank) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+
+    let def_registry = match unsafe { DEF_REGISTRY.get_mut() }.as_mut() {
+        Some(r) => r,
+        None => return 1,
+    };
+
+    def_registry.insert(AllocString::from(name), def);
+
+    0
+}
+
 /// Set a parameter on the master effect synth.
 ///
 /// # Safety
