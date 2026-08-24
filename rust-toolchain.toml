@@ -1,0 +1,18 @@
+# Pins the toolchain that produces the blessed `microsynth_raw.wasm` for the
+# in-stack motif-core render path. rustup resolves this file for any
+# rustc/cargo invocation whose CWD is inside this checkout (or a
+# subdirectory of it) -- it is not read by manifest-path-only invocations
+# from outside the checkout, which is why the build script that consumes
+# this crate shells its `cargo build` call into this directory rather than
+# relying on --manifest-path alone.
+#
+# The `dtolnay/rust-toolchain@stable` steps in .github/workflows/ci.yml stay
+# as-is: they install/default a stable toolchain for cases where no
+# rust-toolchain file is in scope, but rustup's own toolchain-file override
+# takes precedence over the ambient default for any command run from inside
+# this checkout, so CI's actual `cargo build`/`test`/`clippy`/`fmt` steps
+# resolve this pin (rustup auto-installs it on first use if not already
+# present). Bump this value together with a re-blessed golden wasm, not on
+# its own.
+[toolchain]
+channel = "1.96.1"
