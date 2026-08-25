@@ -133,8 +133,13 @@ impl UGen for Overdrive {
         let tone_buf = inputs.get(2).copied().flatten();
         let mix_buf = inputs.get(3).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let y1_start = self.y1;
+
         for ch in 0..output.num_channels() {
-            let mut y1 = self.y1;
+            let mut y1 = y1_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

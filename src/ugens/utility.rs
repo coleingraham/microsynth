@@ -169,9 +169,15 @@ impl UGen for SampleAndHold {
         let in_buf = require_input(inputs, 0, "SampleAndHold", "in");
         let trig_buf = require_input(inputs, 1, "SampleAndHold", "trig");
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let held_start = self.held_value;
+        let prev_trig_start = self.prev_trig;
+
         for ch in 0..output.num_channels() {
-            let mut held = self.held_value;
-            let mut prev_trig = self.prev_trig;
+            let mut held = held_start;
+            let mut prev_trig = prev_trig_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let trig_ch = channel_wrapped(trig_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
@@ -250,9 +256,15 @@ impl UGen for Impulse {
         let freq_buf = inputs.first().copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let phase_start = self.phase;
+        let first_start = self.first;
+
         for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
-            let mut first = self.first;
+            let mut phase = phase_start;
+            let mut first = first_start;
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
@@ -333,8 +345,13 @@ impl UGen for Lag {
         let in_buf = require_input(inputs, 0, "Lag", "in");
         let time_buf = inputs.get(1).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let y1_start = self.y1;
+
         for ch in 0..output.num_channels() {
-            let mut y1 = self.y1;
+            let mut y1 = y1_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

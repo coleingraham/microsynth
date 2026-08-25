@@ -218,10 +218,18 @@ impl UGen for Flanger {
 
         // Every channel replays the shared delay line from the same cursor.
         let start_pos = self.line.write_pos();
+        // Snapshot the LFO phase once, before the channel loop: every
+        // channel must start from the same block-start phase, not from
+        // whatever a prior channel's iteration already wrote back (see
+        // filters::OnePole's process() comment for the
+        // read-back-inside-loop bug this avoids). The shared-delay-line
+        // replay-per-channel convention itself (`set_write_pos` below) is
+        // unrelated and intentional — see `Limiter`'s doc comment.
+        let lfo_phase_start = self.lfo_phase;
 
         for ch in 0..output.num_channels() {
             self.line.set_write_pos(start_pos);
-            let mut lfo_phase = self.lfo_phase;
+            let mut lfo_phase = lfo_phase_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -326,10 +334,17 @@ impl UGen for Phaser {
         let mix_buf = inputs.get(4).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let ap_state_start = self.ap_state;
+        let lfo_phase_start = self.lfo_phase;
+        let fb_sample_start = self.feedback_sample;
+
         for ch in 0..output.num_channels() {
-            let mut ap_state = self.ap_state;
-            let mut lfo_phase = self.lfo_phase;
-            let mut fb_sample = self.feedback_sample;
+            let mut ap_state = ap_state_start;
+            let mut lfo_phase = lfo_phase_start;
+            let mut fb_sample = fb_sample_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -472,11 +487,20 @@ impl UGen for WowFlutter {
 
         // Every channel replays the shared delay line from the same cursor.
         let start_pos = self.line.write_pos();
+        // Snapshot the LFO phases once, before the channel loop: every
+        // channel must start from the same block-start state, not from
+        // whatever a prior channel's iteration already wrote back (see
+        // filters::OnePole's process() comment for the
+        // read-back-inside-loop bug this avoids). The shared-delay-line
+        // replay-per-channel convention itself (`set_write_pos` below) is
+        // unrelated and intentional — see `Limiter`'s doc comment.
+        let wow_phase_start = self.wow_phase;
+        let flutter_phase_start = self.flutter_phase;
 
         for ch in 0..output.num_channels() {
             self.line.set_write_pos(start_pos);
-            let mut wow_phase = self.wow_phase;
-            let mut flutter_phase = self.flutter_phase;
+            let mut wow_phase = wow_phase_start;
+            let mut flutter_phase = flutter_phase_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

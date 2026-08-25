@@ -132,9 +132,16 @@ macro_rules! ramp_ugen {
                     self.initialized = true;
                 }
 
+                // Snapshot once, before the channel loop: every channel
+                // must start from the same block-start state (see
+                // filters::OnePole's process() comment for the
+                // read-back-inside-loop bug this avoids).
+                let value_start = self.value;
+                let remaining_start = self.samples_remaining;
+
                 for ch in 0..output.num_channels() {
-                    let mut value = self.value;
-                    let mut remaining = self.samples_remaining;
+                    let mut value = value_start;
+                    let mut remaining = remaining_start;
                     let out = output.channel_mut(ch).samples_mut();
 
                     for sample in out.iter_mut() {
@@ -288,9 +295,16 @@ macro_rules! perc_ugen {
                 let attack_buf = inputs.first().copied().flatten();
                 let release_buf = inputs.get(1).copied().flatten();
 
+                // Snapshot once, before the channel loop: every channel
+                // must start from the same block-start state (see
+                // filters::OnePole's process() comment for the
+                // read-back-inside-loop bug this avoids).
+                let level_start = self.level;
+                let stage_start = self.stage;
+
                 for ch in 0..output.num_channels() {
-                    let mut level = self.level;
-                    let mut stage = self.stage;
+                    let mut level = level_start;
+                    let mut stage = stage_start;
                     let out = output.channel_mut(ch).samples_mut();
 
                     for (i, out_sample) in out.iter_mut().enumerate() {
@@ -439,10 +453,17 @@ impl UGen for ASR {
         let attack_buf = inputs.get(1).copied().flatten();
         let release_buf = inputs.get(2).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let level_start = self.level;
+        let stage_start = self.stage;
+        let triggered_start = self.triggered;
+
         for ch in 0..output.num_channels() {
-            let mut level = self.level;
-            let mut stage = self.stage;
-            let mut triggered = self.triggered;
+            let mut level = level_start;
+            let mut stage = stage_start;
+            let mut triggered = triggered_start;
             let gate_ch = channel_wrapped(gate_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -583,10 +604,17 @@ impl UGen for ADSR {
         let sustain_buf = inputs.get(3).copied().flatten();
         let release_buf = inputs.get(4).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let level_start = self.level;
+        let stage_start = self.stage;
+        let triggered_start = self.triggered;
+
         for ch in 0..output.num_channels() {
-            let mut level = self.level;
-            let mut stage = self.stage;
-            let mut triggered = self.triggered;
+            let mut level = level_start;
+            let mut stage = stage_start;
+            let mut triggered = triggered_start;
             let gate_ch = channel_wrapped(gate_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

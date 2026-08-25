@@ -10,6 +10,26 @@
 //! - [`SpectralGate`]: Zero bins below a magnitude threshold.
 //! - [`SpectralBlur`]: Temporal magnitude smoothing.
 //! - [`Convolution`]: FFT-based overlap-add convolution.
+//!
+//! **Known multichannel limitation (not fixed here):** every UGen in this
+//! file holds exactly one shared `StftProcessor` (or, for [`Convolution`],
+//! one shared set of ring buffers) and runs its per-channel loop as an
+//! *outer* loop around a full per-sample inner loop — so for N output
+//! channels, `stft.push_sample`/`analyze`/`synthesize` (or the convolution
+//! ring buffers) are driven N times per audio sample, sequentially, by one
+//! shared processor. This is a different bug shape than the
+//! read-back-inside-loop state-snapshot bug fixed elsewhere in this crate
+//! (see `ugens::filters::OnePole::process`'s comment) — no per-channel
+//! scalar/array state is being raced, but the shared processor's *own*
+//! internal ring-buffer phase drifts between channels within a block (channel
+//! 1's pass starts from wherever channel 0's full-block pass left the shared
+//! ring buffer, not from the block-start position), so channel 1's frame
+//! boundaries — and therefore its output — can diverge from channel 0's even
+//! for byte-identical input. Fixing it needs either a separate processor
+//! instance per channel or an explicit mono-only contract, which is a bigger
+//! change than this fix's scope; these UGens are exempted from the
+//! registry-wide multichannel-identity test (`tests/multichannel_state.rs`)
+//! pending a follow-up.
 
 use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;

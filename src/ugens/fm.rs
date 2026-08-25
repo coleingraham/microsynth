@@ -92,10 +92,17 @@ impl UGen for FmOsc {
         let feedback_buf = inputs.get(3).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let carrier_phase_start = self.carrier_phase;
+        let mod_phase_start = self.mod_phase;
+        let prev_mod_out_start = self.prev_mod_out;
+
         for ch in 0..output.num_channels() {
-            let mut carrier_phase = self.carrier_phase;
-            let mut mod_phase = self.mod_phase;
-            let mut prev_mod_out = self.prev_mod_out;
+            let mut carrier_phase = carrier_phase_start;
+            let mut mod_phase = mod_phase_start;
+            let mut prev_mod_out = prev_mod_out_start;
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {

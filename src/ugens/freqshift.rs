@@ -119,10 +119,17 @@ impl UGen for FreqShift {
         let shift_buf = inputs.get(1).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let chain_i_start = self.chain_i;
+        let chain_q_start = self.chain_q;
+        let osc_phase_start = self.osc_phase;
+
         for ch in 0..output.num_channels() {
-            let mut chain_i = self.chain_i;
-            let mut chain_q = self.chain_q;
-            let mut osc_phase = self.osc_phase;
+            let mut chain_i = chain_i_start;
+            let mut chain_q = chain_q_start;
+            let mut osc_phase = osc_phase_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

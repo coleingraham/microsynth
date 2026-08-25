@@ -68,9 +68,15 @@ impl UGen for Bitcrusher {
         let bits_buf = inputs.get(1).copied().flatten();
         let ds_buf = inputs.get(2).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        let hold_start = self.hold_sample;
+        let counter_start = self.hold_counter;
+
         for ch in 0..output.num_channels() {
-            let mut hold = self.hold_sample;
-            let mut counter = self.hold_counter;
+            let mut hold = hold_start;
+            let mut counter = counter_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 

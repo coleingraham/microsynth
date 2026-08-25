@@ -671,15 +671,26 @@ impl UGen for PartialsNoise {
         let inv_sr = 1.0 / sr;
         let nyquist = sr * 0.5;
 
+        // Snapshot once, before the channel loop: every channel must clone
+        // from the same block-start state, not from whatever a prior
+        // channel's iteration already wrote back (the old per-channel
+        // `self.phase.clone()` etc. below re-read `self` afresh on every
+        // iteration, so channel 1 started from channel 0's END-of-block
+        // state — a full block ahead; see filters::OnePole's process()
+        // comment for the general shape of this bug).
+        let phase_snapshot = self.phase.clone();
+        let noise_state_snapshot = self.noise_state.clone();
+        let rng_snapshot = self.rng.clone();
+
         for ch in 0..output.num_channels() {
             // Local working copies: only channel 0's final state is
             // persisted back at the end of the block, matching every other
             // stateful UGen in this crate (Param, Lag, WaveTable, ...) —
             // multichannel expansion re-runs the same evolution per channel
             // rather than tracking independent state per channel.
-            let mut phase = self.phase.clone();
-            let mut noise_state = self.noise_state.clone();
-            let mut rng = self.rng.clone();
+            let mut phase = phase_snapshot.clone();
+            let mut noise_state = noise_state_snapshot.clone();
+            let mut rng = rng_snapshot.clone();
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {

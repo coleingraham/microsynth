@@ -59,8 +59,15 @@ impl UGen for OnePole {
         let in_buf = require_input(inputs, 0, self.spec().name, "in");
         let coeff_buf = inputs.get(1).copied().flatten();
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state, not from whatever a prior
+        // channel's iteration already wrote back (see MOT multichannel
+        // state-writeback fix — read-back-inside-loop made channel 1 start
+        // from channel 0's END-of-block state, a full block ahead).
+        let y1_start = self.y1;
+
         for ch in 0..output.num_channels() {
-            let mut y1 = self.y1;
+            let mut y1 = y1_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -330,8 +337,12 @@ macro_rules! biquad_ugen {
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
+                // Snapshot once, before the channel loop: see OnePole's
+                // process() comment for why (read-back-inside-loop bug).
+                let state_start = self.state;
+
                 for ch in 0..output.num_channels() {
-                    let mut state = self.state;
+                    let mut state = state_start;
                     let in_ch = channel_wrapped(in_buf, ch);
                     let out = output.channel_mut(ch).samples_mut();
 
@@ -461,8 +472,12 @@ macro_rules! biquad_gain_ugen {
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
+                // Snapshot once, before the channel loop: see OnePole's
+                // process() comment for why (read-back-inside-loop bug).
+                let state_start = self.state;
+
                 for ch in 0..output.num_channels() {
-                    let mut state = self.state;
+                    let mut state = state_start;
                     let in_ch = channel_wrapped(in_buf, ch);
                     let out = output.channel_mut(ch).samples_mut();
 
@@ -590,10 +605,16 @@ impl UGen for ParametricEq3 {
         let sr = self.sample_rate;
         let nyquist = sr * 0.5;
 
+        // Snapshot once, before the channel loop: see OnePole's process()
+        // comment for why (read-back-inside-loop bug).
+        let low_start = self.low;
+        let mid_start = self.mid;
+        let high_start = self.high;
+
         for ch in 0..output.num_channels() {
-            let mut low = self.low;
-            let mut mid = self.mid;
-            let mut high = self.high;
+            let mut low = low_start;
+            let mut mid = mid_start;
+            let mut high = high_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
