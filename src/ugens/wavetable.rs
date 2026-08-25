@@ -89,8 +89,17 @@ impl UGen for WaveTable {
         }
         let inv_sr = 1.0 / self.sample_rate as f64;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see filters::OnePole's
+        // process() comment for the read-back-inside-loop bug this avoids).
+        // Per-channel *data* still legitimately differs when `waveform`
+        // itself is multichannel (`wt_ch = ch % waveform.num_channels()`
+        // below) — only the shared phase accumulator needs to stay in
+        // lockstep.
+        let phase_start = self.phase;
+
         for ch in 0..output.num_channels() {
-            let mut phase = self.phase;
+            let mut phase = phase_start;
             let out = output.channel_mut(ch).samples_mut();
             let wt_ch = ch % waveform.num_channels();
 

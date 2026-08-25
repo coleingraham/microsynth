@@ -102,11 +102,24 @@ impl UGen for PlayBuf {
         let num_frames = sample.num_frames() as f64;
         let rate_ratio = sample.sample_rate() / self.sample_rate;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // playback from the same block-start transport state (see
+        // filters::OnePole's process() comment for the
+        // read-back-inside-loop bug this avoids). Per-channel *data* still
+        // legitimately differs when `sample` itself is multichannel (each
+        // channel reads its own source channel via `sample.read_interpolated
+        // (ch, position)` below) — only the shared transport (position,
+        // playing, done, prev_trig) needs to stay in lockstep.
+        let position_start = self.position;
+        let playing_start = self.playing;
+        let done_start = self.done;
+        let prev_trig_start = self.prev_trig;
+
         for ch in 0..output.num_channels() {
-            let mut position = self.position;
-            let mut playing = self.playing;
-            let mut done = self.done;
-            let mut prev_trig = self.prev_trig;
+            let mut position = position_start;
+            let mut playing = playing_start;
+            let mut done = done_start;
+            let mut prev_trig = prev_trig_start;
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {

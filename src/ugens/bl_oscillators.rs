@@ -105,9 +105,16 @@ macro_rules! bl_osc {
                 let freq_buf = inputs.first().copied().flatten();
                 let inv_sr = 1.0 / self.sample_rate;
 
+                // Snapshot once, before the channel loop: every channel must
+                // start from the same block-start state (see
+                // filters::OnePole's process() comment for the
+                // read-back-inside-loop bug this avoids).
+                let phase_start = self.phase;
+                $(let extra_state_start = self.$state;)?
+
                 for ch in 0..output.num_channels() {
-                    let mut phase = self.phase;
-                    $(let mut $state = self.$state;)?
+                    let mut phase = phase_start;
+                    $(let mut $state = extra_state_start;)?
                     let out = output.channel_mut(ch).samples_mut();
 
                     for (i, out_sample) in out.iter_mut().enumerate() {

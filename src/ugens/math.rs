@@ -128,9 +128,16 @@ impl UGen for Param {
         let is_default_glide =
             self.glide_shape == GlideShape::Linear && self.glide_space == GlideSpace::Raw;
 
+        // Snapshot once, before the channel loop: every channel must start
+        // from the same block-start state (see
+        // filters::OnePole::process()'s comment for the
+        // read-back-inside-loop bug this avoids).
+        let value_start = self.value;
+        let remaining_start = self.samples_remaining;
+
         for ch in 0..output.num_channels() {
-            let mut value = self.value;
-            let mut remaining = self.samples_remaining;
+            let mut value = value_start;
+            let mut remaining = remaining_start;
             let out = output.channel_mut(ch).samples_mut();
 
             if is_default_glide {

@@ -4,7 +4,7 @@
 //! - [`Bowed`]: Digital waveguide bowed string model
 
 use super::rng::Rng;
-use crate::buffer::{AudioBuffer, read_input};
+use crate::buffer::{AudioBuffer, MAX_BLOCK_SIZE, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use alloc::vec::Vec;
@@ -110,58 +110,73 @@ impl UGen for Pluck {
         let decay_buf = inputs.get(1).copied().flatten();
         let trig_buf = inputs.get(2).copied().flatten();
 
+        // Pluck models a single shared string: `self.buffer` (the KS delay
+        // line) and `self.rng` (consumed by `trigger()`'s noise burst) are
+        // genuinely shared, mutable resources, not per-channel state. The
+        // old per-channel loop below re-read `self.write_pos` etc. fresh on
+        // each channel iteration (the same read-back-inside-loop bug fixed
+        // throughout this crate — see filters::OnePole's process()
+        // comment), but ALSO called `self.trigger()` — which mutates
+        // `self.buffer` and advances `self.rng` — once per output channel
+        // for the very same trigger edge, decorrelating channel 1's noise
+        // burst from channel 0's. Both bugs are fixed together by running
+        // the recurrence exactly once per sample (into a stack-allocated
+        // mono scratch buffer) and copying that single result to every
+        // output channel, instead of re-deriving it once per channel.
+        let block_size = output.block_size();
+        let mut mono = [0.0f32; MAX_BLOCK_SIZE];
+
+        let mut write_pos = self.write_pos;
+        let mut filter_state = self.filter_state;
+        let mut energy = self.energy;
+        let mut prev_trig = self.prev_trig;
+
+        for (i, mono_sample) in mono[..block_size].iter_mut().enumerate() {
+            let freq = read_input(freq_buf, 0, i, 440.0);
+            let decay = read_input(decay_buf, 0, i, 0.99).clamp(0.0, 0.999);
+            let trig = read_input(trig_buf, 0, i, 1.0);
+
+            // Trigger detection (positive-going zero crossing)
+            if trig > 0.0 && prev_trig <= 0.0 {
+                self.trigger(freq);
+                write_pos = self.write_pos;
+                filter_state = self.filter_state;
+                energy = self.energy;
+            }
+            prev_trig = trig;
+
+            if self.buf_len < 2 {
+                *mono_sample = 0.0;
+                continue;
+            }
+
+            // Read from delay line
+            let read_pos = write_pos;
+            let delayed = self.buffer[read_pos];
+
+            // One-pole lowpass (classic KS averaging filter)
+            // Average current and previous: simple but effective damping
+            let next_pos = (read_pos + 1) % self.buf_len;
+            let next_sample = self.buffer[next_pos];
+            filter_state = 0.5 * (delayed + next_sample);
+
+            // Write back with decay
+            self.buffer[write_pos] = filter_state * decay;
+            *mono_sample = filter_state;
+
+            write_pos = (write_pos + 1) % self.buf_len;
+
+            // Track energy (exponential follower)
+            energy = 0.999 * energy + 0.001 * filter_state.abs();
+        }
+
+        self.write_pos = write_pos;
+        self.filter_state = filter_state;
+        self.energy = energy;
+        self.prev_trig = prev_trig;
+
         for ch in 0..output.num_channels() {
-            let mut write_pos = self.write_pos;
-            let mut filter_state = self.filter_state;
-            let mut energy = self.energy;
-            let mut prev_trig = self.prev_trig;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq = read_input(freq_buf, ch, i, 440.0);
-                let decay = read_input(decay_buf, ch, i, 0.99).clamp(0.0, 0.999);
-                let trig = read_input(trig_buf, ch, i, 1.0);
-
-                // Trigger detection (positive-going zero crossing)
-                if trig > 0.0 && prev_trig <= 0.0 {
-                    self.trigger(freq);
-                    write_pos = self.write_pos;
-                    filter_state = self.filter_state;
-                    energy = self.energy;
-                }
-                prev_trig = trig;
-
-                if self.buf_len < 2 {
-                    *out_sample = 0.0;
-                    continue;
-                }
-
-                // Read from delay line
-                let read_pos = write_pos;
-                let delayed = self.buffer[read_pos];
-
-                // One-pole lowpass (classic KS averaging filter)
-                // Average current and previous: simple but effective damping
-                let next_pos = (read_pos + 1) % self.buf_len;
-                let next_sample = self.buffer[next_pos];
-                filter_state = 0.5 * (delayed + next_sample);
-
-                // Write back with decay
-                self.buffer[write_pos] = filter_state * decay;
-                *out_sample = filter_state;
-
-                write_pos = (write_pos + 1) % self.buf_len;
-
-                // Track energy (exponential follower)
-                energy = 0.999 * energy + 0.001 * filter_state.abs();
-            }
-
-            if ch == 0 {
-                self.write_pos = write_pos;
-                self.filter_state = filter_state;
-                self.energy = energy;
-                self.prev_trig = prev_trig;
-            }
+            output.channel_mut(ch).samples_mut()[..block_size].copy_from_slice(&mono[..block_size]);
         }
     }
 }
@@ -254,60 +269,73 @@ impl UGen for Bowed {
             return;
         }
 
+        // Bowed models a single shared string: `self.nut_delay` and
+        // `self.bridge_delay` are the waveguide's own delay-line memory —
+        // genuinely shared, mutable resources, not per-channel state (same
+        // class of bug as `Pluck`, see its process() comment). The old
+        // per-channel loop wrote `self.nut_delay[nut_write]` /
+        // `self.bridge_delay[bridge_write]` directly from inside a loop
+        // that reran once per output channel: channel 1's pass wrote (and
+        // read back) delay-line contents that channel 0's pass, running
+        // first over the *entire* block, had already advanced a full block
+        // ahead. Fixed by running the recurrence exactly once per sample
+        // (into a stack-allocated mono scratch buffer) and copying that
+        // single result to every output channel.
+        let block_size = output.block_size();
+        let mut mono = [0.0f32; MAX_BLOCK_SIZE];
+
+        let mut nut_write = self.nut_write;
+        let mut bridge_write = self.bridge_write;
+        let mut nut_filter = self.nut_filter;
+        let mut bridge_filter = self.bridge_filter;
+
+        for (i, mono_sample) in mono[..block_size].iter_mut().enumerate() {
+            let freq = read_input(freq_buf, 0, i, 220.0).clamp(MIN_FREQ, self.sample_rate * 0.45);
+            let pressure = read_input(pressure_buf, 0, i, 0.5).clamp(0.0, 1.0);
+            let position = read_input(position_buf, 0, i, 0.13).clamp(0.02, 0.98);
+
+            // Compute delay lengths from frequency and bow position
+            let total_delay = self.sample_rate / freq;
+            let nut_len = ((total_delay * position) as usize).clamp(1, max_len - 1);
+            let bridge_len = ((total_delay * (1.0 - position)) as usize).clamp(1, max_len - 1);
+
+            // Read returning waves from delay lines (arrived at terminations)
+            let nut_read = (nut_write + max_len - nut_len) % max_len;
+            let nut_out = self.nut_delay[nut_read];
+            let bridge_read = (bridge_write + max_len - bridge_len) % max_len;
+            let bridge_out = self.bridge_delay[bridge_read];
+
+            // Reflections at terminations: inversion + one-pole lowpass (loss model)
+            nut_filter = nut_filter * 0.55 + (-nut_out) * 0.45;
+            bridge_filter = bridge_filter * 0.55 + (-bridge_out) * 0.45;
+
+            // String velocity at bow point (sum of incoming waves from both sides)
+            let v_string = nut_filter + bridge_filter;
+            let v_bow = 0.3 * pressure;
+            let delta_v = v_bow - v_string;
+
+            // Bow-string interaction
+            let force = bow_table(delta_v, pressure) * pressure * 0.3;
+
+            // Cross-couple: reflected wave from each side passes through
+            // the bow point and enters the opposite delay line
+            self.nut_delay[nut_write] = bridge_filter + force;
+            self.bridge_delay[bridge_write] = nut_filter + force;
+
+            // Output from bridge side (pickup position)
+            *mono_sample = bridge_out.clamp(-1.0, 1.0);
+
+            nut_write = (nut_write + 1) % max_len;
+            bridge_write = (bridge_write + 1) % max_len;
+        }
+
+        self.nut_write = nut_write;
+        self.bridge_write = bridge_write;
+        self.nut_filter = nut_filter;
+        self.bridge_filter = bridge_filter;
+
         for ch in 0..output.num_channels() {
-            let mut nut_write = self.nut_write;
-            let mut bridge_write = self.bridge_write;
-            let mut nut_filter = self.nut_filter;
-            let mut bridge_filter = self.bridge_filter;
-            let out = output.channel_mut(ch).samples_mut();
-
-            for (i, out_sample) in out.iter_mut().enumerate() {
-                let freq =
-                    read_input(freq_buf, ch, i, 220.0).clamp(MIN_FREQ, self.sample_rate * 0.45);
-                let pressure = read_input(pressure_buf, ch, i, 0.5).clamp(0.0, 1.0);
-                let position = read_input(position_buf, ch, i, 0.13).clamp(0.02, 0.98);
-
-                // Compute delay lengths from frequency and bow position
-                let total_delay = self.sample_rate / freq;
-                let nut_len = ((total_delay * position) as usize).clamp(1, max_len - 1);
-                let bridge_len = ((total_delay * (1.0 - position)) as usize).clamp(1, max_len - 1);
-
-                // Read returning waves from delay lines (arrived at terminations)
-                let nut_read = (nut_write + max_len - nut_len) % max_len;
-                let nut_out = self.nut_delay[nut_read];
-                let bridge_read = (bridge_write + max_len - bridge_len) % max_len;
-                let bridge_out = self.bridge_delay[bridge_read];
-
-                // Reflections at terminations: inversion + one-pole lowpass (loss model)
-                nut_filter = nut_filter * 0.55 + (-nut_out) * 0.45;
-                bridge_filter = bridge_filter * 0.55 + (-bridge_out) * 0.45;
-
-                // String velocity at bow point (sum of incoming waves from both sides)
-                let v_string = nut_filter + bridge_filter;
-                let v_bow = 0.3 * pressure;
-                let delta_v = v_bow - v_string;
-
-                // Bow-string interaction
-                let force = bow_table(delta_v, pressure) * pressure * 0.3;
-
-                // Cross-couple: reflected wave from each side passes through
-                // the bow point and enters the opposite delay line
-                self.nut_delay[nut_write] = bridge_filter + force;
-                self.bridge_delay[bridge_write] = nut_filter + force;
-
-                // Output from bridge side (pickup position)
-                *out_sample = bridge_out.clamp(-1.0, 1.0);
-
-                nut_write = (nut_write + 1) % max_len;
-                bridge_write = (bridge_write + 1) % max_len;
-            }
-
-            if ch == 0 {
-                self.nut_write = nut_write;
-                self.bridge_write = bridge_write;
-                self.nut_filter = nut_filter;
-                self.bridge_filter = bridge_filter;
-            }
+            output.channel_mut(ch).samples_mut()[..block_size].copy_from_slice(&mono[..block_size]);
         }
     }
 }

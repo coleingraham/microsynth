@@ -83,10 +83,17 @@ macro_rules! phase_osc {
                 let freq_buf = inputs.first().copied().flatten();
                 let inv_sr = 1.0 / self.sample_rate;
 
+                // Snapshot once, before the channel loop: every channel
+                // must start from the same block-start state, not from
+                // whatever a prior channel's iteration already wrote back
+                // (see filters::OnePole's process() comment for the
+                // read-back-inside-loop bug this avoids).
+                let phase_start = self.phase;
+
                 for ch in 0..output.num_channels() {
                     // Each channel shares the same phase accumulator state for now
                     // (multichannel expansion means separate instances per channel).
-                    let mut phase = self.phase;
+                    let mut phase = phase_start;
                     let out = output.channel_mut(ch).samples_mut();
 
                     for (i, out_sample) in out.iter_mut().enumerate() {
