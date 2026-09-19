@@ -109,6 +109,28 @@ impl DelayLine {
         a + frac * (b - a)
     }
 
+    /// Read at a fractional delay, in samples, back from the write cursor,
+    /// with 4-point, 3rd-order Hermite interpolation.
+    ///
+    /// `delay_samples` must be in `1..=len - 3`; callers clamp it to their own
+    /// range first.
+    #[inline]
+    pub(crate) fn read_hermite(&self, delay_samples: f32) -> f32 {
+        let len = self.buffer.len();
+        let delay_int = delay_samples as usize;
+        let frac = delay_samples - delay_int as f32;
+        let at = |delay: usize| self.buffer[(self.write_pos + len - delay) % len];
+
+        let newer = at(delay_int - 1);
+        let x0 = at(delay_int);
+        let x1 = at(delay_int + 1);
+        let older = at(delay_int + 2);
+        let c1 = 0.5 * (x1 - newer);
+        let c2 = newer - 2.5 * x0 + 2.0 * x1 - 0.5 * older;
+        let c3 = 0.5 * (older - newer) + 1.5 * (x0 - x1);
+        ((c3 * frac + c2) * frac + c1) * frac + x0
+    }
+
     /// Write a sample at the cursor without advancing.
     ///
     /// Pair with [`advance`](DelayLine::advance) when reads must see the sample

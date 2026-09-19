@@ -1,12 +1,13 @@
-//! Modulation UGens: Chorus, Flanger, Phaser.
+//! Modulation UGens: Chorus, Flanger, Phaser, WowFlutter.
 //!
 //! Time-modulated delay effects for spatial width and movement.
 
-use crate::buffer::{AudioBuffer, channel_wrapped, read_input, require_input};
+use crate::buffer::{AudioBuffer, MAX_BLOCK_SIZE, channel_wrapped, read_input, require_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
 use crate::ugens::delayline::DelayLine;
-use core::f32::consts::TAU;
+use crate::ugens::rng::Rng;
+use core::f32::consts::{SQRT_2, TAU};
 
 // --- Chorus ---
 
@@ -395,29 +396,307 @@ impl UGen for Phaser {
 
 // --- WowFlutter ---
 
-/// Tape/turntable speed-wobble macro: two summed LFOs modulating a delay
-/// line's read position, packaged as one named UGen so chain specs can refer
-/// to "wow and flutter" without re-deriving it from `Delay` + `Lfo` every
-/// time. There's no new DSP here — this is the same modulated-delay
-/// technique `Chorus`/`Flanger` already use, just with slower, wider
-/// (`wow`) and faster, narrower (`flutter`) modulation summed together and
-/// no feedback, matching how physical playback-speed variation actually
-/// behaves (a pure, non-resonant time wobble, not a comb filter).
+/// Centre of the modulated delay, in seconds.
+const WOW_FLUTTER_CENTER_DELAY: f32 = 0.010;
+/// Samples kept clear at each end of the delay range for the Hermite read.
+const WOW_FLUTTER_READ_MARGIN: f32 = 3.0;
+/// Seed used when `seed` is left unconnected.
+const WOW_FLUTTER_DEFAULT_SEED: u32 = 0x57A9_F1E7;
+/// How far a drifting sine's rate wanders at `irregularity = 1.0`, as a fraction.
+const WOW_FLUTTER_RATE_DRIFT: f32 = 0.15;
+/// How far a drifting sine's amplitude wanders at `irregularity = 1.0`, as a fraction.
+const WOW_FLUTTER_AMP_DRIFT: f32 = 0.3;
+/// Weight of a band's noise at `irregularity = 1.0`, relative to its primary sine.
+const WOW_FLUTTER_NOISE_WEIGHT: f32 = 0.5;
+
+/// Variance of [`SmoothNoise`] output.
+const SMOOTH_NOISE_VARIANCE: f32 = 19.0 / 70.0;
+/// Largest magnitude [`SmoothNoise`] output can reach.
+const SMOOTH_NOISE_BOUND: f32 = 1.25;
+
+/// Points per second of the scrape noise; its band reaches up to about half this.
+const SCRAPE_POINT_RATE: f32 = 2000.0;
+/// Corner of the high-pass at the bottom of the scrape band, in Hz.
+const SCRAPE_HIGHPASS_HZ: f32 = 100.0;
+/// RMS rate of change per second of [`Scrape`] output.
+const SCRAPE_SLOPE_RMS: f32 = 1725.0;
+/// Largest magnitude [`Scrape`] output can reach.
+const SCRAPE_BOUND: f32 = 2.0 * SMOOTH_NOISE_BOUND;
+/// Points per second of the weave noise.
+const WEAVE_POINT_RATE: f32 = 1.5;
+
+/// Mixes a seed and a stream index into an independent RNG seed.
+fn stream_seed(seed: u32, index: u32) -> u32 {
+    let mut z = seed.wrapping_add(index.wrapping_mul(0x9E37_79B9));
+    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
+    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
+    z ^ (z >> 16)
+}
+
+/// Smooth random signal: seeded uniform points in [-1, 1] joined by
+/// Catmull-Rom segments.
+struct SmoothNoise {
+    rng: Rng,
+    points: [f32; 4],
+    pos: f32,
+}
+
+impl SmoothNoise {
+    fn new(seed: u32) -> Self {
+        let mut rng = Rng::new(seed);
+        let points = [
+            rng.next_bipolar(),
+            rng.next_bipolar(),
+            rng.next_bipolar(),
+            rng.next_bipolar(),
+        ];
+        SmoothNoise {
+            rng,
+            points,
+            pos: 0.0,
+        }
+    }
+
+    /// Returns the current value, then advances by `points_per_sample`.
+    #[inline]
+    fn tick(&mut self, points_per_sample: f32) -> f32 {
+        let [p0, p1, p2, p3] = self.points;
+        let t = self.pos;
+        let value = 0.5
+            * (2.0 * p1
+                + (p2 - p0) * t
+                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                + (3.0 * (p1 - p2) + p3 - p0) * t * t * t);
+        self.pos += points_per_sample;
+        while self.pos >= 1.0 {
+            self.pos -= 1.0;
+            self.points = [
+                self.points[1],
+                self.points[2],
+                self.points[3],
+                self.rng.next_bipolar(),
+            ];
+        }
+        value
+    }
+}
+
+/// A sine whose rate and amplitude wander by smooth noise that draws a new
+/// point every four cycles.
+struct DriftSine {
+    phase: f32,
+    rate_noise: SmoothNoise,
+    amp_noise: SmoothNoise,
+}
+
+impl DriftSine {
+    fn new(rate_seed: u32, amp_seed: u32) -> Self {
+        DriftSine {
+            phase: 0.0,
+            rate_noise: SmoothNoise::new(rate_seed),
+            amp_noise: SmoothNoise::new(amp_seed),
+        }
+    }
+
+    /// Returns `(1 + amp_drift * n) * sin(2π * phase)`, then advances the
+    /// phase by one sample at `rate_hz * (1 + rate_drift * m)`, where `n` and
+    /// `m` are the amplitude and rate noise.
+    #[inline]
+    fn tick(&mut self, rate_hz: f32, rate_drift: f32, amp_drift: f32, inv_sr: f32) -> f32 {
+        let noise_rate = 0.25 * rate_hz * inv_sr;
+        let rate_wander = self.rate_noise.tick(noise_rate);
+        let amp_wander = self.amp_noise.tick(noise_rate);
+        let value = (1.0 + amp_drift * amp_wander) * (self.phase * TAU).sin();
+        self.phase += rate_hz * (1.0 + rate_drift * rate_wander) * inv_sr;
+        self.phase -= self.phase.floor();
+        value
+    }
+}
+
+/// Narrowband noise centred on a rate: smooth noise, drawing a new point
+/// every two cycles, on a pair of quadrature carriers.
+struct BandNoise {
+    phase: f32,
+    in_phase: SmoothNoise,
+    quadrature: SmoothNoise,
+}
+
+impl BandNoise {
+    fn new(in_phase_seed: u32, quadrature_seed: u32) -> Self {
+        BandNoise {
+            phase: 0.0,
+            in_phase: SmoothNoise::new(in_phase_seed),
+            quadrature: SmoothNoise::new(quadrature_seed),
+        }
+    }
+
+    /// Returns the current value, then advances one sample at `rate_hz`.
+    #[inline]
+    fn tick(&mut self, rate_hz: f32, inv_sr: f32) -> f32 {
+        let noise_rate = 0.5 * rate_hz * inv_sr;
+        let in_phase = self.in_phase.tick(noise_rate);
+        let quadrature = self.quadrature.tick(noise_rate);
+        let angle = self.phase * TAU;
+        let value = in_phase * angle.cos() + quadrature * angle.sin();
+        self.phase += rate_hz * inv_sr;
+        self.phase -= self.phase.floor();
+        value
+    }
+}
+
+/// One wow or flutter band: a drifting sine at the band's rate, a second
+/// drifting sine at a seeded multiple of that rate, and narrowband noise
+/// centred on the rate.
+struct Band {
+    primary: DriftSine,
+    secondary: DriftSine,
+    noise: BandNoise,
+    ratio: f32,
+    secondary_weight: f32,
+}
+
+impl Band {
+    /// Builds a band from the seven RNG streams of `seed` starting at
+    /// `first_stream`. The secondary sine runs at the band rate times a ratio
+    /// drawn from `ratio_range`, weighted by `secondary_weight` relative to
+    /// the primary at `irregularity = 1.0`.
+    fn new(seed: u32, first_stream: u32, ratio_range: (f32, f32), secondary_weight: f32) -> Self {
+        let stream = |k: u32| stream_seed(seed, first_stream + k);
+        let unit = 0.5 * (Rng::new(stream(0)).next_bipolar() + 1.0);
+        Band {
+            primary: DriftSine::new(stream(1), stream(2)),
+            secondary: DriftSine::new(stream(3), stream(4)),
+            noise: BandNoise::new(stream(5), stream(6)),
+            ratio: ratio_range.0 + (ratio_range.1 - ratio_range.0) * unit,
+            secondary_weight,
+        }
+    }
+
+    /// Advances one sample and returns `(offset, bound)` in seconds: the
+    /// band's delay offset, and the largest magnitude that offset can reach
+    /// at these settings. `depth_percent` is peak speed deviation.
+    #[inline]
+    fn tick(
+        &mut self,
+        rate_hz: f32,
+        depth_percent: f32,
+        irregularity: f32,
+        inv_sr: f32,
+    ) -> (f32, f32) {
+        let rate_drift = WOW_FLUTTER_RATE_DRIFT * irregularity;
+        let amp_drift = WOW_FLUTTER_AMP_DRIFT * irregularity;
+        let secondary_weight = self.secondary_weight * irregularity;
+        let noise_weight = WOW_FLUTTER_NOISE_WEIGHT * irregularity;
+
+        // sqrt(2) times the band's RMS speed deviation equals the depth.
+        let amp_power = 1.0 + amp_drift * amp_drift * SMOOTH_NOISE_VARIANCE;
+        let peak_equivalent = ((1.0 + secondary_weight * secondary_weight) * amp_power
+            + 2.0 * noise_weight * noise_weight * SMOOTH_NOISE_VARIANCE)
+            .sqrt();
+        let speed = 0.01 * depth_percent / peak_equivalent;
+
+        // A delay swing of amplitude D at rate f moves playback speed by
+        // 2π * f * D at its peak.
+        let radians_per_sec = TAU * rate_hz;
+        let primary_depth = speed / radians_per_sec;
+        let secondary_depth = speed * secondary_weight / (radians_per_sec * self.ratio);
+        let noise_depth = speed * noise_weight / radians_per_sec;
+
+        let secondary_rate = rate_hz * self.ratio;
+        let offset = primary_depth * self.primary.tick(rate_hz, rate_drift, amp_drift, inv_sr)
+            + secondary_depth
+                * self
+                    .secondary
+                    .tick(secondary_rate, rate_drift, amp_drift, inv_sr)
+            + noise_depth * self.noise.tick(rate_hz, inv_sr);
+        let bound = (primary_depth + secondary_depth) * (1.0 + amp_drift * SMOOTH_NOISE_BOUND)
+            + noise_depth * SMOOTH_NOISE_BOUND * SQRT_2;
+        (offset, bound)
+    }
+}
+
+/// Scrape flutter: smooth noise at [`SCRAPE_POINT_RATE`] points per second,
+/// high-passed at [`SCRAPE_HIGHPASS_HZ`], a band of roughly 100 Hz to 1 kHz.
+struct Scrape {
+    noise: SmoothNoise,
+    lowpassed: f32,
+}
+
+impl Scrape {
+    fn new(seed: u32) -> Self {
+        Scrape {
+            noise: SmoothNoise::new(seed),
+            lowpassed: 0.0,
+        }
+    }
+
+    /// Returns the current value, then advances one sample. `lowpass_coeff`
+    /// is the one-pole coefficient for [`SCRAPE_HIGHPASS_HZ`] at the sample
+    /// rate.
+    #[inline]
+    fn tick(&mut self, inv_sr: f32, lowpass_coeff: f32) -> f32 {
+        let noise = self.noise.tick(SCRAPE_POINT_RATE * inv_sr);
+        self.lowpassed += lowpass_coeff * (noise - self.lowpassed);
+        noise - self.lowpassed
+    }
+}
+
+/// Tape and turntable speed variation: slow wow, fast flutter and scrape
+/// roughness, applied as pitch wobble through a modulated delay line, plus
+/// weave, a slow timing drift between channels.
+///
+/// Wow and flutter each sum a drifting sine at their rate, a second drifting
+/// sine at a seeded non-integer multiple of that rate, and narrowband noise
+/// centred on the rate. `irregularity` sets the weight of the second sine and
+/// the noise, and how far the sines' rates and amplitudes wander; at `0.0`
+/// each is one steady sine. Scrape is noise in a band of roughly 100 Hz to
+/// 1 kHz. Wow and flutter depths are peak speed deviation in percent, and
+/// scrape depth is sqrt(2) times its RMS speed deviation in percent; all hold
+/// at any rate, and 0.1% is about 1.7 cents. The defaults approximate a
+/// worn cassette, with weave off.
+///
+/// Wow, flutter and scrape are identical on every channel. Weave shifts the
+/// first channel's timing by half its current value and every other
+/// channel's by the opposite half, so the timing difference between them
+/// wanders slowly within `weave`; it has no effect on a single channel. Each
+/// channel keeps its own delay memory; a third or later channel shares the
+/// second channel's.
+///
+/// The delay is centred at 10 ms, so the output, including the dry signal
+/// blended in by `mix`, is delayed by 10 ms. When the settings would move the
+/// read position further than the centre allows, every component is scaled
+/// down together. For a steady wow alone the ceiling is about
+/// `2π * wowRate * 9.9 ms` of speed deviation: about 0.6% at 0.1 Hz and 3.7%
+/// at 0.6 Hz. Irregularity lowers it, because the scaling allows for the
+/// largest drift and noise; at the default settings it is about 0.33% at
+/// 0.1 Hz and 2% at 0.6 Hz.
 ///
 /// Inputs:
 /// - `in`: audio signal
-/// - `wowRate`: slow speed-drift rate in Hz (default 0.7). Typical turntable
-///   wow is well under 2 Hz.
-/// - `wowDepth`: wow modulation depth in seconds (default 0.0020)
-/// - `flutterRate`: fast speed-flutter rate in Hz (default 8.0). Typical
-///   tape flutter sits in the 6-14 Hz range.
-/// - `flutterDepth`: flutter modulation depth in seconds (default 0.0006)
-/// - `mix`: dry/wet blend (default 1.0, fully wet — the wobble is meant to
-///   apply to the whole signal, not sit underneath a dry copy)
+/// - `wowRate`: wow rate in Hz (default 0.6)
+/// - `wowDepth`: wow depth, peak speed deviation in percent (default 0.6)
+/// - `flutterRate`: flutter rate in Hz (default 9.0)
+/// - `flutterDepth`: flutter depth, peak speed deviation in percent
+///   (default 0.25)
+/// - `mix`: dry/wet blend (default 1.0)
+/// - `irregularity`: how irregular wow and flutter are, 0.0-1.0 (default 0.6)
+/// - `scrape`: scrape depth, sqrt(2) times RMS speed deviation in percent
+///   (default 2.5)
+/// - `weave`: largest timing difference between channels, in seconds
+///   (default 0.0)
+/// - `seed`: seed for the random components (default 0x57A9_F1E7 if left
+///   unconnected). Read from its first sample on the first `process` call
+///   after construction or `reset`, and held. Equal seeds give identical
+///   output.
 pub struct WowFlutter {
-    line: DelayLine,
-    wow_phase: f32,
-    flutter_phase: f32,
+    lines: [DelayLine; 2],
+    center_samples: usize,
+    wow: Band,
+    flutter: Band,
+    scrape: Scrape,
+    weave: SmoothNoise,
+    scrape_lowpass_coeff: f32,
+    seeded: bool,
     sample_rate: f32,
 }
 
@@ -430,41 +709,63 @@ impl Default for WowFlutter {
 impl WowFlutter {
     pub fn new() -> Self {
         WowFlutter {
-            line: DelayLine::new(),
-            wow_phase: 0.0,
-            flutter_phase: 0.0,
+            lines: [DelayLine::new(), DelayLine::new()],
+            center_samples: 0,
+            wow: Self::wow_band(WOW_FLUTTER_DEFAULT_SEED),
+            flutter: Self::flutter_band(WOW_FLUTTER_DEFAULT_SEED),
+            scrape: Scrape::new(stream_seed(WOW_FLUTTER_DEFAULT_SEED, 14)),
+            weave: SmoothNoise::new(stream_seed(WOW_FLUTTER_DEFAULT_SEED, 15)),
+            scrape_lowpass_coeff: 0.0,
+            seeded: false,
             sample_rate: 44100.0,
         }
     }
-}
 
-/// Center delay, large enough that `wowDepth + flutterDepth` at their
-/// clamped maxima can't push the modulated delay negative.
-const WOW_FLUTTER_CENTER_DELAY: f32 = 0.010;
-/// Maximum delay buffer in seconds (center + max depths + margin).
-const WOW_FLUTTER_MAX_DELAY: f32 = 0.030;
+    fn wow_band(seed: u32) -> Band {
+        Band::new(seed, 0, (1.3, 1.7), 0.4)
+    }
+
+    fn flutter_band(seed: u32) -> Band {
+        Band::new(seed, 7, (1.6, 2.4), 0.5)
+    }
+}
 
 impl UGen for WowFlutter {
     ugen_spec!(
         "WowFlutter",
         category = Effect,
         inputs = ["in"],
-        optional_inputs = ["wowRate", "wowDepth", "flutterRate", "flutterDepth", "mix"],
+        optional_inputs = [
+            "wowRate",
+            "wowDepth",
+            "flutterRate",
+            "flutterDepth",
+            "mix",
+            "irregularity",
+            "scrape",
+            "weave",
+            "seed"
+        ],
         outputs = ["out"]
     );
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
-        let max_samples = (WOW_FLUTTER_MAX_DELAY * context.sample_rate) as usize + 2;
-        self.line.resize(max_samples);
-        self.wow_phase = 0.0;
-        self.flutter_phase = 0.0;
+        self.center_samples = ((WOW_FLUTTER_CENTER_DELAY * context.sample_rate).round() as usize)
+            .max(WOW_FLUTTER_READ_MARGIN as usize + 1);
+        for line in &mut self.lines {
+            line.resize(2 * self.center_samples + 4);
+        }
+        self.scrape_lowpass_coeff = 1.0 - (-TAU * SCRAPE_HIGHPASS_HZ / context.sample_rate).exp();
     }
 
     fn reset(&mut self) {
-        self.line.clear();
-        self.wow_phase = 0.0;
-        self.flutter_phase = 0.0;
+        for line in &mut self.lines {
+            line.clear();
+        }
+        // Rebuild the random components from `seed` on the next `process`
+        // call, where the input is readable.
+        self.seeded = false;
     }
 
     fn process(
@@ -479,61 +780,85 @@ impl UGen for WowFlutter {
         let flutter_rate_buf = inputs.get(3).copied().flatten();
         let flutter_depth_buf = inputs.get(4).copied().flatten();
         let mix_buf = inputs.get(5).copied().flatten();
-        if self.line.is_empty() {
+        let irregularity_buf = inputs.get(6).copied().flatten();
+        let scrape_buf = inputs.get(7).copied().flatten();
+        let weave_buf = inputs.get(8).copied().flatten();
+        let seed_buf = inputs.get(9).copied().flatten();
+        if self.lines[0].is_empty() {
             return;
         }
-        let max_delay_samples = (self.line.len() - 2) as f32;
+
+        if !self.seeded {
+            let seed = read_input(seed_buf, 0, 0, WOW_FLUTTER_DEFAULT_SEED as f32) as u32;
+            self.wow = Self::wow_band(seed);
+            self.flutter = Self::flutter_band(seed);
+            self.scrape = Scrape::new(stream_seed(seed, 14));
+            self.weave = SmoothNoise::new(stream_seed(seed, 15));
+            self.seeded = true;
+        }
+
+        let block_size = output.block_size();
         let inv_sr = 1.0 / self.sample_rate;
+        let center_samples = self.center_samples;
+        let center = center_samples as f32;
+        let max_offset_secs = (center - WOW_FLUTTER_READ_MARGIN) * inv_sr;
 
-        // Every channel replays the shared delay line from the same cursor.
-        let start_pos = self.line.write_pos();
-        // Snapshot the LFO phases once, before the channel loop: every
-        // channel must start from the same block-start state, not from
-        // whatever a prior channel's iteration already wrote back (see
-        // filters::OnePole's process() comment for the
-        // read-back-inside-loop bug this avoids). The shared-delay-line
-        // replay-per-channel convention itself (`set_write_pos` below) is
-        // unrelated and intentional — see `Limiter`'s doc comment.
-        let wow_phase_start = self.wow_phase;
-        let flutter_phase_start = self.flutter_phase;
+        // The modulation is computed once per sample, before any channel is
+        // processed. `offsets` is shared by every channel; `weave_offsets` is
+        // added to the first channel and subtracted from the others.
+        let mut offsets = [0.0f32; MAX_BLOCK_SIZE];
+        let mut weave_offsets = [0.0f32; MAX_BLOCK_SIZE];
+        for i in 0..block_size {
+            let irregularity = read_input(irregularity_buf, 0, i, 0.6).clamp(0.0, 1.0);
+            let (wow, wow_bound) = self.wow.tick(
+                read_input(wow_rate_buf, 0, i, 0.6).max(0.01),
+                read_input(wow_depth_buf, 0, i, 0.6).clamp(0.0, 10.0),
+                irregularity,
+                inv_sr,
+            );
+            let (flutter, flutter_bound) = self.flutter.tick(
+                read_input(flutter_rate_buf, 0, i, 9.0).max(0.01),
+                read_input(flutter_depth_buf, 0, i, 0.25).clamp(0.0, 10.0),
+                irregularity,
+                inv_sr,
+            );
+            let scrape_depth = 0.01 * read_input(scrape_buf, 0, i, 2.5).clamp(0.0, 5.0)
+                / (SQRT_2 * SCRAPE_SLOPE_RMS);
+            let scrape = scrape_depth * self.scrape.tick(inv_sr, self.scrape_lowpass_coeff);
+            let weave_peak = read_input(weave_buf, 0, i, 0.0).clamp(0.0, 0.001);
+            let weave =
+                0.5 * weave_peak * self.weave.tick(WEAVE_POINT_RATE * inv_sr) / SMOOTH_NOISE_BOUND;
 
-        for ch in 0..output.num_channels() {
-            self.line.set_write_pos(start_pos);
-            let mut wow_phase = wow_phase_start;
-            let mut flutter_phase = flutter_phase_start;
+            let bound = wow_bound + flutter_bound + scrape_depth * SCRAPE_BOUND + 0.5 * weave_peak;
+            let scale = if bound > max_offset_secs {
+                max_offset_secs / bound
+            } else {
+                1.0
+            };
+            offsets[i] = (wow + flutter + scrape) * scale * self.sample_rate;
+            weave_offsets[i] = weave * scale * self.sample_rate;
+        }
+
+        let max_delay = (self.lines[0].len() - 3) as f32;
+        let num_channels = output.num_channels();
+        for ch in 0..num_channels {
+            let weave_sign = match (num_channels, ch) {
+                (1, _) => 0.0,
+                (_, 0) => 1.0,
+                _ => -1.0,
+            };
+            let line = &mut self.lines[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
-            for i in 0..out.len() {
-                let x = in_ch[i];
-                let wow_rate = read_input(wow_rate_buf, ch, i, 0.7).max(0.01);
-                let wow_depth = read_input(wow_depth_buf, ch, i, 0.0020).clamp(0.0, 0.010);
-                let flutter_rate = read_input(flutter_rate_buf, ch, i, 8.0).max(0.01);
-                let flutter_depth = read_input(flutter_depth_buf, ch, i, 0.0006).clamp(0.0, 0.005);
+            for i in 0..block_size {
                 let mix = read_input(mix_buf, ch, i, 1.0).clamp(0.0, 1.0);
-
-                // Write first: a delay of zero reads back this very sample.
-                self.line.write(x);
-
-                let wow = (wow_phase * TAU).sin();
-                let flutter = (flutter_phase * TAU).sin();
-                let delay_secs =
-                    WOW_FLUTTER_CENTER_DELAY + wow_depth * wow + flutter_depth * flutter;
-                let delay_samples = (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
-
-                let wet = self.line.read_interp(delay_samples);
-                out[i] = (1.0 - mix) * x + mix * wet;
-
-                wow_phase += wow_rate * inv_sr;
-                wow_phase -= wow_phase.floor();
-                flutter_phase += flutter_rate * inv_sr;
-                flutter_phase -= flutter_phase.floor();
-                self.line.advance();
-            }
-
-            if ch == 0 {
-                self.wow_phase = wow_phase;
-                self.flutter_phase = flutter_phase;
+                line.write(in_ch[i]);
+                let delay = center + offsets[i] + weave_sign * weave_offsets[i];
+                let wet = line.read_hermite(delay.clamp(1.0, max_delay));
+                let dry = line.read(center_samples);
+                out[i] = (1.0 - mix) * dry + mix * wet;
+                line.advance();
             }
         }
     }

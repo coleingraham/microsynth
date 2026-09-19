@@ -3002,7 +3002,7 @@ fn test_wow_flutter_depth_changes_output() {
     }
 
     let flat = render(0.0);
-    let wobbled = render(0.008);
+    let wobbled = render(0.5);
 
     assert!(
         flat.iter().any(|x| x.abs() > 0.01),
@@ -3033,7 +3033,7 @@ fn test_dsl_wow_flutter_compiles() {
     let source = r#"
         synthdef wobbly freq=220.0 =
             let sig = sinOsc freq 0.0
-            wowFlutter sig 0.7 0.002 8.0 0.0006 1.0
+            wowFlutter sig 0.6 0.12 9.0 0.05 1.0
     "#;
     let defs = dsl::compile(source, &reg).unwrap();
     assert_eq!(defs[0].name(), "wobbly");
