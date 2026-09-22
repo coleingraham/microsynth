@@ -20,7 +20,7 @@ use core::f32::consts::TAU;
 ///
 /// y[n] = (1 - |coeff|) * x[n] + coeff * y[n-1]
 pub struct OnePole {
-    y1: f32,
+    y1: [f32; 2],
 }
 
 impl Default for OnePole {
@@ -31,7 +31,7 @@ impl Default for OnePole {
 
 impl OnePole {
     pub fn new() -> Self {
-        OnePole { y1: 0.0 }
+        OnePole { y1: [0.0; 2] }
     }
 }
 
@@ -47,7 +47,7 @@ impl UGen for OnePole {
     fn init(&mut self, _context: &ProcessContext) {}
 
     fn reset(&mut self) {
-        self.y1 = 0.0;
+        self.y1 = [0.0; 2];
     }
 
     fn process(
@@ -59,15 +59,18 @@ impl UGen for OnePole {
         let in_buf = require_input(inputs, 0, self.spec().name, "in");
         let coeff_buf = inputs.get(1).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state, not from whatever a prior
-        // channel's iteration already wrote back (see MOT multichannel
-        // state-writeback fix — read-back-inside-loop made channel 1 start
-        // from channel 0's END-of-block state, a full block ahead).
-        let y1_start = self.y1;
-
+        // One state per channel. Filter memory shared across channels made
+        // channel 1 restart every block from channel 0's memory, which is a
+        // block-rate buzz on the right whenever the two inputs differ (any
+        // stage after a stereo one). Every stateful UGen follows this shape:
+        // read the channel's own block-start state, write it back to the
+        // channel's own slot. A third or later channel reads channel 1's
+        // block-start state and does not write back, as `Compressor` does.
+        // Sources with no per-channel input keep one state instead and
+        // snapshot it before the channel loop, so every channel derives
+        // the same block rather than continuing from the previous channel.
         for ch in 0..output.num_channels() {
-            let mut y1 = y1_start;
+            let mut y1 = self.y1[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -79,8 +82,8 @@ impl UGen for OnePole {
                 out[i] = y1;
             }
 
-            if ch == 0 {
-                self.y1 = y1;
+            if let Some(slot) = self.y1.get_mut(ch) {
+                *slot = y1;
             }
         }
     }
@@ -88,7 +91,7 @@ impl UGen for OnePole {
 
 // --- Biquad state ---
 
-/// Per-channel biquad filter state (transposed direct form II).
+/// Biquad filter state (transposed direct form II), one per channel.
 ///
 /// `pub(crate)`: reused as-is by `ugens::partials`'s shaped-noise band
 /// filters (MOT-636) rather than duplicating the recurrence a second time.
@@ -289,7 +292,7 @@ macro_rules! biquad_ugen {
     ) => {
         $(#[$meta])*
         pub struct $ty {
-            state: BiquadState,
+            state: [BiquadState; 2],
             sample_rate: f32,
         }
 
@@ -302,7 +305,7 @@ macro_rules! biquad_ugen {
         impl $ty {
             pub fn new() -> Self {
                 $ty {
-                    state: BiquadState::new(),
+                    state: [BiquadState::new(); 2],
                     sample_rate: 44100.0,
                 }
             }
@@ -322,7 +325,7 @@ macro_rules! biquad_ugen {
             }
 
             fn reset(&mut self) {
-                self.state = BiquadState::new();
+                self.state = [BiquadState::new(); 2];
             }
 
             fn process(
@@ -337,12 +340,9 @@ macro_rules! biquad_ugen {
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
-                // Snapshot once, before the channel loop: see OnePole's
-                // process() comment for why (read-back-inside-loop bug).
-                let state_start = self.state;
-
+                // One state per channel: see OnePole's process().
                 for ch in 0..output.num_channels() {
-                    let mut state = state_start;
+                    let mut state = self.state[ch.min(1)];
                     let in_ch = channel_wrapped(in_buf, ch);
                     let out = output.channel_mut(ch).samples_mut();
 
@@ -356,8 +356,8 @@ macro_rules! biquad_ugen {
                         out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
                     }
 
-                    if ch == 0 {
-                        self.state = state;
+                    if let Some(slot) = self.state.get_mut(ch) {
+                        *slot = state;
                     }
                 }
             }
@@ -423,7 +423,7 @@ macro_rules! biquad_gain_ugen {
     ) => {
         $(#[$meta])*
         pub struct $ty {
-            state: BiquadState,
+            state: [BiquadState; 2],
             sample_rate: f32,
         }
 
@@ -436,7 +436,7 @@ macro_rules! biquad_gain_ugen {
         impl $ty {
             pub fn new() -> Self {
                 $ty {
-                    state: BiquadState::new(),
+                    state: [BiquadState::new(); 2],
                     sample_rate: 44100.0,
                 }
             }
@@ -456,7 +456,7 @@ macro_rules! biquad_gain_ugen {
             }
 
             fn reset(&mut self) {
-                self.state = BiquadState::new();
+                self.state = [BiquadState::new(); 2];
             }
 
             fn process(
@@ -472,12 +472,9 @@ macro_rules! biquad_gain_ugen {
                 let sr = self.sample_rate;
                 let nyquist = sr * 0.5;
 
-                // Snapshot once, before the channel loop: see OnePole's
-                // process() comment for why (read-back-inside-loop bug).
-                let state_start = self.state;
-
+                // One state per channel: see OnePole's process().
                 for ch in 0..output.num_channels() {
-                    let mut state = state_start;
+                    let mut state = self.state[ch.min(1)];
                     let in_ch = channel_wrapped(in_buf, ch);
                     let out = output.channel_mut(ch).samples_mut();
 
@@ -491,8 +488,8 @@ macro_rules! biquad_gain_ugen {
                         out[i] = state.tick(in_ch[i], b0, b1, b2, a1, a2);
                     }
 
-                    if ch == 0 {
-                        self.state = state;
+                    if let Some(slot) = self.state.get_mut(ch) {
+                        *slot = state;
                     }
                 }
             }
@@ -541,9 +538,8 @@ biquad_gain_ugen! {
 /// - `highFreq`/`highGain`/`highQ`: high-shelf corner (Hz, default 5000),
 ///   gain (dB, default 0), and Q (default 0.707)
 pub struct ParametricEq3 {
-    low: BiquadState,
-    mid: BiquadState,
-    high: BiquadState,
+    /// Per channel: low shelf, peaking, high shelf.
+    bands: [[BiquadState; 3]; 2],
     sample_rate: f32,
 }
 
@@ -556,9 +552,7 @@ impl Default for ParametricEq3 {
 impl ParametricEq3 {
     pub fn new() -> Self {
         ParametricEq3 {
-            low: BiquadState::new(),
-            mid: BiquadState::new(),
-            high: BiquadState::new(),
+            bands: [[BiquadState::new(); 3]; 2],
             sample_rate: 44100.0,
         }
     }
@@ -581,9 +575,7 @@ impl UGen for ParametricEq3 {
     }
 
     fn reset(&mut self) {
-        self.low = BiquadState::new();
-        self.mid = BiquadState::new();
-        self.high = BiquadState::new();
+        self.bands = [[BiquadState::new(); 3]; 2];
     }
 
     fn process(
@@ -605,16 +597,9 @@ impl UGen for ParametricEq3 {
         let sr = self.sample_rate;
         let nyquist = sr * 0.5;
 
-        // Snapshot once, before the channel loop: see OnePole's process()
-        // comment for why (read-back-inside-loop bug).
-        let low_start = self.low;
-        let mid_start = self.mid;
-        let high_start = self.high;
-
+        // One state per channel: see OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut low = low_start;
-            let mut mid = mid_start;
-            let mut high = high_start;
+            let [mut low, mut mid, mut high] = self.bands[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -640,10 +625,8 @@ impl UGen for ParametricEq3 {
                 out[i] = high.tick(x2, b0, b1, b2, a1, a2);
             }
 
-            if ch == 0 {
-                self.low = low;
-                self.mid = mid;
-                self.high = high;
+            if let Some(slot) = self.bands.get_mut(ch) {
+                *slot = [low, mid, high];
             }
         }
     }
@@ -661,7 +644,7 @@ const MAX_COMB_DELAY_SECS: f32 = 1.0;
 /// Inputs: in (signal), delay (delay time in seconds), feedback (0.0 to ~0.99).
 /// Useful for Karplus-Strong synthesis, flanging, and as a building block for reverbs.
 pub struct CombFilter {
-    line: DelayLine,
+    lines: [DelayLine; 2],
     sample_rate: f32,
 }
 
@@ -674,7 +657,7 @@ impl Default for CombFilter {
 impl CombFilter {
     pub fn new() -> Self {
         CombFilter {
-            line: DelayLine::new(),
+            lines: [DelayLine::new(), DelayLine::new()],
             sample_rate: 44100.0,
         }
     }
@@ -692,11 +675,15 @@ impl UGen for CombFilter {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (MAX_COMB_DELAY_SECS * context.sample_rate) as usize + 1;
-        self.line.resize(max_samples);
+        for line in &mut self.lines {
+            line.resize(max_samples);
+        }
     }
 
     fn reset(&mut self) {
-        self.line.clear();
+        for line in &mut self.lines {
+            line.clear();
+        }
     }
 
     fn process(
@@ -708,16 +695,15 @@ impl UGen for CombFilter {
         let in_buf = require_input(inputs, 0, self.spec().name, "in");
         let delay_buf = inputs.get(1).copied().flatten();
         let fb_buf = inputs.get(2).copied().flatten();
-        if self.line.is_empty() {
+        if self.lines[0].is_empty() {
             return;
         }
-        let max_delay = (self.line.len() - 1) as f32;
+        let max_delay = (self.lines[0].len() - 1) as f32;
+        let sample_rate = self.sample_rate;
 
-        // Every channel replays the shared delay line from the same cursor.
-        let start_pos = self.line.write_pos();
-
+        // One delay line per channel: see OnePole's process().
         for ch in 0..output.num_channels() {
-            self.line.set_write_pos(start_pos);
+            let line = &mut self.lines[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -725,13 +711,13 @@ impl UGen for CombFilter {
                 let delay_time = read_input(delay_buf, ch, i, 0.01).max(0.0);
                 let feedback = read_input(fb_buf, ch, i, 0.5).clamp(-0.999, 0.999);
 
-                let delay_samples = (delay_time * self.sample_rate).min(max_delay).max(1.0);
+                let delay_samples = (delay_time * sample_rate).min(max_delay).max(1.0);
 
                 // IIR comb: output = input + feedback * delayed_output
-                let delayed = self.line.read_interp(delay_samples);
+                let delayed = line.read_interp(delay_samples);
                 let y = in_ch[i] + feedback * delayed;
 
-                self.line.write_and_advance(y);
+                line.write_and_advance(y);
                 out[i] = y;
             }
         }
@@ -1253,21 +1239,15 @@ const LIMITER_SAFETY_MARGIN_DB: f32 = 2.0;
 /// - `ceiling`: true-peak ceiling in dBTP (default -1.0)
 /// - `release`: gain recovery time in seconds after a peak passes (default 0.05)
 pub struct Limiter {
-    /// **Independent per-channel look-ahead buffers** — deliberately NOT the
-    /// single-shared-`DelayLine`-replayed-per-channel convention used by
-    /// `Flanger`/`CombFilter`/`FeedbackDelay` elsewhere in this file. That
-    /// convention is documented (`delayline.rs`) as an accepted compromise
-    /// for effects like chorus where a little cross-channel bleed is
-    /// inaudible. A limiter's ceiling is a hard numeric guarantee, not a
-    /// vibe: sharing one buffer across channels means channel 1's look-ahead
-    /// window reads back channel 0's *stale* samples for most of every
-    /// block (the block size is smaller than the look-ahead, so channel 1
-    /// never catches up to overwriting what channel 0 just wrote), silently
-    /// swapping in a completely different signal's peak estimate. This was
-    /// exactly the real defect a hot **stereo** test signal exposed that no
-    /// mono synthetic signal could have (see `tests/ugens.rs`'s stereo
-    /// cross-channel test and its own real-material-derived measurement
-    /// note) — every channel needs to see only its own history.
+    /// Independent per-channel look-ahead buffers. A limiter's ceiling is
+    /// a hard numeric guarantee: one buffer shared across channels would
+    /// let channel 1's look-ahead window read back channel 0's stale
+    /// samples for most of every block (the block is shorter than the
+    /// look-ahead), silently swapping in a different signal's peak
+    /// estimate. A hot stereo test signal exposed exactly that (see
+    /// `tests/ugens.rs`'s stereo cross-channel test); every channel must
+    /// see only its own history. Every effect that processes its channels
+    /// separately keeps one line per channel the same way.
     delays: [DelayLine; 2],
     lookahead_samples: usize,
     /// Per-channel gain state (capped at 2 channels, same as `delays` and

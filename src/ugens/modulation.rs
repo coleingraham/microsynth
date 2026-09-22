@@ -156,7 +156,7 @@ impl UGen for Chorus {
 /// - `feedback`: feedback amount (default 0.5, range -0.95 to 0.95)
 /// - `mix`: dry/wet blend (default 0.5)
 pub struct Flanger {
-    line: DelayLine,
+    lines: [DelayLine; 2],
     lfo_phase: f32,
     sample_rate: f32,
 }
@@ -170,7 +170,7 @@ impl Default for Flanger {
 impl Flanger {
     pub fn new() -> Self {
         Flanger {
-            line: DelayLine::new(),
+            lines: [DelayLine::new(), DelayLine::new()],
             lfo_phase: 0.0,
             sample_rate: 44100.0,
         }
@@ -191,12 +191,16 @@ impl UGen for Flanger {
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate;
         let max_samples = (FLANGER_MAX_DELAY * context.sample_rate) as usize + 2;
-        self.line.resize(max_samples);
+        for line in &mut self.lines {
+            line.resize(max_samples);
+        }
         self.lfo_phase = 0.0;
     }
 
     fn reset(&mut self) {
-        self.line.clear();
+        for line in &mut self.lines {
+            line.clear();
+        }
         self.lfo_phase = 0.0;
     }
 
@@ -211,25 +215,20 @@ impl UGen for Flanger {
         let depth_buf = inputs.get(2).copied().flatten();
         let fb_buf = inputs.get(3).copied().flatten();
         let mix_buf = inputs.get(4).copied().flatten();
-        if self.line.is_empty() {
+        if self.lines[0].is_empty() {
             return;
         }
-        let max_delay_samples = (self.line.len() - 2) as f32;
-        let inv_sr = 1.0 / self.sample_rate;
+        let max_delay_samples = (self.lines[0].len() - 2) as f32;
+        let sample_rate = self.sample_rate;
+        let inv_sr = 1.0 / sample_rate;
 
-        // Every channel replays the shared delay line from the same cursor.
-        let start_pos = self.line.write_pos();
-        // Snapshot the LFO phase once, before the channel loop: every
-        // channel must start from the same block-start phase, not from
-        // whatever a prior channel's iteration already wrote back (see
-        // filters::OnePole's process() comment for the
-        // read-back-inside-loop bug this avoids). The shared-delay-line
-        // replay-per-channel convention itself (`set_write_pos` below) is
-        // unrelated and intentional — see `Limiter`'s doc comment.
+        // One delay line per channel (see filters::OnePole's process()), one
+        // LFO for the effect: every channel starts from the same block-start
+        // phase and channel 0's end phase is kept.
         let lfo_phase_start = self.lfo_phase;
 
         for ch in 0..output.num_channels() {
-            self.line.set_write_pos(start_pos);
+            let line = &mut self.lines[ch.min(1)];
             let mut lfo_phase = lfo_phase_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
@@ -244,12 +243,12 @@ impl UGen for Flanger {
                 // LFO-modulated delay time (unipolar: 0 to depth)
                 let lfo = (lfo_phase * TAU).sin() * 0.5 + 0.5;
                 let delay_secs = 0.0005 + depth * lfo; // min 0.5ms
-                let delay_samples = (delay_secs * self.sample_rate).clamp(1.0, max_delay_samples);
+                let delay_samples = (delay_secs * sample_rate).clamp(1.0, max_delay_samples);
 
-                let delayed = self.line.read_interp(delay_samples);
+                let delayed = line.read_interp(delay_samples);
 
                 // Write input + feedback into buffer
-                self.line.write_and_advance(x + feedback * delayed);
+                line.write_and_advance(x + feedback * delayed);
 
                 out[i] = (1.0 - mix) * x + mix * delayed;
 
@@ -279,11 +278,11 @@ impl UGen for Flanger {
 /// - `feedback`: output-to-input feedback (default 0.3, range -0.95 to 0.95)
 /// - `mix`: dry/wet blend (default 0.5)
 pub struct Phaser {
-    /// Allpass filter state for 4 stages (per-channel, but single-channel for simplicity).
-    ap_state: [f32; 4],
+    /// Allpass filter state for 4 stages, per channel.
+    ap_state: [[f32; 4]; 2],
     lfo_phase: f32,
     sample_rate: f32,
-    feedback_sample: f32,
+    feedback_sample: [f32; 2],
 }
 
 impl Default for Phaser {
@@ -295,10 +294,10 @@ impl Default for Phaser {
 impl Phaser {
     pub fn new() -> Self {
         Phaser {
-            ap_state: [0.0; 4],
+            ap_state: [[0.0; 4]; 2],
             lfo_phase: 0.0,
             sample_rate: 44100.0,
-            feedback_sample: 0.0,
+            feedback_sample: [0.0; 2],
         }
     }
 }
@@ -317,9 +316,9 @@ impl UGen for Phaser {
     }
 
     fn reset(&mut self) {
-        self.ap_state = [0.0; 4];
+        self.ap_state = [[0.0; 4]; 2];
         self.lfo_phase = 0.0;
-        self.feedback_sample = 0.0;
+        self.feedback_sample = [0.0; 2];
     }
 
     fn process(
@@ -335,17 +334,14 @@ impl UGen for Phaser {
         let mix_buf = inputs.get(4).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let ap_state_start = self.ap_state;
+        // One filter state per channel (see filters::OnePole's process()),
+        // one LFO for the effect, as in Flanger.
         let lfo_phase_start = self.lfo_phase;
-        let fb_sample_start = self.feedback_sample;
 
         for ch in 0..output.num_channels() {
-            let mut ap_state = ap_state_start;
+            let mut ap_state = self.ap_state[ch.min(1)];
             let mut lfo_phase = lfo_phase_start;
-            let mut fb_sample = fb_sample_start;
+            let mut fb_sample = self.feedback_sample[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -386,9 +382,13 @@ impl UGen for Phaser {
             }
 
             if ch == 0 {
-                self.ap_state = ap_state;
                 self.lfo_phase = lfo_phase;
-                self.feedback_sample = fb_sample;
+            }
+            if let Some(slot) = self.ap_state.get_mut(ch) {
+                *slot = ap_state;
+            }
+            if let Some(slot) = self.feedback_sample.get_mut(ch) {
+                *slot = fb_sample;
             }
         }
     }
