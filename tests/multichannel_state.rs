@@ -130,7 +130,11 @@ fn driver_sample(global_i: usize) -> f32 {
     let t = global_i as f32 / SAMPLE_RATE;
     let decay = (-1.5 * t).exp();
     let sine = decay * (2.0 * core::f32::consts::PI * 47.0 * t).sin();
-    let click = if global_i.is_multiple_of(500) { 0.8 } else { 0.0 };
+    let click = if global_i.is_multiple_of(500) {
+        0.8
+    } else {
+        0.0
+    };
     sine + click
 }
 
@@ -149,7 +153,11 @@ fn make_driver_block(block_idx: usize) -> AudioBuffer {
 /// Drive one UGen kind for `NUM_BLOCKS` blocks and assert channel 1 matches
 /// channel 0 throughout. Returns the first few mismatches found (empty on
 /// success) so the caller can build one readable failure message per kind.
-fn find_channel_divergences(name: &str, factory: fn() -> Box<dyn UGen>, input_required: &[bool]) -> Vec<String> {
+fn find_channel_divergences(
+    name: &str,
+    factory: fn() -> Box<dyn UGen>,
+    input_required: &[bool],
+) -> Vec<String> {
     let mut ugen = factory();
     let ctx = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
     ugen.init(&ctx);
@@ -287,7 +295,12 @@ fn playbuf_produces_identical_channels_from_identical_input_with_a_mono_sample()
         divergences.is_empty(),
         "PlayBuf: {} divergent sample(s), first ones:\n{}",
         divergences.len(),
-        divergences.iter().take(5).cloned().collect::<Vec<_>>().join("\n")
+        divergences
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
@@ -301,3 +314,237 @@ fn playbuf_produces_identical_channels_from_identical_input_with_a_mono_sample()
 /// a table you may skip").
 #[test]
 fn partials_noise_is_intentionally_skipped_table_bound() {}
+
+// --- Channel independence: differing input channels ---
+//
+// The identity test above feeds both channels the same signal, which hides a
+// second defect: one state shared across channels. A filter whose memory is
+// shared makes channel 1 restart every block from channel 0's memory, and a
+// delay line replayed per channel lets channel 1's writes leak into channel
+// 0's reads. Both are silent while the channels are identical and audible
+// the moment anything upstream makes them differ. This test drives the two
+// channels with different signals and asserts that each output channel
+// depends only on its own input channel.
+
+/// Blocks per render. A `delay` at its default 0.1 s and a `feedbackDelay`
+/// at its default 0.25 s first read back what they wrote at blocks 34 and
+/// 86, so shorter renders would pass them without exercising the line.
+const INDEPENDENCE_BLOCKS: usize = 96;
+
+/// Three distinct drivers, each continuous across block boundaries. `0` is
+/// the identity test's driver; `1` and `2` differ from it and from each
+/// other in frequency, click period, and shape.
+fn independence_driver(kind: u8, global_i: usize) -> f32 {
+    let t = global_i as f32 / SAMPLE_RATE;
+    let tau = core::f32::consts::TAU;
+    match kind {
+        0 => driver_sample(global_i),
+        1 => {
+            0.6 * (tau * 311.0 * t).sin()
+                + if global_i.is_multiple_of(733) {
+                    -0.7
+                } else {
+                    0.0
+                }
+        }
+        _ => {
+            let ramp = ((global_i % 257) as f32 / 257.0) * 2.0 - 1.0;
+            0.5 * ramp + 0.3 * (tau * 1733.0 * t).sin()
+        }
+    }
+}
+
+/// Settings that make otherwise-neutral kinds do something: a shelf or
+/// peaking EQ at 0 dB, a bitcrusher that does not downsample, or a delay
+/// longer than the render all pass audio through untouched and would hide
+/// the defect. Matched by port name; `None` leaves the port unconnected.
+fn non_neutral_value(port: &str) -> Option<f32> {
+    let p = port.to_ascii_lowercase();
+    if p.contains("gain") {
+        Some(6.0)
+    } else if p == "bits" {
+        Some(8.0)
+    } else if p == "downsample" {
+        Some(4.0)
+    } else if p == "time" {
+        Some(0.01)
+    } else if p == "feedback" {
+        Some(0.5)
+    } else {
+        None
+    }
+}
+
+/// Render one kind for `INDEPENDENCE_BLOCKS` blocks with driver `left` on
+/// input channel 0 and `right` on channel 1 of every required port. With
+/// `non_neutral`, optional ports named by `non_neutral_value` get a mono
+/// constant; otherwise every optional port is left unconnected.
+fn render_stereo(
+    factory: fn() -> Box<dyn UGen>,
+    required: &[bool],
+    left: u8,
+    right: u8,
+    non_neutral: bool,
+) -> [Vec<f32>; 2] {
+    let mut ugen = factory();
+    let port_names: Vec<&'static str> = ugen.spec().inputs.iter().map(|s| s.name).collect();
+    let ctx = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
+    ugen.init(&ctx);
+
+    let constants: Vec<Option<AudioBuffer>> = required
+        .iter()
+        .enumerate()
+        .map(|(k, &is_required)| {
+            if is_required || !non_neutral {
+                return None;
+            }
+            port_names
+                .get(k)
+                .and_then(|n| non_neutral_value(n))
+                .map(|v| {
+                    let mut b = AudioBuffer::new(1, BLOCK_SIZE);
+                    b.channel_mut(0).samples_mut().fill(v);
+                    b
+                })
+        })
+        .collect();
+
+    let mut out = [Vec::new(), Vec::new()];
+    for block_idx in 0..INDEPENDENCE_BLOCKS {
+        let mut driver = AudioBuffer::new(2, BLOCK_SIZE);
+        for i in 0..BLOCK_SIZE {
+            let global_i = block_idx * BLOCK_SIZE + i;
+            driver.channel_mut(0).samples_mut()[i] = independence_driver(left, global_i);
+            driver.channel_mut(1).samples_mut()[i] = independence_driver(right, global_i);
+        }
+        let inputs: Vec<Option<&AudioBuffer>> = required
+            .iter()
+            .enumerate()
+            .map(|(k, &is_required)| {
+                if is_required {
+                    Some(&driver)
+                } else {
+                    constants[k].as_ref()
+                }
+            })
+            .collect();
+
+        let mut output = AudioBuffer::new(2, BLOCK_SIZE);
+        ugen.process(&ctx, &inputs, &mut output);
+        out[0].extend_from_slice(output.channel(0).samples());
+        out[1].extend_from_slice(output.channel(1).samples());
+    }
+    out
+}
+
+/// Index of the first block where `a` and `b` differ bit for bit.
+fn first_divergent_block(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter()
+        .zip(b)
+        .position(|(x, y)| x.to_bits() != y.to_bits())
+        .map(|i| i / BLOCK_SIZE)
+}
+
+/// Which optional ports `non_neutral_value` connects for a kind, for the
+/// failure message.
+fn non_neutral_ports(factory: fn() -> Box<dyn UGen>, required: &[bool]) -> Vec<String> {
+    factory()
+        .spec()
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| !required.get(*k).copied().unwrap_or(false))
+        .filter_map(|(_, s)| non_neutral_value(s.name).map(|v| format!("{}={v}", s.name)))
+        .collect()
+}
+
+#[test]
+fn every_registered_processor_keeps_its_channels_independent() {
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut tested = 0usize;
+
+    for (name, entry) in reg.iter() {
+        if exemption_reason(name).is_some() || !entry.required.iter().any(|&r| r) {
+            continue;
+        }
+        tested += 1;
+
+        for non_neutral in [false, true] {
+            let mode = if non_neutral {
+                format!(
+                    "non-neutral ({})",
+                    non_neutral_ports(entry.factory, &entry.required).join(" ")
+                )
+            } else {
+                "defaults".to_string()
+            };
+            let base = render_stereo(entry.factory, &entry.required, 0, 1, non_neutral);
+            let left_changed = render_stereo(entry.factory, &entry.required, 2, 1, non_neutral);
+            let right_changed = render_stereo(entry.factory, &entry.required, 0, 2, non_neutral);
+
+            if let Some(block) = first_divergent_block(&base[1], &left_changed[1]) {
+                failures.push(format!(
+                    "{name} [{mode}]: right output changed when only the left input changed \
+                     (from block {block}): one state shared across channels"
+                ));
+            }
+            if let Some(block) = first_divergent_block(&base[0], &right_changed[0]) {
+                failures.push(format!(
+                    "{name} [{mode}]: left output changed when only the right input changed \
+                     (from block {block}): one delay line replayed per channel"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        tested >= 20,
+        "expected to exercise most processor kinds, only tested {tested}"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} case(s) where an output channel depends on the other channel's input:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+/// The stereo-by-design kinds compute both output channels from input
+/// channel 0 alone, so their outputs must not depend on input channel 1 at
+/// all. This is the audit of those kinds for the shared-state defect: with
+/// one input channel there is nothing for a second channel's state to
+/// corrupt, and this assertion pins that reading of their code.
+#[test]
+fn every_stereo_by_design_kind_reads_only_input_channel_0() {
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+
+    let mut failures: Vec<String> = Vec::new();
+    for &(name, _) in STEREO_BY_DESIGN {
+        let entry = reg
+            .entry(name)
+            .expect("stereo-by-design kind is registered");
+        for non_neutral in [false, true] {
+            let base = render_stereo(entry.factory, &entry.required, 0, 1, non_neutral);
+            let right_changed = render_stereo(entry.factory, &entry.required, 0, 2, non_neutral);
+            for ch in 0..2 {
+                if let Some(block) = first_divergent_block(&base[ch], &right_changed[ch]) {
+                    failures.push(format!(
+                        "{name}: output channel {ch} changed when only input channel 1 \
+                         changed (from block {block})"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} stereo-by-design case(s) read input channel 1:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}

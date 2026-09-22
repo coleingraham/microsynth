@@ -92,7 +92,7 @@ impl UGen for SoftClip {
 /// - `tone`: post-distortion brightness (default 0.5). 0.0 = dark, 1.0 = bright.
 /// - `mix`: dry/wet blend (default 1.0). 0.0 = fully dry, 1.0 = fully wet.
 pub struct Overdrive {
-    y1: f32,
+    y1: [f32; 2],
 }
 
 impl Default for Overdrive {
@@ -103,7 +103,7 @@ impl Default for Overdrive {
 
 impl Overdrive {
     pub fn new() -> Self {
-        Overdrive { y1: 0.0 }
+        Overdrive { y1: [0.0; 2] }
     }
 }
 
@@ -119,7 +119,7 @@ impl UGen for Overdrive {
     fn init(&mut self, _context: &ProcessContext) {}
 
     fn reset(&mut self) {
-        self.y1 = 0.0;
+        self.y1 = [0.0; 2];
     }
 
     fn process(
@@ -133,13 +133,9 @@ impl UGen for Overdrive {
         let tone_buf = inputs.get(2).copied().flatten();
         let mix_buf = inputs.get(3).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let y1_start = self.y1;
-
+        // One state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut y1 = y1_start;
+            let mut y1 = self.y1[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -172,8 +168,8 @@ impl UGen for Overdrive {
                 out[i] = (1.0 - mix) * x + mix * y1;
             }
 
-            if ch == 0 {
-                self.y1 = y1;
+            if let Some(slot) = self.y1.get_mut(ch) {
+                *slot = y1;
             }
         }
     }

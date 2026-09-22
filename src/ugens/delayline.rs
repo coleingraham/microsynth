@@ -69,21 +69,6 @@ impl DelayLine {
         self.buffer.is_empty()
     }
 
-    /// The current write cursor.
-    #[inline]
-    pub(crate) fn write_pos(&self) -> usize {
-        self.write_pos
-    }
-
-    /// Rewind the write cursor to a previously saved position.
-    ///
-    /// Multi-channel UGens share one delay line across channels and replay each
-    /// channel from the same starting cursor; this restores it between channels.
-    #[inline]
-    pub(crate) fn set_write_pos(&mut self, pos: usize) {
-        self.write_pos = pos;
-    }
-
     /// Read at an integer delay, in samples, back from the write cursor.
     ///
     /// `delay` must not exceed [`len`](DelayLine::len).

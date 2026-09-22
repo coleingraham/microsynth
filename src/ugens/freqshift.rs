@@ -67,8 +67,8 @@ impl HilbertChain {
 /// quadrature signals) followed by single-sideband modulation:
 /// `output = I * cos(2π * shift * t) - Q * sin(2π * shift * t)`
 pub struct FreqShift {
-    chain_i: HilbertChain,
-    chain_q: HilbertChain,
+    chain_i: [HilbertChain; 2],
+    chain_q: [HilbertChain; 2],
     osc_phase: f32,
     sample_rate: f32,
 }
@@ -82,8 +82,8 @@ impl Default for FreqShift {
 impl FreqShift {
     pub fn new() -> Self {
         FreqShift {
-            chain_i: HilbertChain::new(),
-            chain_q: HilbertChain::new(),
+            chain_i: [HilbertChain::new(); 2],
+            chain_q: [HilbertChain::new(); 2],
             osc_phase: 0.0,
             sample_rate: 44100.0,
         }
@@ -104,8 +104,9 @@ impl UGen for FreqShift {
     }
 
     fn reset(&mut self) {
-        self.chain_i.reset();
-        self.chain_q.reset();
+        for chain in self.chain_i.iter_mut().chain(self.chain_q.iter_mut()) {
+            chain.reset();
+        }
         self.osc_phase = 0.0;
     }
 
@@ -119,16 +120,13 @@ impl UGen for FreqShift {
         let shift_buf = inputs.get(1).copied().flatten();
         let inv_sr = 1.0 / self.sample_rate;
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let chain_i_start = self.chain_i;
-        let chain_q_start = self.chain_q;
+        // One Hilbert state per channel (see filters::OnePole's process()),
+        // one carrier oscillator for the effect.
         let osc_phase_start = self.osc_phase;
 
         for ch in 0..output.num_channels() {
-            let mut chain_i = chain_i_start;
-            let mut chain_q = chain_q_start;
+            let mut chain_i = self.chain_i[ch.min(1)];
+            let mut chain_q = self.chain_q[ch.min(1)];
             let mut osc_phase = osc_phase_start;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
@@ -153,9 +151,13 @@ impl UGen for FreqShift {
             }
 
             if ch == 0 {
-                self.chain_i = chain_i;
-                self.chain_q = chain_q;
                 self.osc_phase = osc_phase;
+            }
+            if let Some(slot) = self.chain_i.get_mut(ch) {
+                *slot = chain_i;
+            }
+            if let Some(slot) = self.chain_q.get_mut(ch) {
+                *slot = chain_q;
             }
         }
     }

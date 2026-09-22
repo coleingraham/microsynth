@@ -393,9 +393,9 @@ perc_ugen! {
 ///
 /// Reports `is_done()` = true when the envelope returns to Idle after Release.
 pub struct ASR {
-    level: f32,
-    stage: AsrStage,
-    triggered: bool,
+    level: [f32; 2],
+    stage: [AsrStage; 2],
+    triggered: [bool; 2],
     sample_rate: f32,
 }
 
@@ -416,9 +416,9 @@ impl Default for ASR {
 impl ASR {
     pub fn new() -> Self {
         ASR {
-            level: 0.0,
-            stage: AsrStage::Idle,
-            triggered: false,
+            level: [0.0; 2],
+            stage: [AsrStage::Idle; 2],
+            triggered: [false; 2],
             sample_rate: 44100.0,
         }
     }
@@ -438,9 +438,9 @@ impl UGen for ASR {
     }
 
     fn reset(&mut self) {
-        self.level = 0.0;
-        self.stage = AsrStage::Idle;
-        self.triggered = false;
+        self.level = [0.0; 2];
+        self.stage = [AsrStage::Idle; 2];
+        self.triggered = [false; 2];
     }
 
     fn process(
@@ -453,17 +453,11 @@ impl UGen for ASR {
         let attack_buf = inputs.get(1).copied().flatten();
         let release_buf = inputs.get(2).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let level_start = self.level;
-        let stage_start = self.stage;
-        let triggered_start = self.triggered;
-
+        // One envelope state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut level = level_start;
-            let mut stage = stage_start;
-            let mut triggered = triggered_start;
+            let mut level = self.level[ch.min(1)];
+            let mut stage = self.stage[ch.min(1)];
+            let mut triggered = self.triggered[ch.min(1)];
             let gate_ch = channel_wrapped(gate_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -516,17 +510,22 @@ impl UGen for ASR {
                 out[i] = level;
             }
 
-            if ch == 0 {
-                self.level = level;
-                self.stage = stage;
-                self.triggered = triggered;
+            if let Some(slot) = self.level.get_mut(ch) {
+                *slot = level;
+            }
+            if let Some(slot) = self.stage.get_mut(ch) {
+                *slot = stage;
+            }
+            if let Some(slot) = self.triggered.get_mut(ch) {
+                *slot = triggered;
             }
         }
     }
 
+    /// Done when channel 0 has been triggered and returned to idle. A gate
+    /// is one signal per voice, so the channels agree.
     fn is_done(&self) -> bool {
-        // Done when we've been triggered and returned to idle
-        self.triggered && self.stage == AsrStage::Idle
+        self.triggered[0] && self.stage[0] == AsrStage::Idle
     }
 }
 
@@ -541,9 +540,9 @@ impl UGen for ASR {
 ///
 /// Reports `is_done()` = true when the envelope returns to Idle after Release.
 pub struct ADSR {
-    level: f32,
-    stage: AdsrStage,
-    triggered: bool,
+    level: [f32; 2],
+    stage: [AdsrStage; 2],
+    triggered: [bool; 2],
     sample_rate: f32,
 }
 
@@ -565,9 +564,9 @@ impl Default for ADSR {
 impl ADSR {
     pub fn new() -> Self {
         ADSR {
-            level: 0.0,
-            stage: AdsrStage::Idle,
-            triggered: false,
+            level: [0.0; 2],
+            stage: [AdsrStage::Idle; 2],
+            triggered: [false; 2],
             sample_rate: 44100.0,
         }
     }
@@ -587,9 +586,9 @@ impl UGen for ADSR {
     }
 
     fn reset(&mut self) {
-        self.level = 0.0;
-        self.stage = AdsrStage::Idle;
-        self.triggered = false;
+        self.level = [0.0; 2];
+        self.stage = [AdsrStage::Idle; 2];
+        self.triggered = [false; 2];
     }
 
     fn process(
@@ -604,17 +603,11 @@ impl UGen for ADSR {
         let sustain_buf = inputs.get(3).copied().flatten();
         let release_buf = inputs.get(4).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let level_start = self.level;
-        let stage_start = self.stage;
-        let triggered_start = self.triggered;
-
+        // One envelope state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut level = level_start;
-            let mut stage = stage_start;
-            let mut triggered = triggered_start;
+            let mut level = self.level[ch.min(1)];
+            let mut stage = self.stage[ch.min(1)];
+            let mut triggered = self.triggered[ch.min(1)];
             let gate_ch = channel_wrapped(gate_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -681,15 +674,21 @@ impl UGen for ADSR {
                 out[i] = level;
             }
 
-            if ch == 0 {
-                self.level = level;
-                self.stage = stage;
-                self.triggered = triggered;
+            if let Some(slot) = self.level.get_mut(ch) {
+                *slot = level;
+            }
+            if let Some(slot) = self.stage.get_mut(ch) {
+                *slot = stage;
+            }
+            if let Some(slot) = self.triggered.get_mut(ch) {
+                *slot = triggered;
             }
         }
     }
 
+    /// Done when channel 0 has been triggered and returned to idle. A gate
+    /// is one signal per voice, so the channels agree.
     fn is_done(&self) -> bool {
-        self.triggered && self.stage == AdsrStage::Idle
+        self.triggered[0] && self.stage[0] == AdsrStage::Idle
     }
 }
