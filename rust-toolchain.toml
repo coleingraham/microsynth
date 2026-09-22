@@ -12,7 +12,11 @@
 # takes precedence over the ambient default for any command run from inside
 # this checkout, so CI's actual `cargo build`/`test`/`clippy`/`fmt` steps
 # resolve this pin (rustup auto-installs it on first use if not already
-# present). Bump this value together with a re-blessed golden wasm, not on
+# present). The components and target are listed here too, because the
+# CI action installs them only for the stable toolchain it sets up, not for
+# this pin. Bump the channel together with a re-blessed golden wasm, not on
 # its own.
 [toolchain]
 channel = "1.96.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
