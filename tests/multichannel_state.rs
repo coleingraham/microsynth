@@ -130,7 +130,11 @@ fn driver_sample(global_i: usize) -> f32 {
     let t = global_i as f32 / SAMPLE_RATE;
     let decay = (-1.5 * t).exp();
     let sine = decay * (2.0 * core::f32::consts::PI * 47.0 * t).sin();
-    let click = if global_i.is_multiple_of(500) { 0.8 } else { 0.0 };
+    let click = if global_i.is_multiple_of(500) {
+        0.8
+    } else {
+        0.0
+    };
     sine + click
 }
 
@@ -149,7 +153,11 @@ fn make_driver_block(block_idx: usize) -> AudioBuffer {
 /// Drive one UGen kind for `NUM_BLOCKS` blocks and assert channel 1 matches
 /// channel 0 throughout. Returns the first few mismatches found (empty on
 /// success) so the caller can build one readable failure message per kind.
-fn find_channel_divergences(name: &str, factory: fn() -> Box<dyn UGen>, input_required: &[bool]) -> Vec<String> {
+fn find_channel_divergences(
+    name: &str,
+    factory: fn() -> Box<dyn UGen>,
+    input_required: &[bool],
+) -> Vec<String> {
     let mut ugen = factory();
     let ctx = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
     ugen.init(&ctx);
@@ -287,7 +295,12 @@ fn playbuf_produces_identical_channels_from_identical_input_with_a_mono_sample()
         divergences.is_empty(),
         "PlayBuf: {} divergent sample(s), first ones:\n{}",
         divergences.len(),
-        divergences.iter().take(5).cloned().collect::<Vec<_>>().join("\n")
+        divergences
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
