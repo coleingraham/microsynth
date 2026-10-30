@@ -1113,12 +1113,12 @@ fn test_scheduling_on_a_reaped_voice_id_does_not_affect_its_replacement() {
     unsafe {
         web::ms_init_with_bus(44100.0);
         let (nptr, nlen) = alloc_str("lead2");
-        // Output is `freq` directly so the respawned voice's pitch can be
-        // read straight off the bus; the envelope exists only so the synth
-        // can report is_done() and be reaped — multiplying its value by 0.0
-        // keeps it out of the observed output.
+        // Output is `freq` gated by the envelope, so once the attack has
+        // finished the respawned voice's pitch can be read straight off the
+        // bus (the asr sustains at exactly 1.0); the envelope gates the
+        // output so the synth is reaped when it finishes its release.
         let (sptr, slen) = alloc_str(
-            "synthdef lead2 freq=440.0 gate=0.0 = freq + asr gate 0.005 0.02 * 0.0\n\n\
+            "synthdef lead2 freq=440.0 gate=0.0 = freq * asr gate 0.005 0.02\n\n\
              voice lead2 mono legato freq 0.02",
         );
         assert_eq!(web::ms_register_def(nptr, nlen, sptr, slen), 0);
