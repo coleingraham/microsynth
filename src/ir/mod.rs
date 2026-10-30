@@ -163,6 +163,12 @@ pub struct IrSynthDef {
     /// for every document produced before this field existed, and for any
     /// document that simply doesn't use table-bound UGen kinds.
     pub table_bindings: Vec<IrTableBinding>,
+    /// The node whose output is the def's output. It also anchors the done
+    /// action: a live synth is freed when a done-reporting node's silence
+    /// reaches this node (through a `Mul`, the numerator of a `Div`, both
+    /// terms of an `Add`/`Sub`, or a pass-through processor's `in` port),
+    /// not when any node at all reports done. See
+    /// [`Engine::free_done_synths`](crate::engine::Engine::free_done_synths).
     pub output_node: usize,
 }
 
