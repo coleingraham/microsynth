@@ -5,7 +5,7 @@ use crate::graph::AudioGraph;
 use crate::node::NodeId;
 use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
-use crate::synthdef::{Synth, SynthDef, SynthParam};
+use crate::synthdef::{DonePlan, Synth, SynthDef, SynthParam};
 use crate::ugens;
 use crate::voice::{Admission, VoiceAllocator};
 use alloc::string::String;
@@ -147,6 +147,7 @@ impl Engine {
     /// Returns the `Synth` handle which tracks the live node IDs.
     pub fn instantiate_synthdef(&mut self, def: &SynthDef) -> Synth {
         let ugens = def.instantiate();
+        let done_plan = DonePlan::build(def, &ugens);
 
         // Reseed this voice's noise UGens deterministically from the spawn order
         // (a no-op for non-noise UGens), then add all nodes to the graph,
@@ -191,6 +192,7 @@ impl Engine {
             output_id,
             params,
             audio_input_nodes,
+            done_plan,
         );
 
         self.synths.push(synth.clone_handle());
@@ -541,19 +543,37 @@ impl Engine {
         &self.synths
     }
 
-    /// Remove all synths that have any node reporting `is_done()`.
-    /// This enables "done actions": when an envelope finishes, the whole
-    /// synth is removed from the graph.
+    /// Remove every synth whose output has been silenced by a done-reporting
+    /// node ("done actions": when the amp envelope finishes, the whole synth
+    /// is removed from the graph).
+    ///
+    /// The rule: a synth is done when a node that reports `is_done()` sits on
+    /// its *output path* and that node's silence reaches the output. Silence
+    /// propagates from a node to the output through
+    /// - either factor of a `Mul` (the usual `env * signal` VCA), the
+    ///   numerator of a `Div`, the input of a `Neg`;
+    /// - an `Add`/`Sub` only when both terms are silent (a sum keeps
+    ///   sounding while either term does);
+    /// - the `in` port of a pass-through processor (filters, dynamics,
+    ///   waveshapers, panners, short modulation effects).
+    ///
+    /// It does not propagate through parameter ports (`freq`, `cutoff`,
+    /// `gate`, …), out of oscillators, physical models or envelopes, or
+    /// through nodes that keep sounding after their input stops (delay
+    /// lines, comb filters, reverbs, spectral processors). So a one-shot on a
+    /// side chain does not free the voice: a `perc` exciting a
+    /// `feedbackDelay` string, an `xLine` pitch drop into a `freq` port, a
+    /// `pluck` summed with a sustained voice. The output path is computed
+    /// once per synth at instantiation; a synth with no done-reporting node
+    /// on it is never freed here (free it with `free_voice`).
+    ///
     /// Returns the number of synths removed.
     /// After calling this, you must call `prepare()` before rendering.
     pub fn free_done_synths(&mut self) -> usize {
         let mut removed = 0;
         let mut i = 0;
         while i < self.synths.len() {
-            let is_done = self.synths[i]
-                .node_ids()
-                .iter()
-                .any(|&id| self.graph.node_is_done(id));
+            let is_done = self.synths[i].output_is_done(&self.graph);
             if is_done {
                 let synth = self.synths.remove(i);
                 // Also remove from voices list, keeping the allocator's

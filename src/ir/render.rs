@@ -22,7 +22,8 @@ pub struct RenderSpec {
     /// `gate` param. The gate is held at 1 until this time.
     pub gate_on_secs: f32,
     /// Safety cap on how long to keep rendering after gate-off waiting for the
-    /// graph to report done.
+    /// synth to report done (its output silenced by a done-reporting node on
+    /// its output path; see `Engine::free_done_synths`).
     pub max_tail_secs: f32,
     /// Exact output length. The concatenated render is trimmed or zero-padded
     /// to this many seconds.
@@ -59,7 +60,7 @@ pub fn render_ir(
         sample_rate: spec.sample_rate,
         block_size: spec.block_size,
     });
-    let synth = engine.instantiate_synthdef(&def);
+    let mut synth = engine.instantiate_synthdef(&def);
     engine.graph_mut().set_sink(synth.output_node());
 
     let has_gate = def.param_names().iter().any(|(n, _, _)| n == "gate");
@@ -102,11 +103,7 @@ pub fn render_ir(
         block_idx += 1;
 
         let have_target = rendered_samples >= target_samples;
-        let done_after_release = gate_released
-            && synth
-                .node_ids()
-                .iter()
-                .any(|&id| engine.graph().node_is_done(id));
+        let done_after_release = gate_released && synth.output_is_done(engine.graph());
 
         if (have_target && (done_after_release || !has_gate)) || block_idx >= max_blocks {
             break;
