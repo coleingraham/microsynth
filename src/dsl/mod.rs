@@ -257,6 +257,7 @@
 //! | Name | Inputs | Description |
 //! |------|--------|-------------|
 //! | `fmOsc` | `freq` (Hz), `ratio`, `index`, `feedback` | Two-operator FM oscillator with self-feedback |
+//! | `fmOp` | `freq` (Hz), `pm` (rad), `level`, `feedback`, `wave`, `phase_reset` | One phase-modulation operator (OPL waveforms 0–7) for building DX7/YM2612/OPL algorithms |
 //!
 //! The FM oscillator implements phase modulation: a modulator sine wave
 //! modulates the phase of a carrier sine wave. `ratio` sets the modulator
@@ -268,6 +269,17 @@
 //! fmOsc 440.0 1.0 2.0 0.0     -- electric piano: ratio=1, index=2
 //! fmOsc 440.0 1.4 5.0 0.0     -- metallic bell: ratio=1.4, index=5
 //! fmOsc 440.0 1.0 3.0 0.5     -- DX7 brass: ratio=1, index=3, feedback=0.5
+//! ```
+//!
+//! `fmOp` is a single operator; algorithms are ordinary graph wiring. A
+//! modulator's `level` is the index (peak phase deviation, radians) it
+//! imposes on the operator whose `pm` it feeds:
+//!
+//! ```text
+//! synthdef epiano freq=440.0 gate=1.0 vel=0.8 =
+//!   let m = fmOp (freq * 14.0) 0.0 (expPerc 0.001 0.25 * vel * 2.0) 0.0 0.0
+//!   let c = fmOp freq m (expPerc 0.002 2.5) 0.0 0.0
+//!   c * 0.5
 //! ```
 //!
 //! ## Frequency Shifter
