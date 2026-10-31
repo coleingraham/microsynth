@@ -295,7 +295,8 @@ impl Synth {
 /// dynamics, waveshapers, panners and short modulation effects. Silence
 /// propagates through their `in` port only, never through a parameter port.
 ///
-/// Anything not listed here (and not `Mul`/`Div`/`Neg`/`Add`/`Sub`) stops the
+/// Anything not listed here (and not `Mul`/`Div`/`Neg`/`Add`/`Sub`, or
+/// `FmOp`, which passes silence through its `level` port) stops the
 /// propagation: oscillators and physical models (their inputs are
 /// parameters), envelopes, and nodes that keep sounding after their input
 /// stops (`CombFilter`, `Delay`, `FeedbackDelay`, `PingPongDelay`, `GVerb`,
@@ -410,6 +411,10 @@ impl DonePlan {
                 "Div" => (SilenceRule::Any, ports.iter().take(1).copied().collect()),
                 "Add" | "Sub" => (SilenceRule::All, ports.clone()),
                 "Neg" => (SilenceRule::Any, port_named("in")),
+                // An FM operator's output is `level * wave(..)`: a product,
+                // so a silent `level` (its VCA envelope) silences it. Its
+                // other ports (`freq`, `pm`, ...) are parameters.
+                "FmOp" => (SilenceRule::Any, port_named("level")),
                 name if SILENCE_PASS_THROUGH.contains(&name) => {
                     (SilenceRule::Any, port_named("in"))
                 }

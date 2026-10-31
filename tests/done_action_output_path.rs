@@ -244,3 +244,39 @@ fn defs_whose_done_nodes_are_all_on_the_output_path_free_as_before() {
         assert!(freed_at.is_some(), "{src}: never freed");
     }
 }
+
+#[test]
+fn fm_op_carrier_level_envelope_frees_the_voice() {
+    // An FM carrier's `level` is its VCA: when the perc on it finishes the
+    // operator is silent and the voice is freed.
+    let mut rig = Rig::new(
+        "synthdef ep =\n  let m = fmOp 880.0 0.0 2.0 0.0 0.0\n  \
+         fmOp 440.0 m (expPerc 0.001 0.05) 0.0 0.0",
+    );
+    let (peak, freed) = rig.run(1.0);
+    assert!(peak > 0.1);
+    assert!(
+        freed,
+        "the carrier's level envelope finishing should free the voice"
+    );
+}
+
+#[test]
+fn fm_op_modulator_envelope_does_not_free_a_held_voice() {
+    // A one-shot index envelope on a modulator (the E.PIANO tine strike)
+    // ends while the carrier, gated by an asr, keeps sounding.
+    let mut rig = Rig::new(
+        "synthdef ep gate=1.0 =\n  let m = fmOp 6160.0 0.0 (expPerc 0.001 0.02) 0.0 0.0\n  \
+         fmOp 440.0 m (asr gate 0.001 0.05) 0.0 0.0",
+    );
+    let (peak, freed) = rig.run(0.5);
+    assert!(peak > 0.1);
+    assert!(rig.any_node_done(), "the modulator's perc has finished");
+    assert!(
+        !freed,
+        "a finished modulator envelope must not free the voice"
+    );
+    rig.release();
+    let (_, freed) = rig.run(0.5);
+    assert!(freed, "releasing the carrier's asr frees it");
+}
