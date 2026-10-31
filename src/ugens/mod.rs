@@ -12,7 +12,8 @@
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive, WaveFolder
 //! - `modulation`: Chorus, Flanger, Phaser, WowFlutter
-//! - `fm`: FmOsc (two-operator FM synthesis with self-feedback)
+//! - `fm`: FmOsc (two-operator FM synthesis with self-feedback), FmOp (one
+//!   phase-modulation operator with OPL waveforms, for DX7/OPN/OPL algorithms)
 //! - `freqshift`: FreqShift (Hilbert transform frequency shifter)
 //! - `lfo`: Lfo (multi-shape unipolar LFO)
 //! - `stereo`: StereoWidth, PingPongDelay
@@ -171,6 +172,7 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 
     // -- FM Synthesis --
     reg.register_spec("fmOsc", || Box::new(FmOsc::new()));
+    reg.register_spec("fmOp", || Box::new(FmOp::new()));
 
     // -- Frequency Shifter --
     reg.register_spec("freqShift", || Box::new(FreqShift::new()));
