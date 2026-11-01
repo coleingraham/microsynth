@@ -175,6 +175,24 @@
 //! gverb sig 0.8 0.5 0.3 0.7  -- reverb: room=0.8, damp=0.5, wet=0.3, dry=0.7
 //! ```
 //!
+//! ## Modal Synthesis
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `modalBank` | `in`, `freq` (Hz), `damp`, `pos` (0–1), `bright` (0–1), `alpha`, then `r0 g0 d0` … `r31 g31 d31` | Bank of up to 32 damped two-pole resonators: mode K rings at `rK · freq` with gain `gK` and T60 `dK` seconds (at C4) |
+//!
+//! The excitation goes in `in`; the mode table is three ports per mode
+//! (ratio, gain, T60 at C4), unused modes left at ratio 0. `damp` scales
+//! every decay (lower it to choke), `pos` weights slot K by
+//! `sin(π · pos · (K+1))` (0 = off), `bright` is the mallet hardness (a
+//! lowpass on each mode's input weight, 100 Hz at 0 to 25.6 kHz at 1) and
+//! `alpha` keytracks the decays as `(freq / C4)^(-alpha)`. A free–free bar:
+//!
+//! ```text
+//! synthdef bar freq=440.0 =
+//!   modalBank (impulse 0.0) freq 1.0 0.22 0.7 1.0  1.0 1.0 2.0  2.756 0.5 0.8  5.404 0.3 0.4
+//! ```
+//!
 //! ## Envelopes
 //!
 //! | Name | Inputs | Description |
