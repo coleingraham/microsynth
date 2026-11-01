@@ -23,6 +23,7 @@
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
+//! - `modal`: ModalBank (a bank of damped two-pole resonators for modal synthesis)
 //! - `spectral`: SpectralFreeze, PitchShift, SpectralFilter, SpectralGate, SpectralBlur, Convolution
 //!
 //! # Adding a UGen
@@ -58,6 +59,7 @@ pub mod fm;
 pub mod freqshift;
 pub mod lfo;
 pub mod math;
+pub mod modal;
 pub mod modulation;
 pub mod noise;
 pub mod oscillators;
@@ -82,6 +84,7 @@ pub use fm::*;
 pub use freqshift::*;
 pub use lfo::*;
 pub use math::*;
+pub use modal::*;
 pub use modulation::*;
 pub use noise::*;
 pub use oscillators::*;
@@ -124,6 +127,7 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     // -- Physical Models --
     reg.register_spec("pluck", || Box::new(Pluck::new()));
     reg.register_spec("bowed", || Box::new(Bowed::new()));
+    reg.register_spec("modalBank", || Box::new(ModalBank::new()));
 
     // -- Noise --
     reg.register_spec("whiteNoise", || Box::new(WhiteNoise::new()));
