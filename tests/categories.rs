@@ -36,6 +36,7 @@ fn registered_ugens_have_expected_categories() {
         // Physical.
         ("pluck", Physical),
         ("bowed", Physical),
+        ("modalBank", Physical),
         // Noise.
         ("whiteNoise", Noise),
         ("pinkNoise", Noise),
