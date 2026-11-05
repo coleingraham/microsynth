@@ -13,6 +13,8 @@
 //! - `distortion`: SoftClip, Overdrive, WaveFolder
 //! - `modulation`: Chorus, Flanger, Phaser, WowFlutter
 //! - `fm`: FmOsc (two-operator FM synthesis with self-feedback)
+//! - `formant`: Paf (phase-aligned formant generator: one formant of a
+//!   harmonic tone, centre and bandwidth as audio-rate controls)
 //! - `freqshift`: FreqShift (Hilbert transform frequency shifter)
 //! - `lfo`: Lfo (multi-shape unipolar LFO)
 //! - `stereo`: StereoWidth, PingPongDelay
@@ -54,6 +56,7 @@ pub mod distortion;
 pub mod envelopes;
 pub mod filters;
 pub mod fm;
+pub mod formant;
 pub mod freqshift;
 pub mod lfo;
 pub mod math;
@@ -78,6 +81,7 @@ pub use distortion::*;
 pub use envelopes::*;
 pub use filters::*;
 pub use fm::*;
+pub use formant::*;
 pub use freqshift::*;
 pub use lfo::*;
 pub use math::*;
@@ -171,6 +175,9 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 
     // -- FM Synthesis --
     reg.register_spec("fmOsc", || Box::new(FmOsc::new()));
+
+    // -- Formant Synthesis --
+    reg.register_spec("paf", || Box::new(Paf::new()));
 
     // -- Frequency Shifter --
     reg.register_spec("freqShift", || Box::new(FreqShift::new()));

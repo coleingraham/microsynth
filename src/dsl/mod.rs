@@ -270,6 +270,23 @@
 //! fmOsc 440.0 1.0 3.0 0.5     -- DX7 brass: ratio=1, index=3, feedback=0.5
 //! ```
 //!
+//! ## Formant Synthesis
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `paf` | `freq` (Hz), `center` (Hz), `bw` (Hz, −6 dB), `amp`, `phase_reset` | One phase-aligned formant (Puckette's PAF): harmonics of `freq` under a peak at `center` |
+//!
+//! Every output component is a harmonic of `freq`, wherever `center` lies,
+//! so a formant can sit between harmonics or sweep across them without
+//! beating; `center` and `bw` are audio-rate. A vowel is a few `paf`s on
+//! one `freq`, summed with per-formant levels:
+//!
+//! ```text
+//! synthdef ah freq=220.0 gate=1.0 =
+//!   let v = paf freq 730.0 160.0 1.0 0.0 + paf freq 1090.0 170.0 0.5 0.0 + paf freq 2440.0 200.0 0.25 0.0
+//!   v * asr gate 0.05 0.2 * 0.2
+//! ```
+//!
 //! ## Frequency Shifter
 //!
 //! | Name | Inputs | Description |
