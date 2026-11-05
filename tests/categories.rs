@@ -31,6 +31,7 @@ fn registered_ugens_have_expected_categories() {
         ("blTri", Oscillator),
         ("fmOsc", Oscillator),
         ("fmOp", Oscillator),
+        ("paf", Oscillator),
         ("waveTable", Oscillator),
         ("sinTable", Oscillator),
         // Physical.
