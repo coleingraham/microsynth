@@ -346,3 +346,34 @@ fn a_paf_centre_or_bandwidth_envelope_does_not_free_a_held_voice() {
     let (_, freed) = rig.run(0.5);
     assert!(freed, "releasing the asr on amp frees it");
 }
+
+#[test]
+fn a_finished_envelope_into_steepen_frees_the_voice() {
+    // steepen's delay is a few milliseconds: its input's silence is its own
+    let mut rig = Rig::new(
+        "synthdef v =\n  \
+         steepen (sinOsc 220.0 0.0 * expPerc 0.001 0.05) 220.0 0.8 0.573 1.5 16.0 261.63 1.0 0.0",
+    );
+    let (peak, freed) = rig.run(1.0);
+    assert!(peak > 0.1);
+    assert!(
+        freed,
+        "the envelope on steepen's input finishing should free the voice"
+    );
+}
+
+#[test]
+fn a_finished_drive_envelope_does_not_free_a_held_voice() {
+    // a one-shot on `drive` (a brassy onset) ends while the asr VCA holds
+    let mut rig = Rig::new(
+        "synthdef v gate=1.0 =\n  \
+         steepen (sinOsc 220.0 0.0) 220.0 (expPerc 0.001 0.02) 0.573 1.5 16.0 261.63 1.0 0.0 * asr gate 0.01 0.05",
+    );
+    let (peak, freed) = rig.run(0.5);
+    assert!(peak > 0.1);
+    assert!(rig.any_node_done(), "the drive's perc has finished");
+    assert!(!freed, "a finished drive envelope must not free the voice");
+    rig.release();
+    let (_, freed) = rig.run(0.5);
+    assert!(freed, "releasing the asr frees it");
+}
