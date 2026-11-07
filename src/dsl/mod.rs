@@ -413,6 +413,27 @@
 //!   waveFolder fm 3.0 0.0
 //! ```
 //!
+//! ## Waveform Steepening
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `steepen` | `in`, `freq`, `drive`, `k1`, `k2`, `stages`, `ref_hz`, `ref_amp`, `tau` | Nonlinear propagation in a bore: compressions advance, rarefactions lag, so the wave steepens towards a shock as `drive` goes 0 → 1 |
+//!
+//! The brightening of a loud brass tone. `drive` 1 is the shock of a sine of
+//! peak `ref_amp` (default 1) at `ref_hz` (default C4); `freq` keytracks the
+//! de-emphasis corners (`k1`, `k2` × `freq`, defaults 0.573 and 1.5) and the
+//! time scale, so every pitch steepens alike. Below the shock the harmonic
+//! envelope falls smoothly, with no holes; `drive` 0 is a short pure delay.
+//! `stages` (default 16) and `tau` (total base delay at `ref_hz`, default 0
+//! = automatic) are per-instrument constants.
+//!
+//! ```text
+//! synthdef horn freq=261.63 vel=1.0 gate=1.0 =
+//!   let env = asr gate 0.03 0.06
+//!   let src = blSaw freq * 0.3 + sinOsc freq 0.0 * 0.7
+//!   steepen src freq (vel * vel * env) 0.573 1.5 16.0 261.63 1.0 0.0 * env * 0.3
+//! ```
+//!
 //! ## Bitcrusher
 //!
 //! | Name | Inputs | Description |

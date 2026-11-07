@@ -11,6 +11,8 @@
 //! - `envelopes`: Line, XLine, Perc, ExpPerc, ASR, ADSR
 //! - `delay`: Delay, FeedbackDelay
 //! - `distortion`: SoftClip, Overdrive, WaveFolder
+//! - `steepen`: Steepen (waveform steepening in a bore: brass brightening with a
+//!   smooth harmonic envelope)
 //! - `modulation`: Chorus, Flanger, Phaser, WowFlutter
 //! - `fm`: FmOsc (two-operator FM synthesis with self-feedback), FmOp (one
 //!   phase-modulation operator with OPL waveforms, for DX7/OPN/OPL algorithms)
@@ -71,6 +73,7 @@ pub mod physical;
 pub mod playbuf;
 pub(crate) mod rng;
 pub mod spectral;
+pub mod steepen;
 pub mod stereo;
 pub mod utility;
 pub mod wavetable;
@@ -96,6 +99,7 @@ pub use partials::PartialsNoise;
 pub use physical::*;
 pub use playbuf::*;
 pub use spectral::*;
+pub use steepen::*;
 pub use stereo::*;
 pub use utility::*;
 pub use wavetable::*;
@@ -205,6 +209,9 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("softClip", || Box::new(SoftClip::new()));
     reg.register_spec("overdrive", || Box::new(Overdrive::new()));
     reg.register_spec("waveFolder", || Box::new(WaveFolder::new()));
+
+    // -- Waveform steepening --
+    reg.register_spec("steepen", || Box::new(Steepen::new()));
 
     // -- LFO --
     reg.register_spec("lfo", || Box::new(Lfo::new()));
