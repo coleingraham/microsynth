@@ -175,10 +175,10 @@ pub use crate::coeff_table::{NOISE_BAND_MAX_HZ_KEY, NOISE_BAND_MIN_HZ_KEY};
 /// `PinkNoise`'s fixed-default-seed convention (`ugens/noise.rs`); a voice
 /// spawn is expected to call [`UGen::reseed_noise`] for keyed, per-voice
 /// determinism (see `noise.rs`'s module doc on the seeding contract).
-const PARTIALS_NOISE_DEFAULT_SEED: u32 = 0x9A27_1E55;
+pub(crate) const PARTIALS_NOISE_DEFAULT_SEED: u32 = 0x9A27_1E55;
 
 /// Default `freq`/`gain` values for an unconnected port.
-const DEFAULT_FREQ_HZ: f32 = 220.0;
+pub(crate) const DEFAULT_FREQ_HZ: f32 = 220.0;
 const DEFAULT_GAIN: f32 = 1.0;
 
 /// The fallback smooth-noise basis frequency span (MOT-641): used only when a
@@ -207,13 +207,13 @@ const NOISE_BAND_MAX_HZ: f32 = 12_000.0;
 /// Var(U)`, so `k = sqrt(1 / Var(U)) = sqrt(3)`), without touching
 /// `next_bipolar()`'s own documented `[-1, 1]` contract that `WhiteNoise` /
 /// `PinkNoise` and every other consumer still rely on (MOT-641).
-const UNIT_VARIANCE_BIPOLAR_SCALE: f32 = 1.732_050_8; // sqrt(3)
+pub(crate) const UNIT_VARIANCE_BIPOLAR_SCALE: f32 = 1.732_050_8; // sqrt(3)
 
 /// Resonance of each fixed noise-band bandpass. Low (wide) on purpose: the
 /// RFC describes the noise basis as "smooth... bumps," not narrow spectral
 /// lines, so each band should pass a broad neighborhood rather than ring at
 /// a single frequency.
-const NOISE_BAND_Q: f32 = 1.0;
+pub(crate) const NOISE_BAND_Q: f32 = 1.0;
 
 /// Fraction of the Nyquist range, immediately below Nyquist, over which a
 /// partial whose frequency is climbing toward it is faded to zero (see
@@ -224,7 +224,7 @@ const NOISE_BAND_Q: f32 = 1.0;
 const NYQUIST_GUARD_FRACTION: f32 = 0.05;
 
 #[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(crate) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + t * (b - a)
 }
 
@@ -246,7 +246,7 @@ fn lerp_coeff(lo: &[f32], hi: &[f32], idx: usize, t: f32) -> f32 {
 /// discontinuity of its own (RFC requirement 3, "partials cross Nyquist
 /// during glides").
 #[inline]
-fn nyquist_fade(freq: f32, nyquist: f32) -> f32 {
+pub(crate) fn nyquist_fade(freq: f32, nyquist: f32) -> f32 {
     if nyquist <= 0.0 {
         return 0.0;
     }
@@ -290,7 +290,7 @@ fn mel_to_hz(mel: f32) -> f32 {
 /// and synthesis band centers coincide exactly (up to `f32` rounding) when a
 /// table's [`NOISE_BAND_MIN_HZ_KEY`]/[`NOISE_BAND_MAX_HZ_KEY`] metadata
 /// carries the same `[min_hz, max_hz]` the analysis side built `N` against.
-fn noise_band_centers(j_max: usize, min_hz: f32, max_hz: f32) -> Vec<f32> {
+pub(crate) fn noise_band_centers(j_max: usize, min_hz: f32, max_hz: f32) -> Vec<f32> {
     if j_max == 0 {
         return Vec::new();
     }
@@ -304,7 +304,11 @@ fn noise_band_centers(j_max: usize, min_hz: f32, max_hz: f32) -> Vec<f32> {
         .collect()
 }
 
-fn metadata_scalar(metadata: &[(alloc::string::String, f32)], key: &str, default: f32) -> f32 {
+pub(crate) fn metadata_scalar(
+    metadata: &[(alloc::string::String, f32)],
+    key: &str,
+    default: f32,
+) -> f32 {
     metadata
         .iter()
         .find(|(k, _)| k.as_str() == key)
@@ -330,7 +334,7 @@ fn metadata_scalar(metadata: &[(alloc::string::String, f32)], key: &str, default
 /// whose entries disagree on these two keys). It remains only a convention —
 /// unenforced here — for a hand-built `CoeffTable` that bypassed decoding, as
 /// with every other decode-time check in this format.
-fn noise_band_span(table: &CoeffTable) -> (f32, f32) {
+pub(crate) fn noise_band_span(table: &CoeffTable) -> (f32, f32) {
     match table.entries.first() {
         Some(e) => (
             metadata_scalar(&e.metadata, NOISE_BAND_MIN_HZ_KEY, NOISE_BAND_MIN_HZ),
@@ -359,7 +363,7 @@ fn noise_band_span(table: &CoeffTable) -> (f32, f32) {
 /// `1 - exp(-25) ≈ 1 - 1.4e-11` of the true (infinite) energy — comfortably
 /// below `f32` rounding noise — for any `freq`/`Q`/`sample_rate`, not just
 /// the ones this ugen happens to use today.
-fn biquad_noise_power_gain(
+pub(crate) fn biquad_noise_power_gain(
     freq: f32,
     q: f32,
     sample_rate: f32,
