@@ -464,6 +464,21 @@
 //! clip sig (0.0 - 1.0) 1.0 -- clip to [-1, 1]
 //! ```
 //!
+//! ## Interpolation Over a Plane
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `plane2d` | `x`, `y`, `n`, `blend`, `axis`, `lo`, `hi`, `step`, then `v0` … `v15`, `px0 py0` … `px31 py31`, `tri0` … `tri63` | A quantity given at `n` vertices of a triangle mesh, interpolated barycentrically at `(x, y)`; ghost points clamp positions outside the vertices' hull to its edge |
+//!
+//! Points `0 … n−1` carry the values `v0 …`; the other points named by the
+//! triangles are ghosts valued at the nearest point of the valued hull.
+//! Each `triK` packs a triangle's point indices as `a + 32·b + 1024·c`
+//! (−1 = unused). `axis` 1 or 2 multiplies the result by the exponential
+//! `lo · (hi / lo)^c` of `x` or `y` (`step > 0`: its piecewise-linear
+//! interpolation, no segment wider than `step`). The mesh is a table of
+//! per-instrument constants, written by a generator as inline consts in the
+//! IR; the output is recomputed only when the position moves.
+//!
 //! ## Spectral Processing
 //!
 //! | Name | Inputs | Description |

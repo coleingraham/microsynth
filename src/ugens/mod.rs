@@ -24,6 +24,8 @@
 //! - `bitcrush`: Bitcrusher (sample rate / bit depth reduction)
 //! - `noise`: WhiteNoise, PinkNoise, VinylCrackle (seeded click noise)
 //! - `utility`: Pan2, Mix, SampleAndHold, Impulse, Lag, Clip
+//! - `plane`: Plane2d (linear interpolation of a quantity over a triangle mesh
+//!   in the plane, e.g. formants over the vowel trapezium)
 //! - `playbuf`: PlayBuf (sample playback)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
@@ -70,6 +72,7 @@ pub mod noise;
 pub mod oscillators;
 pub mod partials;
 pub mod physical;
+pub mod plane;
 pub mod playbuf;
 pub(crate) mod rng;
 pub mod spectral;
@@ -97,6 +100,7 @@ pub use noise::*;
 pub use oscillators::*;
 pub use partials::PartialsNoise;
 pub use physical::*;
+pub use plane::*;
 pub use playbuf::*;
 pub use spectral::*;
 pub use steepen::*;
@@ -215,6 +219,9 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 
     // -- LFO --
     reg.register_spec("lfo", || Box::new(Lfo::new()));
+
+    // -- Interpolation over a plane --
+    reg.register_spec("plane2d", || Box::new(Plane2d::new()));
 
     // -- Bus / Routing --
     reg.register_spec("audioIn", || Box::new(AudioIn));
