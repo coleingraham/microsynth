@@ -101,6 +101,10 @@ fn table_bound_ugens_have_expected_categories() {
         .table_bound_entry("partialsNoise")
         .expect("partialsNoise not registered as table-bound");
     assert_eq!(entry.category, Oscillator, "category of partialsNoise");
+    let entry = reg
+        .table_bound_entry("partialsBlend")
+        .expect("partialsBlend not registered as table-bound");
+    assert_eq!(entry.category, Oscillator, "category of partialsBlend");
 }
 
 #[test]
