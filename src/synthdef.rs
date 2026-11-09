@@ -492,3 +492,74 @@ impl DonePlan {
         silent.last().copied().unwrap_or(false)
     }
 }
+
+#[cfg(test)]
+mod done_rule_tests {
+    use super::SILENCE_PASS_THROUGH;
+    use crate::dsl::compiler::UGenRegistry;
+    use crate::ugens::register_builtins;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    /// Kinds with an `in` port that deliberately stop silence there: their
+    /// output keeps sounding after `in` falls silent (delay lines, reverbs,
+    /// spectral processors, a held sample), or `in` is not an audio path
+    /// out of the synth (`AudioIn`).
+    const STOPS_SILENCE: &[&str] = &[
+        "AudioIn",
+        "CombFilter",
+        "Convolution",
+        "Delay",
+        "FeedbackDelay",
+        "GVerb",
+        "PingPongDelay",
+        "PitchShift",
+        "SampleAndHold",
+        "SpectralBlur",
+        "SpectralFilter",
+        "SpectralFreeze",
+        "SpectralGate",
+    ];
+
+    /// A UGen added with an `in` port must be placed on one side of the done
+    /// rule. Left off both lists it would silently stop silence, so a voice
+    /// whose VCA sits upstream of it would never be freed.
+    #[test]
+    fn every_kind_with_an_in_port_has_a_done_rule() {
+        let mut reg = UGenRegistry::new();
+        register_builtins(&mut reg);
+
+        let mut spec_names: Vec<&'static str> = Vec::new();
+        let mut unclassified: Vec<String> = Vec::new();
+        for (kind, entry) in reg.iter() {
+            let spec = (entry.factory)().spec();
+            spec_names.push(spec.name);
+            if !spec.inputs.iter().any(|p| p.name == "in") {
+                continue;
+            }
+            let passes = SILENCE_PASS_THROUGH.contains(&spec.name);
+            let stops = STOPS_SILENCE.contains(&spec.name);
+            assert!(
+                !(passes && stops),
+                "{kind} ({}) is on both sides of the done rule",
+                spec.name
+            );
+            if !passes && !stops {
+                unclassified.push(alloc::format!("{kind} ({})", spec.name));
+            }
+        }
+        assert!(
+            unclassified.is_empty(),
+            "kinds with an `in` port missing from SILENCE_PASS_THROUGH and \
+             STOPS_SILENCE: {}",
+            unclassified.join(", ")
+        );
+
+        for name in SILENCE_PASS_THROUGH.iter().chain(STOPS_SILENCE) {
+            assert!(
+                spec_names.contains(name),
+                "{name} is listed in the done rule but no registered kind has that spec name"
+            );
+        }
+    }
+}
