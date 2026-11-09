@@ -2,8 +2,9 @@
 //! bug fixed across `src/ugens/*.rs`.
 //!
 //! **The bug.** Stateful UGens process a multichannel `AudioBuffer` with a
-//! per-channel loop that snapshots persisted state, processes that
-//! channel's block, and (for channel 0 only) writes the result back —
+//! per-channel loop that reads persisted state, processes that channel's
+//! block, and writes the result back (once, for channel 0, before each
+//! processor kept a state per channel) —
 //! `filters::OnePole::process` is the canonical example, see its doc
 //! comment. When the snapshot was re-read from `self` *inside* the channel
 //! loop rather than taken once *before* it, the write-back for channel 0

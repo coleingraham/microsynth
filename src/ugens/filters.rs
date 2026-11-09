@@ -64,8 +64,11 @@ impl UGen for OnePole {
         // block-rate buzz on the right whenever the two inputs differ (any
         // stage after a stereo one). Every stateful UGen follows this shape:
         // read the channel's own block-start state, write it back to the
-        // channel's own slot. A third or later channel reads channel 1's
-        // block-start state and does not write back, as `Compressor` does.
+        // channel's own slot. State is kept for two channels: a third or
+        // later channel starts from channel 1's slot as channel 1 left it
+        // (its end-of-block state) and is not written back, as in
+        // `Compressor`; a delay-line kind writes it into channel 1's line,
+        // as `Limiter` does. More than two channels is not supported.
         // Sources with no per-channel input keep one state instead and
         // snapshot it before the channel loop, so every channel derives
         // the same block rather than continuing from the previous channel.
