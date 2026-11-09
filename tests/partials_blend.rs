@@ -22,7 +22,7 @@ fn config() -> EngineConfig {
 fn coeff(seed: u32, i: usize) -> f32 {
     let x = (seed as u64)
         .wrapping_mul(6364136223846793005)
-        .wrapping_add(i as u64 * 1442695040888963407);
+        .wrapping_add((i as u64).wrapping_mul(1442695040888963407));
     ((x >> 40) as f32 / (1u64 << 24) as f32) * 0.9 + 0.1
 }
 
