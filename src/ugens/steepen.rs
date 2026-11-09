@@ -43,9 +43,9 @@ const STAGES_DEFAULT: f32 = 16.0;
 /// one more so a full-scale displacement never touches the write cursor.
 const RING_SLACK: usize = 6;
 
-/// Samples of delay memory per voice at `sample_rate`, over all stages:
+/// Samples of delay memory per channel at `sample_rate`, over all stages:
 /// `2 · HEADROOM · fs / (2π · F0_MIN)` plus [`RING_SLACK`] per stage slot.
-/// At 44.1 kHz that is 1596 `f64`s, 12.8 kB.
+/// At 44.1 kHz that is 1596 `f64`s, 12.8 kB; a node keeps two channels.
 pub fn steepen_pool_len(sample_rate: f64) -> usize {
     let span = 2.0 * STEEPEN_HEADROOM * sample_rate / (TAU * STEEPEN_F0_MIN);
     span.ceil() as usize + RING_SLACK * STEEPEN_MAX_STAGES
@@ -130,7 +130,7 @@ fn finite_or(x: f32, default: f32) -> f64 {
 /// the largest advance it applies.
 /// - `tau ≤ 0` (default): automatic, a whole number of samples,
 ///   `t0 = ⌈HEADROOM · fs / (2π · f0 · K)⌉`, fixed at the first sample the
-///   node processes (a later glide keeps it). With a whole-sample base
+///   node processes (channel 0's; a later glide keeps it). With a whole-sample base
 ///   delay, `drive` 0 is an exact delay of `K · t0` samples and a small
 ///   `drive` adds little interpolation loss.
 /// - `tau > 0`: `t0 = tau · ref_hz / (K · f0)` seconds, the **total** base
@@ -147,10 +147,11 @@ fn finite_or(x: f32, default: f32) -> f64 {
 ///
 /// **Memory.** The rings hold `t0 ≤ HEADROOM · fs / (2π · F0_MIN · K)`
 /// per stage, `2 · HEADROOM · fs / (2π · 20 Hz)` + 6 per stage slot `f64`s
-/// in all ([`steepen_pool_len`]): 1596 values, **12.8 kB per voice at
-/// 44.1 kHz** (13.8 kB at 48 kHz, 26 kB at 96 kHz), whatever `stages` is.
-/// (A node fed a block of more than one channel keeps one snapshot of the
-/// rings as well, to start every channel from the same state.)
+/// in all ([`steepen_pool_len`]): 1596 values, 12.8 kB per channel at
+/// 44.1 kHz. Each of two channels keeps its own rings and filter states,
+/// so a voice holds **25.5 kB at 44.1 kHz** (27.5 kB at 48 kHz, 52 kB at
+/// 96 kHz), whatever `stages` is, all allocated in `init`. A third or later
+/// channel runs on channel 1's state, as the delay-line kinds do.
 /// The rings are `f64` because each inverse filter amplifies high
 /// frequencies by up to `(1 + a)/(1 − a)` (the default pair, at C4: about
 /// 70 dB at Nyquist), and `f32` storage noise would come back that much
@@ -181,13 +182,18 @@ fn finite_or(x: f32, default: f32) -> f64 {
 /// Non-finite inputs read as their defaults (`in` as 0).
 pub struct Steepen {
     sample_rate: f64,
-    /// `stages` rings of `ring_len` samples each, back to back.
-    pool: Vec<f64>,
-    /// The rings at the start of a block, kept only once a block with more
-    /// than one channel arrives (a mono voice never allocates it).
-    snapshot: Vec<f64>,
+    /// One state per channel: see filters::OnePole's process().
+    chans: [ChannelState; 2],
     ring_len: usize,
     stages: usize,
+    /// The automatic base delay (samples per stage), fixed at the first sample.
+    auto_t0: Option<f64>,
+}
+
+/// One channel's delay rings and filter states.
+struct ChannelState {
+    /// `stages` rings of `ring_len` samples each, back to back.
+    pool: Vec<f64>,
     write_pos: usize,
     /// De-emphasis states and the inverse filters' previous inputs.
     p1: f64,
@@ -196,8 +202,39 @@ pub struct Steepen {
     w2: f64,
     /// The last internal pressure, to refill the stages when `stages` changes.
     last_p: f64,
-    /// The automatic base delay (samples per stage), fixed at the first sample.
-    auto_t0: Option<f64>,
+}
+
+impl ChannelState {
+    fn new() -> Self {
+        ChannelState {
+            pool: Vec::new(),
+            write_pos: 0,
+            p1: 0.0,
+            p2: 0.0,
+            w1: 0.0,
+            w2: 0.0,
+            last_p: 0.0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pool.fill(0.0);
+        self.write_pos = 0;
+        self.p1 = 0.0;
+        self.p2 = 0.0;
+        self.w1 = 0.0;
+        self.w2 = 0.0;
+        self.last_p = 0.0;
+    }
+
+    /// Refill the rings with the last internal pressure and restart the
+    /// inverse filters from it.
+    fn refill(&mut self) {
+        self.pool.fill(self.last_p);
+        self.w1 = self.last_p;
+        self.w2 = self.last_p;
+        self.write_pos = 0;
+    }
 }
 
 impl Default for Steepen {
@@ -210,23 +247,19 @@ impl Steepen {
     pub fn new() -> Self {
         Steepen {
             sample_rate: 44100.0,
-            pool: Vec::new(),
-            snapshot: Vec::new(),
+            chans: [ChannelState::new(), ChannelState::new()],
             ring_len: 0,
             stages: 0,
-            write_pos: 0,
-            p1: 0.0,
-            p2: 0.0,
-            w1: 0.0,
-            w2: 0.0,
-            last_p: 0.0,
             auto_t0: None,
         }
     }
 
-    /// Bytes of delay memory this node holds (after `init`).
+    /// Bytes of delay memory this node holds (after `init`), both channels.
     pub fn buffer_bytes(&self) -> usize {
-        self.pool.len() * core::mem::size_of::<f64>()
+        self.chans
+            .iter()
+            .map(|c| c.pool.len() * core::mem::size_of::<f64>())
+            .sum()
     }
 
     /// Re-partition the rings for `k` stages. They are refilled with the
@@ -235,22 +268,17 @@ impl Steepen {
     /// instead of an inverse-filtered click.
     fn set_stages(&mut self, k: usize) {
         self.stages = k;
-        self.ring_len = self.pool.len() / k;
-        self.pool.fill(self.last_p);
-        self.w1 = self.last_p;
-        self.w2 = self.last_p;
-        self.write_pos = 0;
+        self.ring_len = self.chans[0].pool.len() / k;
+        for c in &mut self.chans {
+            c.refill();
+        }
         self.auto_t0 = None;
     }
 
     fn clear_state(&mut self) {
-        self.pool.fill(0.0);
-        self.write_pos = 0;
-        self.p1 = 0.0;
-        self.p2 = 0.0;
-        self.w1 = 0.0;
-        self.w2 = 0.0;
-        self.last_p = 0.0;
+        for c in &mut self.chans {
+            c.clear();
+        }
         self.auto_t0 = None;
     }
 }
@@ -268,7 +296,10 @@ impl UGen for Steepen {
 
     fn init(&mut self, context: &ProcessContext) {
         self.sample_rate = context.sample_rate as f64;
-        self.pool = alloc::vec![0.0; steepen_pool_len(self.sample_rate)];
+        let len = steepen_pool_len(self.sample_rate);
+        for c in &mut self.chans {
+            c.pool = alloc::vec![0.0; len];
+        }
         self.stages = 0;
         self.clear_state();
     }
@@ -287,7 +318,7 @@ impl UGen for Steepen {
         let port = |k: usize| inputs.get(k).copied().flatten();
         let (freq_buf, drive_buf, k1_buf, k2_buf) = (port(1), port(2), port(3), port(4));
         let (stages_buf, ref_buf, amp_buf, tau_buf) = (port(5), port(6), port(7), port(8));
-        if self.pool.is_empty() {
+        if self.chans[0].pool.is_empty() {
             return;
         }
         let sr = self.sample_rate;
@@ -325,23 +356,14 @@ impl UGen for Steepen {
         // samples of displacement per unit drive, per unit p, at f0 = 1 Hz
         let disp_scale = sr * ref_hz / (smax * kf);
 
-        // Every channel starts from the same block-start state (see OnePole).
-        // A block can be longer than a ring, so the rings themselves are
-        // restored from a snapshot for every channel but the first one run;
-        // channel 0 runs last, so its end state is what persists.
-        let (p1_0, p2_0, w1_0, w2_0, pos0) = (self.p1, self.p2, self.w1, self.w2, self.write_pos);
-        let nch = output.num_channels();
-        if nch > 1 {
-            self.snapshot.clear();
-            self.snapshot.extend_from_slice(&self.pool);
-        }
-
-        for ch in (0..nch).rev() {
-            if nch > 1 && ch != nch - 1 {
-                self.pool.copy_from_slice(&self.snapshot);
-            }
-            let (mut p1, mut p2, mut w1, mut w2, mut pos) = (p1_0, p2_0, w1_0, w2_0, pos0);
-            let mut last_p = self.last_p;
+        // One state per channel: see filters::OnePole's process(). A third
+        // or later channel runs on channel 1's, as the delay-line kinds do.
+        let auto_t0 = &mut self.auto_t0;
+        for ch in 0..output.num_channels() {
+            let st = &mut self.chans[ch.min(1)];
+            let (mut p1, mut p2, mut w1, mut w2, mut pos) =
+                (st.p1, st.p2, st.w1, st.w2, st.write_pos);
+            let mut last_p = st.last_p;
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -373,7 +395,7 @@ impl UGen for Steepen {
                 let t0 = if tau > 0.0 {
                     (tau * sr * ref_hz / (kf * f0)).min(t0_max)
                 } else {
-                    *self.auto_t0.get_or_insert_with(|| {
+                    *auto_t0.get_or_insert_with(|| {
                         (STEEPEN_HEADROOM * sr / (TAU * f0 * kf))
                             .ceil()
                             .clamp(1.0, t0_max)
@@ -384,7 +406,7 @@ impl UGen for Steepen {
                 // K stages: write, then read t0 − gain·z samples back
                 let mut z = p;
                 for s in 0..stages {
-                    let ring = &mut self.pool[s * len..(s + 1) * len];
+                    let ring = &mut st.pool[s * len..(s + 1) * len];
                     ring[pos] = z;
                     let d = (t0 - gain * z).clamp(0.0, 2.0 * t0);
                     let di = d as usize;
@@ -411,16 +433,14 @@ impl UGen for Steepen {
                 *out_sample = if y.is_finite() { y } else { 0.0 };
             }
 
-            if ch == 0 {
-                // flush subnormals so a silent tail costs nothing
-                let flush = |v: f64| if v.abs() < 1e-30 { 0.0 } else { v };
-                self.p1 = flush(p1);
-                self.p2 = flush(p2);
-                self.w1 = flush(w1);
-                self.w2 = flush(w2);
-                self.last_p = flush(last_p);
-                self.write_pos = pos;
-            }
+            // flush subnormals so a silent tail costs nothing
+            let flush = |v: f64| if v.abs() < 1e-30 { 0.0 } else { v };
+            st.p1 = flush(p1);
+            st.p2 = flush(p2);
+            st.w1 = flush(w1);
+            st.w2 = flush(w2);
+            st.last_p = flush(last_p);
+            st.write_pos = pos;
         }
     }
 }

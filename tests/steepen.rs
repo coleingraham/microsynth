@@ -547,14 +547,15 @@ fn matches_the_delay_graph_it_replaces() {
 #[test]
 fn buffers_stay_under_64_kb_per_voice() {
     for &(sr, want) in &[
-        (44100.0f32, 12_768usize),
-        (48_000.0, 13_760),
-        (96_000.0, 25_984),
+        (44100.0f32, 25_536usize),
+        (48_000.0, 27_520),
+        (96_000.0, 51_968),
     ] {
+        // two channels' rings, each steepen_pool_len values
         let mut node = Steepen::new();
         node.init(&ProcessContext::new(sr, BLOCK));
         assert_eq!(node.buffer_bytes(), want, "{sr} Hz");
-        assert_eq!(node.buffer_bytes(), steepen_pool_len(sr as f64) * 8);
+        assert_eq!(node.buffer_bytes(), 2 * steepen_pool_len(sr as f64) * 8);
         assert!(node.buffer_bytes() <= 64 * 1024);
     }
 }
