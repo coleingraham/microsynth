@@ -130,9 +130,13 @@ fn finite_or(x: f32, default: f32) -> f64 {
 /// the largest advance it applies.
 /// - `tau ≤ 0` (default): automatic, a whole number of samples,
 ///   `t0 = ⌈HEADROOM · fs / (2π · f0 · K)⌉`, fixed at the first sample the
-///   node processes (channel 0's; a later glide keeps it). With a whole-sample base
-///   delay, `drive` 0 is an exact delay of `K · t0` samples and a small
-///   `drive` adds little interpolation loss.
+///   node processes (channel 0's; a later glide keeps it). The advance a
+///   note needs grows as `1/f0`, so after a glide **down** the fixed `t0`
+///   clamps the time shift: the steepening falls short and the harmonic
+///   envelope loses its smoothness (up to about 5 dB off at h3–h5 after
+///   C4 → C2 at `drive` 1). Use `tau > 0` for parts that glide down.
+///   With a whole-sample base delay, `drive` 0 is an exact delay of
+///   `K · t0` samples and a small `drive` adds little interpolation loss.
 /// - `tau > 0`: `t0 = tau · ref_hz / (K · f0)` seconds, the **total** base
 ///   delay `tau` at `ref_hz`, split over the stages and keytracked
 ///   continuously. A fractional `t0` puts the linear interpolation's
