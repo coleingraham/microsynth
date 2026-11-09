@@ -509,7 +509,7 @@ mod done_rule_tests {
 
     /// Kinds with an `in` port that deliberately stop silence there: their
     /// output keeps sounding after `in` falls silent (delay lines, reverbs,
-    /// spectral processors, a held sample), or `in` is not an audio path
+    /// a resonator bank, spectral processors, a held sample), or `in` is not an audio path
     /// out of the synth (`AudioIn`).
     const STOPS_SILENCE: &[&str] = &[
         "AudioIn",
@@ -518,6 +518,7 @@ mod done_rule_tests {
         "Delay",
         "FeedbackDelay",
         "GVerb",
+        "ModalBank",
         "PingPongDelay",
         "PitchShift",
         "SampleAndHold",
