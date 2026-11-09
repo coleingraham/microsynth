@@ -252,3 +252,29 @@ fn level_scales_and_phase_reset_restarts() {
         assert!((o[30 + k] - o[k]).abs() < 1e-5, "sample {k}");
     }
 }
+
+#[test]
+fn a_non_finite_freq_sample_does_not_silence_the_operator_for_good() {
+    let ctx = ProcessContext::new(SR, BLOCK);
+    let mut op = microsynth::ugens::fm::FmOp::new();
+    op.init(&ctx);
+    let mut freq = AudioBuffer::new(1, BLOCK);
+    freq.channel_mut(0).fill(440.0);
+    freq.channel_mut(0).samples_mut()[10] = f32::NAN;
+    let mut out = AudioBuffer::new(1, BLOCK);
+    op.process(&ctx, &[Some(&freq)], &mut out);
+    freq.channel_mut(0).fill(440.0);
+    let mut peak = 0.0f32;
+    for _ in 0..8 {
+        op.process(&ctx, &[Some(&freq)], &mut out);
+        peak = out
+            .channel(0)
+            .samples()
+            .iter()
+            .fold(peak, |m, v| m.max(v.abs()));
+    }
+    assert!(
+        peak > 0.9,
+        "operator stayed silent after a NaN freq: peak {peak}"
+    );
+}

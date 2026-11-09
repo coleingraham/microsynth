@@ -377,6 +377,11 @@ impl UGen for FmOp {
 
                 phase += freq * inv_sr;
                 phase -= phase.floor();
+                // A non-finite `freq` sample must not poison the phase for
+                // the rest of the note.
+                if !phase.is_finite() {
+                    phase = 0.0;
+                }
             }
 
             if ch == 0 {
