@@ -200,6 +200,10 @@ fn cross(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 /// chain; collinear points on an edge are left out).
 fn convex_hull(p: &[(f64, f64)]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..p.len()).collect();
+    if p.len() < 2 {
+        // a single point is its own hull (the chain below would drop it)
+        return idx;
+    }
     idx.sort_by(|&i, &j| {
         p[i].partial_cmp(&p[j])
             .unwrap_or(core::cmp::Ordering::Equal)
@@ -340,7 +344,9 @@ impl Mesh {
                     let step = step.max(MIN_STEP);
                     let mut c: Vec<f64> = points[..n]
                         .iter()
-                        .map(|p| if axis == 1 { p.0 } else { p.1 })
+                        // the curve is flat outside [0, 1]: a coordinate
+                        // beyond it adds no shape, only knots
+                        .map(|p| (if axis == 1 { p.0 } else { p.1 }).clamp(0.0, 1.0))
                         .chain([0.0, 1.0])
                         .collect();
                     c.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
