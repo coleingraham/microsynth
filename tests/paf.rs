@@ -181,7 +181,7 @@ fn the_minus_6_db_bandwidth_is_bw() {
             100.0 * (w / bw - 1.0)
         );
         assert!(
-            (w / bw - 1.0).abs() < 0.15,
+            (w / bw - 1.0).abs() < 0.02,
             "f0 {f0} center {center} bw {bw}: −6 dB width {w:.1}"
         );
     }
