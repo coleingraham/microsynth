@@ -439,3 +439,57 @@ fn a_pitch_glide_keeps_the_ringing_amplitude() {
         );
     }
 }
+
+#[test]
+fn each_channel_rings_only_from_its_own_input() {
+    // Left struck, right silent: the right channel must stay silent across
+    // block boundaries (one resonator state per channel), and the left must
+    // equal a mono bank struck the same way.
+    let sr = 44100.0f32;
+    let ctx = ProcessContext::new(sr, BLOCK);
+    let n_ports = modal_port(MODAL_MAX_MODES - 1, 2) + 1;
+    let konst = |chans: usize, v: f32| {
+        let mut b = AudioBuffer::new(chans, BLOCK);
+        for c in 0..chans {
+            b.channel_mut(c).samples_mut().fill(v);
+        }
+        b
+    };
+    let (f2, r2, d2) = (konst(2, 440.0), konst(2, 1.0), konst(2, 1.0));
+    let (f1, r1, d1) = (konst(1, 440.0), konst(1, 1.0), konst(1, 1.0));
+    let mut stereo = ModalBank::new();
+    let mut mono = ModalBank::new();
+    stereo.init(&ctx);
+    mono.init(&ctx);
+    for blk in 0..8 {
+        let mut x2 = AudioBuffer::new(2, BLOCK);
+        let mut x1 = AudioBuffer::new(1, BLOCK);
+        if blk == 0 {
+            x2.channel_mut(0).samples_mut()[0] = 1.0;
+            x1.channel_mut(0).samples_mut()[0] = 1.0;
+        }
+        let mut ins2: Vec<Option<&AudioBuffer>> = vec![None; n_ports];
+        ins2[0] = Some(&x2);
+        ins2[1] = Some(&f2);
+        ins2[modal_port(0, 0)] = Some(&r2);
+        ins2[modal_port(0, 2)] = Some(&d2);
+        let mut ins1: Vec<Option<&AudioBuffer>> = vec![None; n_ports];
+        ins1[0] = Some(&x1);
+        ins1[1] = Some(&f1);
+        ins1[modal_port(0, 0)] = Some(&r1);
+        ins1[modal_port(0, 2)] = Some(&d1);
+        let mut o2 = AudioBuffer::new(2, BLOCK);
+        let mut o1 = AudioBuffer::new(1, BLOCK);
+        stereo.process(&ctx, &ins2, &mut o2);
+        mono.process(&ctx, &ins1, &mut o1);
+        assert_eq!(
+            o2.channel(0).samples(),
+            o1.channel(0).samples(),
+            "block {blk}: left"
+        );
+        assert!(
+            o2.channel(1).samples().iter().all(|&v| v == 0.0),
+            "block {blk}: the silent right channel rings"
+        );
+    }
+}

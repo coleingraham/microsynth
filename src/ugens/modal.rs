@@ -118,8 +118,9 @@ const DONE_LEVEL: f64 = 1e-6;
 /// passes no silence from its input to its output.
 pub struct ModalBank {
     sample_rate: f32,
-    re: [f64; MODAL_MAX_MODES],
-    im: [f64; MODAL_MAX_MODES],
+    /// Resonator state, one per channel (left, right).
+    re: [[f64; MODAL_MAX_MODES]; 2],
+    im: [[f64; MODAL_MAX_MODES]; 2],
     excited: bool,
     done: bool,
 }
@@ -134,8 +135,8 @@ impl ModalBank {
     pub fn new() -> Self {
         ModalBank {
             sample_rate: 44100.0,
-            re: [0.0; MODAL_MAX_MODES],
-            im: [0.0; MODAL_MAX_MODES],
+            re: [[0.0; MODAL_MAX_MODES]; 2],
+            im: [[0.0; MODAL_MAX_MODES]; 2],
             excited: false,
             done: false,
         }
@@ -182,8 +183,8 @@ impl UGen for ModalBank {
     }
 
     fn reset(&mut self) {
-        self.re = [0.0; MODAL_MAX_MODES];
-        self.im = [0.0; MODAL_MAX_MODES];
+        self.re = [[0.0; MODAL_MAX_MODES]; 2];
+        self.im = [[0.0; MODAL_MAX_MODES]; 2];
         self.excited = false;
         self.done = false;
     }
@@ -200,12 +201,15 @@ impl UGen for ModalBank {
             (port(1), port(2), port(3), port(4), port(5));
         let sr = self.sample_rate as f64;
 
-        // Every channel starts from the same block-start state (see FmOsc).
-        let (re0, im0, excited0) = (self.re, self.im, self.excited);
+        // One resonator state per channel, so a channel rings only from its
+        // own input; the done flag covers every channel.
+        let mut excited = self.excited;
+        let mut heard_input = false;
+        let mut level = 0.0f64;
 
         for ch in 0..output.num_channels() {
-            let (mut re, mut im, mut excited) = (re0, im0, excited0);
-            let mut heard_input = false;
+            let slot = ch.min(1);
+            let (mut re, mut im) = (self.re[slot], self.im[slot]);
             let mut coef = [ModeCoef::default(); MODAL_MAX_MODES];
             let out = output.channel_mut(ch).samples_mut();
             let len = out.len();
@@ -279,7 +283,6 @@ impl UGen for ModalBank {
             }
 
             // Flush denormal-range tails and anything non-finite.
-            let mut level = 0.0f64;
             for k in 0..MODAL_MAX_MODES {
                 if !(re[k].is_finite() && im[k].is_finite()) {
                     re[k] = 0.0;
@@ -292,15 +295,16 @@ impl UGen for ModalBank {
                 }
                 level = level.max(m);
             }
-            excited |= heard_input;
-
-            if ch == 0 {
-                self.re = re;
-                self.im = im;
-                self.excited = excited;
-                self.done = excited && !heard_input && level < DONE_LEVEL;
+            if let Some(r) = self.re.get_mut(ch) {
+                *r = re;
+            }
+            if let Some(i) = self.im.get_mut(ch) {
+                *i = im;
             }
         }
+        excited |= heard_input;
+        self.excited = excited;
+        self.done = excited && !heard_input && level < DONE_LEVEL;
     }
 
     fn is_done(&self) -> bool {
