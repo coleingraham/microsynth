@@ -79,17 +79,18 @@ const NYQUIST_GUARD: f64 = 0.49;
 ///
 /// Inputs (all optional, all audio-rate):
 /// - `freq`: the fundamental in Hz (default 220), clamped to
-///   0.01 Hz … 0.49 · fs.
+///   0.01 Hz … 0.49 · fs. At `freq ≤ 0` the output is 0 and the phase
+///   holds, rather than a full-bandwidth tone at `center`.
 /// - `center`: formant centre in Hz (default 800), clamped to 0 … 0.49 · fs;
 ///   audio-rate, so a vowel can morph or a formant sweep.
 /// - `bw`: −6 dB bandwidth in Hz (default 100); `bw ≤ 0` leaves the bare
 ///   carriers (a sine at a harmonic `center`, two harmonics between).
 /// - `amp`: the formant's peak level (default 1). Meant for an envelope or a
-///   per-formant level.
+///   per-formant level; a non-finite `amp` reads as 0.
 /// - `phase_reset`: on a rising edge (previous sample `<= 0`, this one
 ///   `> 0`) the fundamental's phase restarts at 0.
 ///
-/// Non-finite inputs read as their defaults.
+/// Other non-finite inputs read as their defaults.
 pub struct Paf {
     phase: f64,
     prev_reset: f32,
@@ -177,16 +178,23 @@ impl UGen for Paf {
             let out = output.channel_mut(ch).samples_mut();
 
             for (i, out_sample) in out.iter_mut().enumerate() {
-                let f0 = finite_or(read_input(freq_buf, ch, i, 220.0), 220.0).clamp(F0_MIN, top);
+                let f0 = finite_or(read_input(freq_buf, ch, i, 220.0), 220.0);
                 let center = finite_or(read_input(center_buf, ch, i, 800.0), 800.0).clamp(0.0, top);
                 let bw = finite_or(read_input(bw_buf, ch, i, 100.0), 100.0);
-                let amp = finite_or(read_input(amp_buf, ch, i, 1.0), 1.0);
+                // a VCA port: a non-finite level silences rather than opens
+                let amp = finite_or(read_input(amp_buf, ch, i, 1.0), 0.0);
                 let reset = read_input(reset_buf, ch, i, 0.0);
 
                 if reset > 0.0 && prev_reset <= 0.0 {
                     phase = 0.0;
                 }
                 prev_reset = reset;
+
+                if f0 <= 0.0 {
+                    *out_sample = 0.0;
+                    continue;
+                }
+                let f0 = f0.clamp(F0_MIN, top);
 
                 if f0 != last_f0 || bw != last_bw {
                     r = paf_ratio(f0, bw);

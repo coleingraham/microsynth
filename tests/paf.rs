@@ -368,7 +368,7 @@ fn bounded_and_finite_for_extreme_inputs() {
             }
         }
     }
-    // non-finite inputs read as their defaults (220 Hz, 800 Hz, 100 Hz, 1)
+    // non-finite freq, center and bw read as their defaults (220, 800, 100 Hz)
     let mut node = Paf::new();
     let ctx = ProcessContext::new(SR, BLOCK);
     node.init(&ctx);
@@ -383,7 +383,7 @@ fn bounded_and_finite_for_extreme_inputs() {
     for _ in 0..50 {
         node.process(
             &ctx,
-            &[Some(&bad), Some(&bad), Some(&bad), Some(&bad), None],
+            &[Some(&bad), Some(&bad), Some(&bad), None, None],
             &mut out,
         );
         reference.process(&ctx, &[None, None, None, None, None], &mut want);
@@ -402,6 +402,24 @@ fn bounded_and_finite_for_extreme_inputs() {
             }
         }
     }
+}
+
+#[test]
+fn a_non_positive_freq_or_a_non_finite_amp_is_silent() {
+    for f0 in ["0.0", "(0.0 - 5.0)"] {
+        let x = render(&format!("synthdef z = paf {f0} 800.0 100.0 1.0 0.0"), 0.05);
+        assert!(x.iter().all(|&v| v == 0.0), "freq {f0} is not silent");
+    }
+    let ctx = ProcessContext::new(SR, BLOCK);
+    let mut node = Paf::new();
+    node.init(&ctx);
+    let mut amp = AudioBuffer::new(1, BLOCK);
+    let mut out = AudioBuffer::new(1, BLOCK);
+    for (n, v) in amp.channel_mut(0).samples_mut().iter_mut().enumerate() {
+        *v = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][n % 3];
+    }
+    node.process(&ctx, &[None, None, None, Some(&amp), None], &mut out);
+    assert!(out.channel(0).samples().iter().all(|&v| v == 0.0));
 }
 
 #[test]
