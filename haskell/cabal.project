@@ -1,1 +1,5 @@
 packages: .
+
+-- Plan the test suite with the library, so `cabal test all` builds it or
+-- reports why the solver could not, instead of dropping it from the plan.
+tests: True
