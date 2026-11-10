@@ -1,8 +1,9 @@
-//! `plane2d` edge cases: one valued vertex, a vertex far off the axis.
+//! `plane2d` edge cases: one valued vertex, a vertex far off the axis, a
+//! position far outside the mesh.
 use microsynth::node::UGen;
 use microsynth::ugens::{
-    PLANE_AXIS, PLANE_HI, PLANE_LO, PLANE_N, PLANE_PORTS, PLANE_STEP, Plane2d, plane_pack_triangle,
-    plane_point_port, plane_triangle_port, plane_value_port,
+    PLANE_AXIS, PLANE_BLEND, PLANE_HI, PLANE_LO, PLANE_N, PLANE_PORTS, PLANE_STEP, Plane2d,
+    plane_pack_triangle, plane_point_port, plane_triangle_port, plane_value_port,
 };
 use microsynth::*;
 
@@ -86,4 +87,34 @@ fn a_far_vertex_coordinate_does_not_explode_the_axis_knots() {
     let want = 2f32.powf(0.5);
     assert!((v - want).abs() < 1e-3 * want, "{v} vs {want}");
     assert!(dt.as_millis() < 50, "first block took {dt:?}");
+}
+
+#[test]
+fn a_position_far_outside_the_mesh_reads_the_bounding_box_edge() {
+    // one triangle (0,0) (1,0) (0,1) carrying v = 2x + 1: linear, so an
+    // unclamped position would extrapolate without bound
+    let mut c = vec![
+        (PLANE_N, 3.0),
+        (plane_value_port(0), 1.0),
+        (plane_value_port(1), 3.0),
+        (plane_value_port(2), 1.0),
+        (plane_point_port(0, 0), 0.0),
+        (plane_point_port(0, 1), 0.0),
+        (plane_point_port(1, 0), 1.0),
+        (plane_point_port(1, 1), 0.0),
+        (plane_point_port(2, 0), 0.0),
+        (plane_point_port(2, 1), 1.0),
+    ];
+    c.push((plane_triangle_port(0), plane_pack_triangle(0, 1, 2)));
+    for blend in [0.0f32, 4000.0] {
+        let mut c = c.clone();
+        c.push((PLANE_BLEND, blend));
+        let at = |x: f32, y: f32| run(x, y, &c).0;
+        assert_eq!(at(10.0, 0.0), at(1.0, 0.0), "blend {blend}");
+        assert!((at(10.0, 0.0) - 3.0).abs() < 1e-6, "blend {blend}");
+        assert_eq!(at(-5.0, -5.0), at(0.0, 0.0), "blend {blend}");
+        assert!((at(1.0e6, 0.25) - 3.0).abs() < 1e-6, "blend {blend}");
+        // inside the box nothing changes
+        assert!((at(0.25, 0.25) - 1.5).abs() < 1e-6, "blend {blend}");
+    }
 }

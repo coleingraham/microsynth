@@ -92,8 +92,8 @@ pub const PLANE_KNOT_SLACK: f64 = 1.0e-6;
 /// across shared edges.
 ///
 /// - **Containing triangle.** With `blend` 0 (the default), the triangle
-///   whose smallest `λ` is largest (the containing one; outside the mesh the
-///   nearest, extrapolated). With `blend` `K > 0`, every triangle gets the
+///   whose smallest `λ` is largest (the containing one; outside the mesh
+///   but inside its bounding box the nearest, extrapolated). With `blend` `K > 0`, every triangle gets the
 ///   weight `clip(1 + K · min λ, 0, 1)` (1 inside it, 0 beyond `1/K` outside)
 ///   and the triangles' interpolations are averaged by those weights. On a
 ///   shared edge the triangles agree, so this changes the output only within
@@ -114,7 +114,10 @@ pub const PLANE_KNOT_SLACK: f64 = 1.0e-6;
 /// # Ports
 ///
 /// - `x`, `y` (required): the position. Read every sample; non-finite reads
-///   as 0.
+///   as 0. The position is clamped to the bounding box of the mesh's points
+///   (those its triangles use) before interpolation, so a control that
+///   overshoots reads the value at the box's edge instead of an unbounded
+///   extrapolation.
 /// - `n`: the number of valued vertices, 0 … 16 (default 0: output 0).
 /// - `blend`: see above (default 0).
 /// - `axis`, `lo`, `hi`, `step`: see above (defaults 0, 1, 1, 0).
@@ -165,6 +168,9 @@ struct Mesh {
     knots: Vec<(f64, f64)>,
     /// `(ln lo, ln hi)` for the exact exponential (`step` 0).
     ln_span: Option<(f64, f64)>,
+    /// The triangles' points' bounding box `(x min, x max, y min, y max)`;
+    /// positions are clamped to it.
+    bbox: (f64, f64, f64, f64),
 }
 
 impl Default for Plane2d {
@@ -366,7 +372,24 @@ impl Mesh {
                 }
             }
         }
+        let mut bbox = (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for &(idx, _) in &triangles {
+            for &(px, py) in idx.iter().map(|&i| &points[i]) {
+                bbox = (
+                    bbox.0.min(px),
+                    bbox.1.max(px),
+                    bbox.2.min(py),
+                    bbox.3.max(py),
+                );
+            }
+        }
         Mesh {
+            bbox,
             blend,
             axis,
             triangles,
@@ -403,6 +426,9 @@ impl Mesh {
         if self.triangles.is_empty() {
             return 0.0;
         }
+        // no extrapolation beyond the mesh's bounding box
+        let x = x.clamp(self.bbox.0, self.bbox.1);
+        let y = y.clamp(self.bbox.2, self.bbox.3);
         let lambdas = |co: &[(f64, f64, f64); 3]| {
             [
                 co[0].0 * x + co[0].1 * y + co[0].2,
