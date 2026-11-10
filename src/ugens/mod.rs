@@ -71,6 +71,7 @@ pub mod modulation;
 pub mod noise;
 pub mod oscillators;
 pub mod partials;
+pub mod partials_blend;
 pub mod physical;
 pub mod plane;
 pub mod playbuf;
@@ -99,6 +100,7 @@ pub use modulation::*;
 pub use noise::*;
 pub use oscillators::*;
 pub use partials::PartialsNoise;
+pub use partials_blend::PartialsBlend;
 pub use physical::*;
 pub use plane::*;
 pub use playbuf::*;
@@ -266,7 +268,9 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 /// wasm build) and is a separate, real gap for a table-bound kind used
 /// natively via the CLI, not covered by MOT-640's wasm-reachability scope.
 ///
-/// Currently registers `partialsNoise` (`ugens::partials`, MOT-636).
+/// Currently registers `partialsNoise` (`ugens::partials`, MOT-636) and
+/// `partialsBlend` (`ugens::partials_blend`).
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials::register(reg);
+    partials_blend::register(reg);
 }
