@@ -296,7 +296,8 @@ impl Synth {
 /// propagates through their `in` port only, never through a parameter port.
 ///
 /// Anything not listed here (and not `Mul`/`Div`/`Neg`/`Add`/`Sub`, or
-/// `FmOp`, which passes silence through its `level` port) stops the
+/// `FmOp` and `Paf`, which pass silence through their `level` and `amp`
+/// ports) stops the
 /// propagation: oscillators and physical models (their inputs are
 /// parameters), envelopes, and nodes that keep sounding after their input
 /// stops (`CombFilter`, `ModalBank`, `Delay`, `FeedbackDelay`,
@@ -416,6 +417,9 @@ impl DonePlan {
                 // so a silent `level` (its VCA envelope) silences it. Its
                 // other ports (`freq`, `pm`, ...) are parameters.
                 "FmOp" => (SilenceRule::Any, port_named("level")),
+                // A formant's output is `amp * (..)`, likewise: a silent
+                // `amp` silences it; `freq`, `center`, `bw` are parameters.
+                "Paf" => (SilenceRule::Any, port_named("amp")),
                 name if SILENCE_PASS_THROUGH.contains(&name) => {
                     (SilenceRule::Any, port_named("in"))
                 }

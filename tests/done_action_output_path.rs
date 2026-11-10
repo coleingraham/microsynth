@@ -314,3 +314,35 @@ fn a_modal_bank_under_a_held_vca_is_freed_by_the_vca() {
         "releasing the VCA frees a bank that is still ringing"
     );
 }
+
+#[test]
+fn paf_amp_envelope_frees_the_voice() {
+    // A formant's `amp` is its level: a finished perc there silences it.
+    let mut rig = Rig::new("synthdef v =\n  paf 220.0 730.0 160.0 (expPerc 0.001 0.05) 0.0");
+    let (peak, freed) = rig.run(1.0);
+    assert!(peak > 0.1);
+    assert!(
+        freed,
+        "the formant's amp envelope finishing should free the voice"
+    );
+}
+
+#[test]
+fn a_paf_centre_or_bandwidth_envelope_does_not_free_a_held_voice() {
+    // A one-shot sweep on `center` (a consonant-like onset) or on `bw` ends
+    // while the voice, gated by an asr on `amp`, keeps sounding.
+    let mut rig = Rig::new(
+        "synthdef v gate=1.0 =\n  \
+         paf 220.0 (700.0 + expPerc 0.001 0.02 * 1500.0) (100.0 + expPerc 0.001 0.02 * 300.0) (asr gate 0.01 0.05) 0.0",
+    );
+    let (peak, freed) = rig.run(0.5);
+    assert!(peak > 0.1);
+    assert!(rig.any_node_done(), "the sweeps' percs have finished");
+    assert!(
+        !freed,
+        "a finished centre/bandwidth envelope must not free the voice"
+    );
+    rig.release();
+    let (_, freed) = rig.run(0.5);
+    assert!(freed, "releasing the asr on amp frees it");
+}
