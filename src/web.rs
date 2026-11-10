@@ -951,7 +951,10 @@ pub extern "C" fn ms_free_voice(voice_id: u64) {
     engine.prepare();
 }
 
-/// Free all voices that have finished (e.g. envelope completed).
+/// Free all voices that have finished: a done-reporting node on the voice's
+/// output path (e.g. its amp envelope) has completed. A one-shot on a side
+/// chain (an excitation burst into a delay line, a pitch envelope) does not
+/// free the voice. See `Engine::free_done_synths` for the rule.
 /// Returns the number of voices freed.
 #[unsafe(no_mangle)]
 pub extern "C" fn ms_free_done() -> u32 {
