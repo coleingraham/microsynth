@@ -28,7 +28,11 @@
 //! `noise_gain · sqrt(Σ_k (gain_k · c_k,j)²)`, which gives the same band
 //! power as the separate banks (it is the same noise in distribution, not
 //! sample for sample). The band placement, unit-variance source and per-band
-//! power compensation are `partialsNoise`'s.
+//! power compensation are `partialsNoise`'s. This assumes the banks' noise is
+//! independent, the engine's default (each node gets its own seed); banks
+//! made coherent with `AudioGraph::reseed_node_noise` add in amplitude, so
+//! their blend is up to `10·log10 K` dB quieter in noise (3 dB at a 50/50
+//! crossfade of two equal bands).
 //!
 //! **Equivalence.** Against `K` `partialsNoise` banks bound to the `K`
 //! single-channel tables and summed, the partial half differs only by
