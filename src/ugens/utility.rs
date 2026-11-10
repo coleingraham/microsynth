@@ -131,8 +131,8 @@ impl UGen for Mix {
 ///
 /// Inputs: in (signal to sample), trig (trigger signal).
 pub struct SampleAndHold {
-    held_value: f32,
-    prev_trig: f32,
+    held_value: [f32; 2],
+    prev_trig: [f32; 2],
 }
 
 impl Default for SampleAndHold {
@@ -144,8 +144,8 @@ impl Default for SampleAndHold {
 impl SampleAndHold {
     pub fn new() -> Self {
         SampleAndHold {
-            held_value: 0.0,
-            prev_trig: 0.0,
+            held_value: [0.0; 2],
+            prev_trig: [0.0; 2],
         }
     }
 }
@@ -156,8 +156,8 @@ impl UGen for SampleAndHold {
     fn init(&mut self, _context: &ProcessContext) {}
 
     fn reset(&mut self) {
-        self.held_value = 0.0;
-        self.prev_trig = 0.0;
+        self.held_value = [0.0; 2];
+        self.prev_trig = [0.0; 2];
     }
 
     fn process(
@@ -169,15 +169,10 @@ impl UGen for SampleAndHold {
         let in_buf = require_input(inputs, 0, "SampleAndHold", "in");
         let trig_buf = require_input(inputs, 1, "SampleAndHold", "trig");
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let held_start = self.held_value;
-        let prev_trig_start = self.prev_trig;
-
+        // One state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut held = held_start;
-            let mut prev_trig = prev_trig_start;
+            let mut held = self.held_value[ch.min(1)];
+            let mut prev_trig = self.prev_trig[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let trig_ch = channel_wrapped(trig_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
@@ -192,9 +187,11 @@ impl UGen for SampleAndHold {
                 prev_trig = trig;
             }
 
-            if ch == 0 {
-                self.held_value = held;
-                self.prev_trig = prev_trig;
+            if let Some(slot) = self.held_value.get_mut(ch) {
+                *slot = held;
+            }
+            if let Some(slot) = self.prev_trig.get_mut(ch) {
+                *slot = prev_trig;
             }
         }
     }
@@ -301,7 +298,7 @@ impl UGen for Impulse {
 /// Smoothly follows the input with the given time constant.
 /// Useful for avoiding clicks when changing parameters.
 pub struct Lag {
-    y1: f32,
+    y1: [f32; 2],
     sample_rate: f32,
 }
 
@@ -314,7 +311,7 @@ impl Default for Lag {
 impl Lag {
     pub fn new() -> Self {
         Lag {
-            y1: 0.0,
+            y1: [0.0; 2],
             sample_rate: 44100.0,
         }
     }
@@ -333,7 +330,7 @@ impl UGen for Lag {
     }
 
     fn reset(&mut self) {
-        self.y1 = 0.0;
+        self.y1 = [0.0; 2];
     }
 
     fn process(
@@ -345,13 +342,9 @@ impl UGen for Lag {
         let in_buf = require_input(inputs, 0, "Lag", "in");
         let time_buf = inputs.get(1).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let y1_start = self.y1;
-
+        // One state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut y1 = y1_start;
+            let mut y1 = self.y1[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -369,8 +362,8 @@ impl UGen for Lag {
                 out[i] = y1;
             }
 
-            if ch == 0 {
-                self.y1 = y1;
+            if let Some(slot) = self.y1.get_mut(ch) {
+                *slot = y1;
             }
         }
     }

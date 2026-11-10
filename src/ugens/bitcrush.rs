@@ -23,8 +23,8 @@ use crate::node::UGen;
 ///   At 1.0 = no reduction. At 4.0 the effective sample rate is 1/4th,
 ///   producing aliasing and staircase artifacts.
 pub struct Bitcrusher {
-    hold_sample: f32,
-    hold_counter: f32,
+    hold_sample: [f32; 2],
+    hold_counter: [f32; 2],
 }
 
 impl Default for Bitcrusher {
@@ -36,8 +36,8 @@ impl Default for Bitcrusher {
 impl Bitcrusher {
     pub fn new() -> Self {
         Bitcrusher {
-            hold_sample: 0.0,
-            hold_counter: 0.0,
+            hold_sample: [0.0; 2],
+            hold_counter: [0.0; 2],
         }
     }
 }
@@ -54,8 +54,8 @@ impl UGen for Bitcrusher {
     fn init(&mut self, _context: &ProcessContext) {}
 
     fn reset(&mut self) {
-        self.hold_sample = 0.0;
-        self.hold_counter = 0.0;
+        self.hold_sample = [0.0; 2];
+        self.hold_counter = [0.0; 2];
     }
 
     fn process(
@@ -68,15 +68,10 @@ impl UGen for Bitcrusher {
         let bits_buf = inputs.get(1).copied().flatten();
         let ds_buf = inputs.get(2).copied().flatten();
 
-        // Snapshot once, before the channel loop: every channel must start
-        // from the same block-start state (see filters::OnePole's
-        // process() comment for the read-back-inside-loop bug this avoids).
-        let hold_start = self.hold_sample;
-        let counter_start = self.hold_counter;
-
+        // One state per channel: see filters::OnePole's process().
         for ch in 0..output.num_channels() {
-            let mut hold = hold_start;
-            let mut counter = counter_start;
+            let mut hold = self.hold_sample[ch.min(1)];
+            let mut counter = self.hold_counter[ch.min(1)];
             let in_ch = channel_wrapped(in_buf, ch);
             let out = output.channel_mut(ch).samples_mut();
 
@@ -100,9 +95,11 @@ impl UGen for Bitcrusher {
                 out[i] = hold;
             }
 
-            if ch == 0 {
-                self.hold_sample = hold;
-                self.hold_counter = counter;
+            if let Some(slot) = self.hold_sample.get_mut(ch) {
+                *slot = hold;
+            }
+            if let Some(slot) = self.hold_counter.get_mut(ch) {
+                *slot = counter;
             }
         }
     }
