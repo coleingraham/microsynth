@@ -327,6 +327,9 @@ const SILENCE_PASS_THROUGH: &[&str] = &[
     "Flanger",
     "Phaser",
     "WowFlutter",
+    // a few milliseconds of delay at most (its rings hold only the
+    // largest time shift), so its input's silence reaches its output
+    "Steepen",
     "StereoWidth",
     "Pan2",
     "Mix",

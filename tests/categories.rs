@@ -63,6 +63,7 @@ fn registered_ugens_have_expected_categories() {
         ("softClip", Effect),
         ("overdrive", Effect),
         ("waveFolder", Effect),
+        ("steepen", Effect),
         ("chorus", Effect),
         ("flanger", Effect),
         ("phaser", Effect),
