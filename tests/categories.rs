@@ -80,6 +80,7 @@ fn registered_ugens_have_expected_categories() {
         ("clip", Utility),
         ("impulse", Utility),
         ("lfo", Utility),
+        ("plane2d", Utility),
         ("audioIn", Utility),
     ];
     for &(name, expected) in cases {

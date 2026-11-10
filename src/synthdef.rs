@@ -302,7 +302,8 @@ impl Synth {
 /// parameters), envelopes, and nodes that keep sounding after their input
 /// stops (`CombFilter`, `ModalBank`, `Delay`, `FeedbackDelay`,
 /// `PingPongDelay`, `GVerb`, `Convolution`, the spectral processors,
-/// `PitchShift`, `SampleAndHold`).
+/// `PitchShift`, `SampleAndHold`), and `Plane2d`, whose output is a value
+/// of its position (the interpolation at a silent position is not 0).
 /// A new pass-through UGen is added here deliberately; leaving one out only
 /// means a done node upstream of it no longer frees the voice.
 const SILENCE_PASS_THROUGH: &[&str] = &[

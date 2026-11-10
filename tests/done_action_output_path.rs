@@ -377,3 +377,61 @@ fn a_finished_drive_envelope_does_not_free_a_held_voice() {
     let (_, freed) = rig.run(0.5);
     assert!(freed, "releasing the asr frees it");
 }
+
+/// A `plane2d` call over one triangle (0,0) (1,0) (0,1) with values
+/// `v0 v1 v2`, at position `x y` (DSL expressions).
+fn plane(x: &str, y: &str, v: [f32; 3]) -> String {
+    let mut args = vec![
+        x.to_string(),
+        y.to_string(),
+        "3.0".into(),
+        "0.0".into(),
+        "0.0".into(),
+        "1.0".into(),
+        "1.0".into(),
+        "0.0".into(),
+    ];
+    args.extend(v.iter().map(|x| format!("{x:?}")));
+    args.extend((3..16).map(|_| "0.0".to_string()));
+    let pts = [0.0f32, 0.0, 1.0, 0.0, 0.0, 1.0];
+    args.extend(pts.iter().map(|x| format!("{x:?}")));
+    args.extend((6..64).map(|_| "0.0".to_string()));
+    // tri0 = 0 + 32 * 1 + 1024 * 2
+    args.push("2080.0".into());
+    format!("(plane2d {})", args.join(" "))
+}
+
+#[test]
+fn a_finished_envelope_on_a_plane_position_does_not_free_a_held_voice() {
+    // the position glides on a one-shot; the plane's output is a value of
+    // the position, never silence, so only the asr frees the voice
+    let src = format!(
+        "synthdef v gate=1.0 =\n  sinOsc 220.0 0.0 * {} * asr gate 0.01 0.05",
+        plane("(perc 0.001 0.02)", "0.2", [0.5, 1.0, 0.8])
+    );
+    let mut rig = Rig::new(&src);
+    let (peak, freed) = rig.run(0.5);
+    assert!(peak > 0.3, "{peak}");
+    assert!(rig.any_node_done(), "the position's perc has finished");
+    assert!(
+        !freed,
+        "a finished position envelope must not free the voice"
+    );
+    rig.release();
+    let (_, freed) = rig.run(0.5);
+    assert!(freed, "releasing the asr frees it");
+}
+
+#[test]
+fn a_plane_level_times_a_finished_envelope_frees_the_voice() {
+    // a product is silent when either factor is: the plane level beside a
+    // finished VCA envelope does not hold the voice open
+    let src = format!(
+        "synthdef v =\n  sinOsc 220.0 0.0 * {} * perc 0.001 0.05",
+        plane("0.3", "0.3", [0.5, 1.0, 0.8])
+    );
+    let mut rig = Rig::new(&src);
+    let (peak, freed) = rig.run(1.0);
+    assert!(peak > 0.1, "{peak}");
+    assert!(freed, "the perc VCA finishing should free the voice");
+}
