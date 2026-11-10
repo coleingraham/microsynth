@@ -299,8 +299,9 @@ impl Synth {
 /// `FmOp`, which passes silence through its `level` port) stops the
 /// propagation: oscillators and physical models (their inputs are
 /// parameters), envelopes, and nodes that keep sounding after their input
-/// stops (`CombFilter`, `Delay`, `FeedbackDelay`, `PingPongDelay`, `GVerb`,
-/// `Convolution`, the spectral processors, `PitchShift`, `SampleAndHold`).
+/// stops (`CombFilter`, `ModalBank`, `Delay`, `FeedbackDelay`,
+/// `PingPongDelay`, `GVerb`, `Convolution`, the spectral processors,
+/// `PitchShift`, `SampleAndHold`).
 /// A new pass-through UGen is added here deliberately; leaving one out only
 /// means a done node upstream of it no longer frees the voice.
 const SILENCE_PASS_THROUGH: &[&str] = &[
@@ -508,7 +509,7 @@ mod done_rule_tests {
 
     /// Kinds with an `in` port that deliberately stop silence there: their
     /// output keeps sounding after `in` falls silent (delay lines, reverbs,
-    /// spectral processors, a held sample), or `in` is not an audio path
+    /// a resonator bank, spectral processors, a held sample), or `in` is not an audio path
     /// out of the synth (`AudioIn`).
     const STOPS_SILENCE: &[&str] = &[
         "AudioIn",
@@ -517,6 +518,7 @@ mod done_rule_tests {
         "Delay",
         "FeedbackDelay",
         "GVerb",
+        "ModalBank",
         "PingPongDelay",
         "PitchShift",
         "SampleAndHold",

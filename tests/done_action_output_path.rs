@@ -280,3 +280,37 @@ fn fm_op_modulator_envelope_does_not_free_a_held_voice() {
     let (_, freed) = rig.run(0.5);
     assert!(freed, "releasing the carrier's asr frees it");
 }
+
+#[test]
+fn excitation_into_a_modal_bank_does_not_free_the_voice_until_the_modes_ring_out() {
+    // A 4 ms noise burst strikes a modal bar; the bank keeps ringing after the
+    // burst's envelope is done, so the voice stays until the bank itself is
+    // done (every mode below -120 dBFS; T60 0.3 s here).
+    let mut rig = Rig::new(
+        "synthdef bar = modalBank (whiteNoise * perc 0.0005 0.004) 440.0 1.0 0.0 1.0 0.0 \
+         1.0 0.5 0.3 2.756 0.3 0.15 5.404 0.2 0.08",
+    );
+    let (peak, freed) = rig.run(0.1);
+    assert!(peak > 1e-3, "the bar rings, peak {peak}");
+    assert!(rig.any_node_done(), "the burst's perc has finished");
+    assert!(!freed, "a finished excitation must not free a ringing bank");
+    let (_, freed) = rig.run(1.0);
+    assert!(freed, "the bank reports done once its modes ring out");
+}
+
+#[test]
+fn a_modal_bank_under_a_held_vca_is_freed_by_the_vca() {
+    let mut rig = Rig::new(
+        "synthdef bell gate=1.0 = \
+         let env = asr gate 0.001 0.05; \
+         modalBank (impulse 0.0) 440.0 1.0 0.0 1.0 0.0 1.0 0.5 20.0 2.0 0.3 15.0 * env",
+    );
+    let (_, freed) = rig.run(0.3);
+    assert!(!freed);
+    rig.release();
+    let (_, freed) = rig.run(0.3);
+    assert!(
+        freed,
+        "releasing the VCA frees a bank that is still ringing"
+    );
+}
