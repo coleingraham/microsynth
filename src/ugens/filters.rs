@@ -105,6 +105,9 @@ pub(crate) struct BiquadState {
 }
 
 impl BiquadState {
+    /// A cleared state.
+    pub(crate) const ZERO: BiquadState = BiquadState { z1: 0.0, z2: 0.0 };
+
     pub(crate) fn new() -> Self {
         BiquadState { z1: 0.0, z2: 0.0 }
     }
@@ -150,7 +153,7 @@ fn normalize(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> (f32, f32,
 
 /// Compute biquad lowpass coefficients from freq, q, and sample_rate.
 #[inline]
-fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+pub(crate) fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = (1.0 - cos_w0) / 2.0;
@@ -161,7 +164,7 @@ fn biquad_lpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32
 
 /// Compute biquad highpass coefficients.
 #[inline]
-fn biquad_hpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+pub(crate) fn biquad_hpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = (1.0 + cos_w0) / 2.0;
@@ -186,7 +189,11 @@ pub(crate) fn biquad_bpf_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f3
 
 /// Compute biquad notch (band-reject) coefficients.
 #[inline]
-fn biquad_notch_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32) {
+pub(crate) fn biquad_notch_coeffs(
+    freq: f32,
+    q: f32,
+    sample_rate: f32,
+) -> (f32, f32, f32, f32, f32) {
     let (_sin_w0, cos_w0, alpha) = biquad_params(freq, q, sample_rate);
 
     let b0 = 1.0;
@@ -212,7 +219,7 @@ fn biquad_allpass_coeffs(freq: f32, q: f32, sample_rate: f32) -> (f32, f32, f32,
 /// frequency; `q` controls the bandwidth of the affected region, same as the
 /// other biquad shapes above.
 #[inline]
-fn biquad_peaking_coeffs(
+pub(crate) fn biquad_peaking_coeffs(
     freq: f32,
     q: f32,
     gain_db: f32,
@@ -232,7 +239,7 @@ fn biquad_peaking_coeffs(
 /// RBJ cookbook shelf formula, parameterized by `q` (rather than shelf slope
 /// `S`) for consistency with the other biquad shapes' `freq`/`q` inputs.
 #[inline]
-fn biquad_low_shelf_coeffs(
+pub(crate) fn biquad_low_shelf_coeffs(
     freq: f32,
     q: f32,
     gain_db: f32,
@@ -254,7 +261,7 @@ fn biquad_low_shelf_coeffs(
 
 /// Compute biquad high-shelf coefficients (boost/cut everything above `freq`).
 #[inline]
-fn biquad_high_shelf_coeffs(
+pub(crate) fn biquad_high_shelf_coeffs(
     freq: f32,
     q: f32,
     gain_db: f32,
