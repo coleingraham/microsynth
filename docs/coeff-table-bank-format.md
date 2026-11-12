@@ -275,6 +275,14 @@ that case:
   "forgot to bind a table" into a caught error instead of a node that can
   never be constructed.
 
+### Program-bound kinds use the same side table
+
+A second binding namespace shares `table_bindings`: a kind registered with
+`UGenRegistry::register_program_bound` (today `sampleVoice`) is bound to a
+sample program in the session's sample-program bank instead of a table, by
+the same `{ node, table_id }` entry. `IrSynthDef::compile_with_banks` resolves
+both; see `docs/sample-program-format.md`, Part 3.
+
 ### Resolution is a snapshot, not a live handle
 
 `compile_with_tables` clones the table's content into the compiled graph's
