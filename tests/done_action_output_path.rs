@@ -435,3 +435,124 @@ fn a_plane_level_times_a_finished_envelope_frees_the_voice() {
     assert!(peak > 0.1, "{peak}");
     assert!(freed, "the perc VCA finishing should free the voice");
 }
+
+// --- sampleVoice (program-bound, built through the IR) ---
+
+#[cfg(feature = "ir")]
+mod sample_voice {
+    use super::*;
+    use microsynth::ir::{IrEdge, IrNode, IrParam, IrSynthDef, IrTableBinding, SynthDefClass};
+    use microsynth::sampler::program::{Envelope, LoopMode, Region, SampleProgram};
+    use microsynth::sampler::{SamplePcm, SamplePcmBank, SampleProgramBank};
+
+    /// `out = lpf(sampleVoice(gate) * 0.5)`: the voice's silence passes the
+    /// `Mul` and the filter's `in`, so the voice frees the synth.
+    fn rig(mode: LoopMode) -> Rig {
+        let pcm = SamplePcm::new("s", [5; 32], SR, &[&vec![0.5f32; 4_410][..]]).unwrap();
+        let mut sb = SamplePcmBank::new();
+        sb.register(pcm);
+        let mut pb = SampleProgramBank::new();
+        let pid = pb
+            .register(
+                SampleProgram {
+                    name: "p".into(),
+                    spec_sha256: [0; 32],
+                    samples: vec![[5; 32]],
+                    regions: vec![Region {
+                        loop_mode: mode,
+                        loop_points: Some((100, 4_000)),
+                        ampeg: Envelope {
+                            release: 0.05,
+                            ..Envelope::default()
+                        },
+                        ..Region::default()
+                    }],
+                },
+                &sb,
+            )
+            .unwrap();
+        let mut reg = builtin_registry();
+        microsynth::register_table_bound_builtins(&mut reg);
+        let ir = IrSynthDef {
+            format_version: microsynth::ir::FORMAT_VERSION,
+            name: "sv".into(),
+            class: SynthDefClass::Source,
+            output_channels: 2,
+            nodes: vec![
+                IrNode::Param {
+                    name: "gate".into(),
+                    default: 1.0,
+                },
+                IrNode::UGen {
+                    kind: "sampleVoice".into(),
+                    consts: vec![],
+                },
+                IrNode::UGen {
+                    kind: "Mul".into(),
+                    consts: vec![(1, 0.5)],
+                },
+                IrNode::UGen {
+                    kind: "lpf".into(),
+                    consts: vec![(1, 5_000.0)],
+                },
+            ],
+            edges: vec![
+                IrEdge {
+                    from: 0,
+                    to: 1,
+                    to_input: 1,
+                },
+                IrEdge {
+                    from: 1,
+                    to: 2,
+                    to_input: 0,
+                },
+                IrEdge {
+                    from: 2,
+                    to: 3,
+                    to_input: 0,
+                },
+            ],
+            params: vec![IrParam {
+                name: "gate".into(),
+                node: 0,
+                input: 0,
+                default: 1.0,
+            }],
+            audio_inputs: vec![],
+            table_bindings: vec![IrTableBinding {
+                node: 1,
+                table_id: pid.0,
+            }],
+            output_node: 3,
+        };
+        let def = ir
+            .compile_with_banks(&reg, &CoeffTableBank::new(), Some(&pb))
+            .unwrap();
+        let mut engine = make_engine();
+        let synth = engine.instantiate_synthdef(&def);
+        engine.graph_mut().set_sink(synth.output_node());
+        engine.prepare();
+        Rig { engine, synth }
+    }
+
+    #[test]
+    fn a_finished_sample_voice_frees_the_synth_through_a_vca_and_a_filter() {
+        let mut rig = rig(LoopMode::NoLoop);
+        // 0.1 s sample, then sfizz's fast off and fade
+        let (peak, freed) = rig.run(0.5);
+        // 0.5 x (100/127)^2 velocity gain x 0.5 VCA
+        assert!(peak > 0.15, "{peak}");
+        assert!(freed, "the voice's end should free the synth");
+    }
+
+    #[test]
+    fn a_looping_sample_voice_holds_the_synth_until_released() {
+        let mut rig = rig(LoopMode::Continuous);
+        let (_, freed) = rig.run(1.0);
+        assert!(!freed, "a held loop keeps sounding");
+        rig.release();
+        let (_, freed) = rig.run(0.5);
+        assert!(freed, "released: the envelope ends and frees it");
+    }
+}

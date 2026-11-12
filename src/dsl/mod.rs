@@ -479,6 +479,31 @@
 //! per-instrument constants, written by a generator as inline consts in the
 //! IR; the output is recomputed only when the position moves.
 //!
+//! ## Sample Playback (bound to an uploaded program)
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `sampleVoice` | `freq`, `gate`, `vel`, `amp`, `seed`, `bend`, `quality` (all optional) | One note of a compiled sample program (an SFZ instrument compiled to a spec): region selection by key, velocity, round robin and `rand`; resampling; loops with crossfades; amp envelope; release triggers; chokes and polyphony limits. Stereo out |
+//!
+//! Like `partialsNoise`, it is not written in DSL text: the program it plays
+//! is uploaded at run time (`ms_sample_register`, `ms_sample_program_register`;
+//! `docs/sample-bank-format.md`, `docs/sample-program-format.md`) and an IR
+//! def binds the node to it through `table_bindings` (the kind is
+//! program-bound, so the id names a program). `freq` selects the key
+//! (`round(69 + 12 log2(freq / 440))`; the fraction is a tuning offset),
+//! `gate` starts and releases the note, `vel` is velocity 0..1, `amp` a
+//! linear output gain (velocity is the program's), `seed` makes the `rand`
+//! draws reproducible, `bend` is -1..1 in each region's bend range, and
+//! `quality` picks the resampler (0 linear, 1 cubic Hermite, 2 the default
+//! windowed sinc). The node reports done when every region it started has
+//! ended. See `src/ugens/sample_voice.rs`.
+//!
+//! ```text
+//! IR nodes: Param freq, Param gate (default 0), Param vel,
+//!           UGen sampleVoice  <- freq:0, gate:1, vel:2, consts [(3, gain), (4, seed)]
+//! table_bindings: [{ node: <sampleVoice>, table_id: <program id> }]
+//! ```
+//!
 //! ## Spectral Processing
 //!
 //! | Name | Inputs | Description |

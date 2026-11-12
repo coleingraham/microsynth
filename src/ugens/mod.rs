@@ -27,6 +27,9 @@
 //! - `plane`: Plane2d (linear interpolation of a quantity over a triangle mesh
 //!   in the plane, e.g. formants over the vowel trapezium)
 //! - `playbuf`: PlayBuf (sample playback)
+//! - `sample_voice`: SampleVoice (one note of a compiled sample program:
+//!   region selection, resampling, loops, amp envelope, release triggers,
+//!   chokes; bound to an uploaded program by id)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 //! - `modal`: ModalBank (a bank of damped two-pole resonators for modal synthesis)
@@ -76,6 +79,7 @@ pub mod physical;
 pub mod plane;
 pub mod playbuf;
 pub(crate) mod rng;
+pub mod sample_voice;
 pub mod spectral;
 pub mod steepen;
 pub mod stereo;
@@ -104,6 +108,7 @@ pub use partials_blend::PartialsBlend;
 pub use physical::*;
 pub use plane::*;
 pub use playbuf::*;
+pub use sample_voice::SampleVoice;
 pub use spectral::*;
 pub use steepen::*;
 pub use stereo::*;
@@ -269,8 +274,11 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 /// natively via the CLI, not covered by MOT-640's wasm-reachability scope.
 ///
 /// Currently registers `partialsNoise` (`ugens::partials`, MOT-636) and
-/// `partialsBlend` (`ugens::partials_blend`).
+/// `partialsBlend` (`ugens::partials_blend`), and the program-bound
+/// `sampleVoice` (`ugens::sample_voice`), whose binding names a registered
+/// sample program instead of a table (`docs/sample-program-format.md`).
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials::register(reg);
     partials_blend::register(reg);
+    sample_voice::register(reg);
 }

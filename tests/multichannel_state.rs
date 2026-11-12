@@ -549,3 +549,95 @@ fn every_stereo_by_design_kind_reads_only_input_channel_0() {
         failures.join("\n  ")
     );
 }
+
+// --- sampleVoice (program-bound) ---
+//
+// Out of the registry loops above (its factory needs a bound program). A
+// voice is one note: it reads every input from channel 0, and its two output
+// channels are the sample's own left and right (or a mono sample panned). So
+// (1) a second input channel that differs changes nothing, and (2) a mono
+// sample gives identical channels, and a stereo sample's left output depends
+// on its left channel only.
+
+#[cfg(feature = "ir")]
+mod sample_voice {
+    use super::*;
+    use microsynth::sampler::bank::BoundProgram;
+    use microsynth::sampler::program::{Region, SampleProgram};
+    use microsynth::sampler::{SamplePcm, SamplePcmBank};
+    use microsynth::ugens::SampleVoice;
+    use std::sync::Arc;
+
+    fn voice(channels: &[&[f32]]) -> SampleVoice {
+        let pcm = SamplePcm::new("s", [7; 32], SAMPLE_RATE, channels).unwrap();
+        let mut sb = SamplePcmBank::new();
+        sb.register(pcm);
+        let prog = SampleProgram {
+            name: "p".into(),
+            spec_sha256: [0; 32],
+            samples: vec![[7; 32]],
+            regions: vec![Region::default()],
+        };
+        SampleVoice::new(Arc::new(BoundProgram::bind(prog, &sb).unwrap()))
+    }
+
+    /// Render the voice with `freq` (two channels: `f0` and `f1`) and the
+    /// gate high from the first sample.
+    fn render(mut v: SampleVoice, f0: f32, f1: f32) -> [Vec<f32>; 2] {
+        let ctx0 = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
+        v.init(&ctx0);
+        let mut out = [Vec::new(), Vec::new()];
+        for b in 0..NUM_BLOCKS * 4 {
+            let mut ctx = ctx0.clone();
+            ctx.sample_offset = (b * BLOCK_SIZE) as u64;
+            let mut freq = AudioBuffer::new(2, BLOCK_SIZE);
+            freq.channel_mut(0).samples_mut().fill(f0);
+            freq.channel_mut(1).samples_mut().fill(f1);
+            let inputs = [Some(&freq), None, None, None, None, None, None];
+            let mut o = AudioBuffer::new(2, BLOCK_SIZE);
+            v.process(&ctx, &inputs, &mut o);
+            out[0].extend_from_slice(o.channel(0).samples());
+            out[1].extend_from_slice(o.channel(1).samples());
+        }
+        out
+    }
+
+    fn tone(f: f32) -> Vec<f32> {
+        (0..44_100)
+            .map(|i| (core::f32::consts::TAU * f * i as f32 / SAMPLE_RATE).sin())
+            .collect()
+    }
+
+    #[test]
+    fn sample_voice_reads_its_inputs_from_channel_0_only() {
+        let t = tone(440.0);
+        let base = render(voice(&[&t]), 261.63, 261.63);
+        let other = render(voice(&[&t]), 261.63, 523.25);
+        assert_eq!(base, other, "input channel 1 must not reach the output");
+        let moved = render(voice(&[&t]), 293.66, 261.63);
+        assert_ne!(base, moved, "control: channel 0 does");
+    }
+
+    #[test]
+    fn sample_voice_keeps_the_sample_channels_apart() {
+        let (l, r) = (tone(440.0), tone(660.0));
+        let mono = render(voice(&[&l]), 261.63, 261.63);
+        assert_eq!(
+            mono[0], mono[1],
+            "a centred mono sample: identical channels"
+        );
+        let st = render(voice(&[&l, &r]), 261.63, 261.63);
+        let st_r_changed = render(voice(&[&l, &tone(330.0)]), 261.63, 261.63);
+        // full width: the right channel reaches the left output only through
+        // cos(pi/2) in f32 (4e-8)
+        let leak = st[0]
+            .iter()
+            .zip(&st_r_changed[0])
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            leak < 1e-6,
+            "left output depends on the left channel only: {leak}"
+        );
+        assert_ne!(st[1], st_r_changed[1]);
+    }
+}

@@ -29,6 +29,7 @@
 use crate::coeff_table::{CoeffTable, CoeffTableBank};
 use crate::dsl::ast::{BinOp, Expr, SynthDefDecl};
 use crate::dsl::compiler::UGenRegistry;
+use crate::sampler::{BoundProgram, ProgramId, SampleProgramBank};
 use crate::synthdef::{SynthDef, SynthDefBuilder};
 use crate::ugens::{self, BinOpKind};
 use alloc::boxed::Box;
@@ -202,6 +203,10 @@ pub enum IrError {
     /// into a validation error instead of a silently-unfilled node — see
     /// `IrTableBinding`'s doc.
     MissingTableBinding { node: usize, kind: String },
+    /// `compile_with_banks` could not resolve a program-bound node's
+    /// `table_bindings` id against the sample-program bank (or was given no
+    /// program bank).
+    ProgramNotFound(u32),
     /// `compile_with_tables` could not resolve a `table_bindings` entry's id
     /// against the bank it was given.
     TableNotFound(u32),
@@ -246,6 +251,9 @@ impl fmt::Display for IrError {
                 "node {node} (kind {kind:?}) is table-bound-only but has no table_bindings entry"
             ),
             IrError::TableNotFound(id) => write!(f, "table id {id} not found in bank"),
+            IrError::ProgramNotFound(id) => {
+                write!(f, "sample program id {id} not found in the program bank")
+            }
             IrError::RequiredInputUnconnected { node, input } => write!(
                 f,
                 "node {node}: required input port {input} has no connected edge or inline const"
@@ -332,11 +340,11 @@ fn core_kind_arity(kind: &str) -> Option<usize> {
 fn kind_arity(reg: &UGenRegistry, kind: &str, table_bound: bool) -> Option<usize> {
     core_kind_arity(kind).or_else(|| {
         if table_bound {
-            reg.table_bound_entry(kind).map(|e| e.input_names.len())
+            reg.bound_ports(kind).map(|(n, _)| n.len())
         } else {
             reg.entry(kind)
                 .map(|e| e.input_names.len())
-                .or_else(|| reg.table_bound_entry(kind).map(|e| e.input_names.len()))
+                .or_else(|| reg.bound_ports(kind).map(|(n, _)| n.len()))
         }
     })
 }
@@ -362,11 +370,11 @@ fn core_kind_required(kind: &str) -> Option<&'static [bool]> {
 fn kind_required<'a>(reg: &'a UGenRegistry, kind: &str, table_bound: bool) -> Option<&'a [bool]> {
     core_kind_required(kind).or_else(|| {
         if table_bound {
-            reg.table_bound_entry(kind).map(|e| e.required.as_slice())
+            reg.bound_ports(kind).map(|(_, r)| r)
         } else {
             reg.entry(kind)
                 .map(|e| e.required.as_slice())
-                .or_else(|| reg.table_bound_entry(kind).map(|e| e.required.as_slice()))
+                .or_else(|| reg.bound_ports(kind).map(|(_, r)| r))
         }
     })
 }
@@ -376,9 +384,16 @@ fn kind_required<'a>(reg: &'a UGenRegistry, kind: &str, table_bound: bool) -> Op
 /// [`IrError::MissingTableBinding`] guards against when unaccompanied by a
 /// `table_bindings` entry.
 fn is_table_bound_only(reg: &UGenRegistry, kind: &str) -> bool {
-    core_kind_arity(kind).is_none()
-        && reg.entry(kind).is_none()
-        && reg.table_bound_entry(kind).is_some()
+    core_kind_arity(kind).is_none() && reg.entry(kind).is_none() && reg.bound_ports(kind).is_some()
+}
+
+/// What a `table_bindings` entry resolved to for its node.
+#[derive(Clone)]
+enum Resolved {
+    /// A coefficient table (a table-bound kind).
+    Table(Arc<CoeffTable>),
+    /// A sample program (a program-bound kind).
+    Program(Arc<BoundProgram>),
 }
 
 /// Bounds-check a referenced node index, labelling the referrer for the error.
@@ -586,7 +601,7 @@ impl IrSynthDef {
     /// Assumes the IR is valid; call [`validate`](Self::validate) first if the
     /// IR comes from an untrusted source.
     pub fn compile(&self, reg: &UGenRegistry) -> Result<SynthDef, IrError> {
-        let resolved: BTreeMap<usize, Arc<CoeffTable>> = BTreeMap::new();
+        let resolved: BTreeMap<usize, Resolved> = BTreeMap::new();
         let mut builder = self.build_base(reg, &resolved)?;
         builder.set_output(self.output_node);
         Ok(builder.build())
@@ -616,12 +631,44 @@ impl IrSynthDef {
         reg: &UGenRegistry,
         bank: &CoeffTableBank,
     ) -> Result<SynthDef, IrError> {
-        let mut resolved: BTreeMap<usize, Arc<CoeffTable>> = BTreeMap::new();
+        self.compile_with_banks(reg, bank, None)
+    }
+
+    /// Like [`compile_with_tables`](Self::compile_with_tables), with a
+    /// sample-program bank as well: a `table_bindings` entry whose node is a
+    /// program-bound kind (registered with
+    /// [`UGenRegistry::register_program_bound`], and not table-bound) names a
+    /// program in `programs` instead of a table in `tables`. Every voice
+    /// built from the compiled def shares the one bound program (and with it
+    /// the state the program's voices share), unlike a table, which is
+    /// cloned at this call. Errors with [`IrError::ProgramNotFound`] when the
+    /// id is not registered, or when `programs` is `None`.
+    pub fn compile_with_banks(
+        &self,
+        reg: &UGenRegistry,
+        tables: &CoeffTableBank,
+        programs: Option<&SampleProgramBank>,
+    ) -> Result<SynthDef, IrError> {
+        let mut resolved: BTreeMap<usize, Resolved> = BTreeMap::new();
         for binding in &self.table_bindings {
-            let table = bank
-                .get(crate::coeff_table::TableId(binding.table_id))
-                .ok_or(IrError::TableNotFound(binding.table_id))?;
-            resolved.insert(binding.node, Arc::new(table.clone()));
+            let kind = match self.nodes.get(binding.node) {
+                Some(IrNode::UGen { kind, .. }) => kind.as_str(),
+                _ => "",
+            };
+            let program_bound =
+                reg.table_bound_entry(kind).is_none() && reg.program_bound_entry(kind).is_some();
+            let r = if program_bound {
+                let program = programs
+                    .and_then(|b| b.get(ProgramId(binding.table_id)))
+                    .ok_or(IrError::ProgramNotFound(binding.table_id))?;
+                Resolved::Program(program.clone())
+            } else {
+                let table = tables
+                    .get(crate::coeff_table::TableId(binding.table_id))
+                    .ok_or(IrError::TableNotFound(binding.table_id))?;
+                Resolved::Table(Arc::new(table.clone()))
+            };
+            resolved.insert(binding.node, r);
         }
         let mut builder = self.build_base(reg, &resolved)?;
         builder.set_output(self.output_node);
@@ -637,7 +684,7 @@ impl IrSynthDef {
     fn build_base(
         &self,
         reg: &UGenRegistry,
-        resolved: &BTreeMap<usize, Arc<CoeffTable>>,
+        resolved: &BTreeMap<usize, Resolved>,
     ) -> Result<SynthDefBuilder, IrError> {
         let mut builder = SynthDefBuilder::new(self.name.clone());
 
@@ -653,8 +700,10 @@ impl IrSynthDef {
                     builder.add_node(move || Box::new(ugens::Param::new(v)));
                 }
                 IrNode::UGen { kind, .. } => {
-                    if let Some(table) = resolved.get(&i) {
+                    if let Some(Resolved::Table(table)) = resolved.get(&i) {
                         add_table_bound_ugen_node(&mut builder, reg, kind, table.clone())?;
+                    } else if let Some(Resolved::Program(program)) = resolved.get(&i) {
+                        add_program_bound_ugen_node(&mut builder, reg, kind, program.clone())?;
                     } else {
                         add_ugen_node(&mut builder, reg, kind)?;
                     }
@@ -724,6 +773,22 @@ fn add_table_bound_ugen_node(
         .factory
         .clone();
     Ok(builder.add_node(move || factory(table.clone())))
+}
+
+/// Add a program-bound UGen node for `kind`, closing over `program` so every
+/// instance (one per voice spawn) shares the one bound program.
+fn add_program_bound_ugen_node(
+    builder: &mut SynthDefBuilder,
+    reg: &UGenRegistry,
+    kind: &str,
+    program: Arc<BoundProgram>,
+) -> Result<usize, IrError> {
+    let factory = reg
+        .program_bound_entry(kind)
+        .ok_or_else(|| IrError::UnknownKind(kind.to_string()))?
+        .factory
+        .clone();
+    Ok(builder.add_node(move || factory(program.clone())))
 }
 
 // ---------------------------------------------------------------------------

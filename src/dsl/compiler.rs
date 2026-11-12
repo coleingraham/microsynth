@@ -3,6 +3,7 @@
 use crate::coeff_table::CoeffTable;
 use crate::dsl::ast::{Expr, SynthDefDecl, VoiceModeDecl};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory};
+use crate::sampler::BoundProgram;
 use crate::synthdef::{SynthDef, SynthDefBuilder};
 use crate::ugens;
 use alloc::boxed::Box;
@@ -64,12 +65,41 @@ pub struct TableUGenEntry {
     pub output_names: Vec<&'static str>,
 }
 
+/// Factory for a UGen kind bound to a registered sample program
+/// ([`crate::sampler::SampleProgramBank`]), resolved by id at graph-build
+/// time through the same `table_bindings` side table a coefficient-table
+/// kind uses: the binding's id names a program when the node's kind is
+/// registered here. The closure captures nothing; it receives the bound
+/// program (shared, with the state its voices share) for each instance.
+pub type ProgramUGenFactory = Arc<dyn Fn(Arc<BoundProgram>) -> Box<dyn UGen> + Send + Sync>;
+
+/// Metadata about a registered program-bound UGen type — the
+/// [`TableUGenEntry`] counterpart for kinds registered via
+/// [`UGenRegistry::register_program_bound`].
+#[derive(Clone)]
+pub struct ProgramUGenEntry {
+    /// Factory that creates an instance bound to a resolved program.
+    pub factory: ProgramUGenFactory,
+    /// Coarse category, as declared at registration.
+    pub category: UGenCategory,
+    /// Input port names (in order); the bound program is not a port.
+    pub input_names: Vec<&'static str>,
+    /// Whether each input port is required.
+    pub required: Vec<bool>,
+    /// Output port names.
+    pub output_names: Vec<&'static str>,
+}
+
 /// Registry of available UGen types, keyed by name.
 pub struct UGenRegistry {
     entries: BTreeMap<String, UGenEntry>,
     /// Table-bound kinds, disjoint from `entries` by name (a kind is either
     /// bare or table-bound, never both). See [`register_table_bound`](Self::register_table_bound).
     table_bound: BTreeMap<String, TableUGenEntry>,
+    /// Program-bound kinds (bound to a sample program instead of a
+    /// coefficient table), disjoint from both maps above by convention. See
+    /// [`register_program_bound`](Self::register_program_bound).
+    program_bound: BTreeMap<String, ProgramUGenEntry>,
 }
 
 impl UGenRegistry {
@@ -78,6 +108,7 @@ impl UGenRegistry {
         UGenRegistry {
             entries: BTreeMap::new(),
             table_bound: BTreeMap::new(),
+            program_bound: BTreeMap::new(),
         }
     }
 
@@ -225,6 +256,69 @@ impl UGenRegistry {
     /// Returns `None` if `name` is not registered as table-bound.
     pub fn resolve_table_bound(&self, name: &str, table: Arc<CoeffTable>) -> Option<Box<dyn UGen>> {
         self.table_bound.get(name).map(|e| (e.factory)(table))
+    }
+
+    /// Register a program-bound UGen kind: one built around a registered
+    /// sample program ([`crate::sampler::BoundProgram`]) resolved at
+    /// graph-build time. An IR node of this kind is bound through
+    /// `table_bindings` exactly like a table-bound node; its `table_id` names
+    /// a program in the session's [`crate::sampler::SampleProgramBank`]
+    /// instead of a table (see `docs/sample-program-format.md`, "Binding a
+    /// node to a program"). Keep the name disjoint from the bare and
+    /// table-bound kinds; where a name is in both binding maps, the
+    /// table-bound entry wins.
+    pub fn register_program_bound(
+        &mut self,
+        name: impl Into<String>,
+        factory: ProgramUGenFactory,
+        category: UGenCategory,
+        inputs: &[InputSpec],
+        outputs: &[OutputSpec],
+    ) {
+        self.program_bound.insert(
+            name.into(),
+            ProgramUGenEntry {
+                factory,
+                category,
+                input_names: inputs.iter().map(|i| i.name).collect(),
+                required: inputs.iter().map(|i| i.required).collect(),
+                output_names: outputs.iter().map(|o| o.name).collect(),
+            },
+        );
+    }
+
+    /// Look up a registered program-bound kind's metadata by name.
+    pub fn program_bound_entry(&self, name: &str) -> Option<&ProgramUGenEntry> {
+        self.program_bound.get(name)
+    }
+
+    /// Iterate over all registered program-bound `(name, entry)` pairs.
+    pub fn program_bound_iter(&self) -> impl Iterator<Item = (&String, &ProgramUGenEntry)> {
+        self.program_bound.iter()
+    }
+
+    /// Build an instance of program-bound kind `name`, bound to `program`.
+    /// Returns `None` if `name` is not registered as program-bound.
+    pub fn resolve_program_bound(
+        &self,
+        name: &str,
+        program: Arc<BoundProgram>,
+    ) -> Option<Box<dyn UGen>> {
+        self.program_bound.get(name).map(|e| (e.factory)(program))
+    }
+
+    /// Input names and required flags of a kind bound through
+    /// `table_bindings`: the table-bound entry if there is one, else the
+    /// program-bound entry.
+    pub fn bound_ports(&self, name: &str) -> Option<(&[&'static str], &[bool])> {
+        self.table_bound
+            .get(name)
+            .map(|e| (e.input_names.as_slice(), e.required.as_slice()))
+            .or_else(|| {
+                self.program_bound
+                    .get(name)
+                    .map(|e| (e.input_names.as_slice(), e.required.as_slice()))
+            })
     }
 }
 
