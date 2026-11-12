@@ -98,6 +98,18 @@ fn test_new_exports_are_additive_not_replacements() {
         // rather than DSL source -- see src/web.rs's doc comment on this
         // export.
         "ms_register_def_ir",
+        // Sample bank and sample-program upload, by id/hash/name, with the
+        // memory accounting a host reports -- see src/web.rs's "Sample bank
+        // and sample-program exports" section.
+        "ms_sample_register",
+        "ms_sample_free",
+        "ms_sample_id_for_hash",
+        "ms_sample_bytes_total",
+        "ms_sample_program_register",
+        "ms_sample_program_free",
+        "ms_sample_program_id_for_name",
+        "ms_sample_program_bytes",
+        "ms_sample_voice_bytes",
     ];
     for name in new_names {
         assert!(

@@ -67,6 +67,9 @@ use crate::dsl::{self, UGenRegistry};
 use crate::engine::{Engine, EngineConfig};
 use crate::musical_sequence::schedule_musical_glides;
 use crate::musical_time::{MusicalGlideSegment, MusicalPosition, TimeConfig};
+use crate::sampler::{
+    PcmId, ProgramId, SamplePcm, SamplePcmBank, SampleProgram, SampleProgramBank,
+};
 use crate::ugens::{register_builtins, register_table_bound_builtins};
 use crate::voice::LegatoVoice;
 
@@ -142,6 +145,14 @@ static MASTER_SYNTH: WasmCell<Option<crate::synthdef::Synth>> = WasmCell::new(No
 /// comment) — it's purely "a fresh session starts with an empty bank."
 static COEFF_TABLE_BANK: WasmCell<Option<CoeffTableBank>> = WasmCell::new(None);
 
+/// The session's uploaded sample audio (`docs/sample-bank-format.md`), reset
+/// with the coefficient-table bank by every session-start export.
+static SAMPLE_PCM_BANK: WasmCell<Option<SamplePcmBank>> = WasmCell::new(None);
+
+/// The session's registered sample programs (`docs/sample-program-format.md`),
+/// each bound to samples in `SAMPLE_PCM_BANK`; reset with it.
+static SAMPLE_PROGRAM_BANK: WasmCell<Option<SampleProgramBank>> = WasmCell::new(None);
+
 /// A multi-bus routing topology under construction/live, for the
 /// `ms_routing_*` export family below (see that section's doc comment). A
 /// sibling to `BUS_NODE`'s single flat bus, not a replacement: a session
@@ -213,6 +224,8 @@ pub extern "C" fn ms_init_with_bus(sample_rate: f32) {
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
         *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
+        *SAMPLE_PCM_BANK.get_mut() = Some(SamplePcmBank::new());
+        *SAMPLE_PROGRAM_BANK.get_mut() = Some(SampleProgramBank::new());
     }
 }
 
@@ -366,7 +379,8 @@ pub unsafe extern "C" fn ms_register_def_ir(
         Some(b) => b,
         None => return 1,
     };
-    let def = match ir_def.compile_with_tables(registry, bank) {
+    let programs = unsafe { SAMPLE_PROGRAM_BANK.get_mut() }.as_ref();
+    let def = match ir_def.compile_with_banks(registry, bank, programs) {
         Ok(d) => d,
         Err(_) => return 1,
     };
@@ -559,6 +573,8 @@ pub extern "C" fn ms_init(sample_rate: f32) {
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
         *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
+        *SAMPLE_PCM_BANK.get_mut() = Some(SamplePcmBank::new());
+        *SAMPLE_PROGRAM_BANK.get_mut() = Some(SampleProgramBank::new());
     }
 }
 
@@ -767,7 +783,8 @@ pub unsafe extern "C" fn ms_compile_ir_with_tables(ir_ptr: *const u8, ir_len: us
         Some(b) => b,
         None => return 1,
     };
-    let def = match ir_def.compile_with_tables(registry, bank) {
+    let programs = unsafe { SAMPLE_PROGRAM_BANK.get_mut() }.as_ref();
+    let def = match ir_def.compile_with_banks(registry, bank, programs) {
         Ok(d) => d,
         Err(_) => return 1,
     };
@@ -1027,6 +1044,8 @@ pub extern "C" fn ms_routing_init(sample_rate: f32) {
         *LEGATO_VOICES.get_mut() = Some(BTreeMap::new());
         *LEGATO_SLOTS.get_mut() = Some(BTreeMap::new());
         *COEFF_TABLE_BANK.get_mut() = Some(CoeffTableBank::new());
+        *SAMPLE_PCM_BANK.get_mut() = Some(SamplePcmBank::new());
+        *SAMPLE_PROGRAM_BANK.get_mut() = Some(SampleProgramBank::new());
     }
 }
 
@@ -1705,6 +1724,166 @@ pub unsafe extern "C" fn ms_coeff_table_id_for_name(name_ptr: *const u8, name_le
         None => return 0,
     };
     bank.id_for_name(name).map_or(0, |id| id.0)
+}
+
+// ============================================================================
+// Sample bank and sample-program exports
+// ============================================================================
+//
+// Sample audio and the programs that play it reach the engine the way
+// coefficient tables do: bytes uploaded into `ms_alloc`'d memory, decoded
+// and stored per session, referenced by id. The engine never decodes an
+// audio file: the host decodes and uploads f32 PCM
+// (`docs/sample-bank-format.md`), then compiles the instrument spec to a
+// program (`docs/sample-program-format.md`) naming its samples by content
+// hash. A `sampleVoice` node in an IR def is bound to a program through the
+// def's `table_bindings` (the kind is program-bound, so the id names a
+// program); `ms_register_def_ir` and `ms_compile_ir_with_tables` resolve it.
+
+/// Register a sample, decoding it from the bytes at `data_ptr`/`data_len`
+/// (`SamplePcm::from_bytes`). Returns its id (`> 0`; the existing id when a
+/// sample with the same content hash is already registered), or `0` on
+/// failure: malformed bytes, a newer format version, a non-finite value, or
+/// no session.
+///
+/// # Safety
+/// `data_ptr` must point to an initialized buffer of at least `data_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_sample_register(data_ptr: *const u8, data_len: usize) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    let pcm = match SamplePcm::from_bytes(bytes) {
+        Ok(p) => p,
+        Err(_) => return 0,
+    };
+    match unsafe { SAMPLE_PCM_BANK.get_mut() }.as_mut() {
+        Some(bank) => bank.register(pcm).0,
+        None => 0,
+    }
+}
+
+/// Drop the session's reference to a sample. A program already registered
+/// with it keeps its own until the program is freed. A no-op for an unknown
+/// id.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_sample_free(id: u32) {
+    if let Some(bank) = unsafe { SAMPLE_PCM_BANK.get_mut() }.as_mut() {
+        bank.free(PcmId(id));
+    }
+}
+
+/// The id of the sample with this content hash: `hash_len` 32 (raw bytes) or
+/// 64 (hex digits). Returns `0` when no such sample is registered, the hash
+/// is malformed, or there is no session.
+///
+/// # Safety
+/// `hash_ptr` must point to an initialized buffer of at least `hash_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_sample_id_for_hash(hash_ptr: *const u8, hash_len: usize) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(hash_ptr, hash_len) };
+    let hash = match hash_len {
+        32 => {
+            let mut h = [0u8; 32];
+            h.copy_from_slice(bytes);
+            h
+        }
+        64 => match core::str::from_utf8(bytes)
+            .ok()
+            .and_then(crate::sampler::pcm::hash_from_hex)
+        {
+            Some(h) => h,
+            None => return 0,
+        },
+        _ => return 0,
+    };
+    unsafe { SAMPLE_PCM_BANK.get_mut() }
+        .as_ref()
+        .and_then(|b| b.id_for_hash(&hash))
+        .map_or(0, |id| id.0)
+}
+
+/// Bytes of sample audio the session's sample bank holds (padding
+/// included), as an f64 so totals past 2 GiB read correctly in JavaScript.
+/// `0` with no session.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_sample_bytes_total() -> f64 {
+    unsafe { SAMPLE_PCM_BANK.get_mut() }
+        .as_ref()
+        .map_or(0.0, |b| b.bytes() as f64)
+}
+
+/// Register a sample program, decoding it from the bytes at
+/// `data_ptr`/`data_len` (`SampleProgram::from_bytes`) and binding it to the
+/// session's samples. Returns its id (`> 0`), or `0` on failure: malformed
+/// bytes, a region that cannot play, a sample-table hash with no registered
+/// sample, or no session.
+///
+/// # Safety
+/// `data_ptr` must point to an initialized buffer of at least `data_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_sample_program_register(data_ptr: *const u8, data_len: usize) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    let program = match SampleProgram::from_bytes(bytes) {
+        Ok(p) => p,
+        Err(_) => return 0,
+    };
+    let samples = match unsafe { SAMPLE_PCM_BANK.get_mut() }.as_ref() {
+        Some(b) => b,
+        None => return 0,
+    };
+    match unsafe { SAMPLE_PROGRAM_BANK.get_mut() }.as_mut() {
+        Some(bank) => bank.register(program, samples).map_or(0, |id| id.0),
+        None => 0,
+    }
+}
+
+/// Drop the session's reference to a program (defs already compiled against
+/// it keep theirs). A no-op for an unknown id.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_sample_program_free(id: u32) {
+    if let Some(bank) = unsafe { SAMPLE_PROGRAM_BANK.get_mut() }.as_mut() {
+        bank.free(ProgramId(id));
+    }
+}
+
+/// The id of the program registered under `name` (the spec's program id),
+/// or `0`.
+///
+/// # Safety
+/// `name_ptr` must point to an initialized buffer of at least `name_len`
+/// bytes that stays valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_sample_program_id_for_name(
+    name_ptr: *const u8,
+    name_len: usize,
+) -> u32 {
+    let bytes = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let Ok(name) = core::str::from_utf8(bytes) else {
+        return 0;
+    };
+    unsafe { SAMPLE_PROGRAM_BANK.get_mut() }
+        .as_ref()
+        .and_then(|b| b.id_for_name(name))
+        .map_or(0, |id| id.0)
+}
+
+/// Bytes of sample audio program `id` holds (each sample once), as an f64;
+/// `-1` for an unknown id or no session.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_sample_program_bytes(id: u32) -> f64 {
+    unsafe { SAMPLE_PROGRAM_BANK.get_mut() }
+        .as_ref()
+        .and_then(|b| b.get(ProgramId(id)))
+        .map_or(-1.0, |p| p.sample_bytes() as f64)
+}
+
+/// Bytes one `sampleVoice` node holds besides the program's samples (its
+/// struct, its preallocated region players and block scratch).
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_sample_voice_bytes() -> u32 {
+    crate::ugens::sample_voice::voice_bytes() as u32
 }
 
 // ============================================================================
