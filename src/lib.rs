@@ -16,6 +16,7 @@ pub mod musical_time;
 pub mod node;
 pub mod routing;
 pub mod sample;
+pub mod sampler;
 pub mod scheduler;
 pub mod spectral;
 pub mod synthdef;
