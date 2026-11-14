@@ -292,6 +292,26 @@ fn test_pick_victim_respects_eligibility_and_reject() {
     assert_eq!(reject.pick_victim(|_| true, |_| None), None);
 }
 
+#[test]
+fn test_per_group_budget_counts_and_steals_within_the_group() {
+    let mut alloc = VoiceAllocator::new(2, StealPolicy::Oldest).with_scope(BudgetScope::PerGroup);
+    alloc.record_spawn_in(VoiceId(1), 10);
+    alloc.record_spawn_in(VoiceId(2), 20);
+    alloc.record_spawn_in(VoiceId(3), 10);
+    assert_eq!(alloc.request_in(20, |_| None), Admission::Admit);
+    assert_eq!(alloc.request_in(10, |_| None), Admission::Steal(VoiceId(1)));
+    // Global scope ignores groups: three voices over a budget of two
+    let mut global = VoiceAllocator::new(2, StealPolicy::Oldest);
+    global.record_spawn_in(VoiceId(1), 10);
+    global.record_spawn_in(VoiceId(2), 20);
+    assert_eq!(
+        global.request_in(30, |_| None),
+        Admission::Steal(VoiceId(1))
+    );
+    alloc.record_free(VoiceId(1));
+    assert_eq!(alloc.request_in(10, |_| None), Admission::Admit);
+}
+
 /// A bus-sink engine plus a def whose output is its `amp` parameter, so a
 /// voice's level is exactly the `amp` it was given.
 fn level_engine() -> (Engine, NodeId, SynthDef) {

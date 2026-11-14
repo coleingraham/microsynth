@@ -110,6 +110,14 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_sample_program_id_for_name",
         "ms_sample_program_bytes",
         "ms_sample_voice_bytes",
+        // Per-bus voice budget and steal policy, the steal counts and
+        // levels a host reports, and the bus capacity it sizes the budget
+        // from -- see src/web.rs's "Voice budget and stealing" section.
+        "ms_set_voice_budget",
+        "ms_voice_steals",
+        "ms_voice_cuts",
+        "ms_voice_steal_level",
+        "ms_bus_max_inputs",
     ];
     for name in new_names {
         assert!(

@@ -7,7 +7,7 @@ use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
 use crate::synthdef::{DonePlan, Synth, SynthDef, SynthParam};
 use crate::ugens;
-use crate::voice::{Admission, StealPolicy, VoiceAllocator};
+use crate::voice::{Admission, BudgetScope, StealPolicy, VoiceAllocator};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -94,6 +94,14 @@ pub struct Engine {
     steals: Vec<StealRecord>,
 }
 
+/// The allocator group of voices spawned onto no bus.
+const OFF_BUS_GROUP: u64 = u64::MAX;
+
+/// The allocator group of voices spawned onto `bus`: the bus itself.
+fn bus_group(bus: NodeId) -> u64 {
+    bus.index() as u64
+}
+
 /// Derive a deterministic noise seed from the voice spawn order and the UGen's
 /// index within its synthdef. Folding in `node_idx` gives two noise nodes in one
 /// synthdef distinct seeds; the multiply-scramble decorrelates consecutive hits
@@ -123,6 +131,26 @@ impl Engine {
     /// / `spawn_voice_on_bus_managed` enforce it; the plain `spawn_voice` /
     /// `spawn_voice_on_bus` remain unconditional.
     pub fn set_voice_allocator(&mut self, alloc: VoiceAllocator) {
+        self.voice_alloc = Some(alloc);
+    }
+
+    /// Give every bus a budget of `budget` sounding voices under `policy`
+    /// ([`BudgetScope::PerGroup`] with each bus as its group), enforced by
+    /// the managed spawn paths; `budget == 0` detaches the allocator. Live
+    /// voices are counted from the start (each against its bus; voices
+    /// already fading after a steal are not). A steal fades its victim out
+    /// over 5 ms in its slot, so keep `budget` below
+    /// [`ugens::MAX_BUS_INPUTS`] to leave fading voices room (see
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed)).
+    pub fn set_voice_budget(&mut self, budget: usize, policy: StealPolicy) {
+        if budget == 0 {
+            self.voice_alloc = None;
+            return;
+        }
+        let mut alloc = VoiceAllocator::new(budget, policy).with_scope(BudgetScope::PerGroup);
+        for v in self.voices.iter().filter(|v| v.fade.is_none()) {
+            alloc.record_spawn_in(v.id, v.bus.map_or(OFF_BUS_GROUP, bus_group));
+        }
         self.voice_alloc = Some(alloc);
     }
 
@@ -334,14 +362,14 @@ impl Engine {
     /// Returns `None` only when an allocator is attached, its budget is
     /// full, and its policy declines to make room (`StealPolicy::Reject`).
     pub fn spawn_voice_managed(&mut self, def: &SynthDef) -> Option<VoiceId> {
-        match self.request_admission() {
+        match self.request_admission(OFF_BUS_GROUP) {
             Some(Admission::Reject) => return None,
             Some(Admission::Steal(victim)) => self.steal_voice(victim),
             Some(Admission::Admit) | None => {}
         }
         let id = self.spawn_voice(def);
         if let Some(alloc) = self.voice_alloc.as_mut() {
-            alloc.record_spawn(id);
+            alloc.record_spawn_in(id, OFF_BUS_GROUP);
         }
         Some(id)
     }
@@ -387,7 +415,8 @@ impl Engine {
         bus_node: NodeId,
         pan: f32,
     ) -> Option<VoiceId> {
-        match self.request_admission() {
+        let group = bus_group(bus_node);
+        match self.request_admission(group) {
             Some(Admission::Reject) => return None,
             Some(Admission::Steal(victim)) => self.steal_voice(victim),
             Some(Admission::Admit) | None => {}
@@ -401,7 +430,7 @@ impl Engine {
             }
         };
         if let Some(alloc) = self.voice_alloc.as_mut() {
-            alloc.record_spawn(id);
+            alloc.record_spawn_in(id, group);
         }
         Some(id)
     }
@@ -514,7 +543,7 @@ impl Engine {
 
     /// Ask the attached allocator (if any) whether a new voice may spawn,
     /// giving it each voice's current level when its policy needs one.
-    fn request_admission(&mut self) -> Option<Admission> {
+    fn request_admission(&mut self, group: u64) -> Option<Admission> {
         let quietest = self
             .voice_alloc
             .as_ref()
@@ -530,7 +559,7 @@ impl Engine {
         let level = |id: VoiceId| levels.iter().find(|(v, _)| *v == id).and_then(|(_, l)| *l);
         self.voice_alloc
             .as_mut()
-            .map(|alloc| alloc.request_scored(level))
+            .map(|alloc| alloc.request_in(group, level))
     }
 
     /// A voice's current output level: the RMS, over every channel, of its
@@ -980,6 +1009,19 @@ impl Engine {
     ) -> Option<VoiceId> {
         let bus_node = routing.bus_node(bus_id)?;
         self.spawn_voice_on_bus(def, bus_node)
+    }
+
+    /// [`spawn_voice_on_routing_bus`](Self::spawn_voice_on_routing_bus)
+    /// through the attached allocator (see
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed)).
+    pub fn spawn_voice_on_routing_bus_managed(
+        &mut self,
+        def: &SynthDef,
+        routing: &RoutingGraph,
+        bus_id: BusId,
+    ) -> Option<VoiceId> {
+        let bus_node = routing.bus_node(bus_id)?;
+        self.spawn_voice_on_bus_managed(def, bus_node)
     }
 
     /// Set a named parameter on an effect by EffectId.

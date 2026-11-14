@@ -48,6 +48,19 @@ pub enum StealPolicy {
     Quietest,
 }
 
+/// What a [`VoiceAllocator`]'s budget counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetScope {
+    /// One budget over every voice it tracks (the default).
+    Global,
+    /// One budget per group: a request counts, and steals from, only the
+    /// voices recorded in its own group. `Engine` uses the bus a voice is
+    /// spawned onto as its group, so each bus gets the budget — the
+    /// resource that runs out is a bus's input slots, and one instrument's
+    /// long tails should not steal another's notes on a different bus.
+    PerGroup,
+}
+
 /// The outcome of requesting a voice from a [`VoiceAllocator`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
@@ -72,9 +85,12 @@ pub enum Admission {
 pub struct VoiceAllocator {
     budget: usize,
     policy: StealPolicy,
+    scope: BudgetScope,
     /// Active voice IDs in spawn order (oldest first), so `Oldest` and
     /// `Newest` can be read straight off the ends of the list.
     active: Vec<VoiceId>,
+    /// The group of each entry of `active` (0 unless recorded otherwise).
+    groups: Vec<u64>,
 }
 
 impl VoiceAllocator {
@@ -84,8 +100,21 @@ impl VoiceAllocator {
         VoiceAllocator {
             budget,
             policy,
+            scope: BudgetScope::Global,
             active: Vec::new(),
+            groups: Vec::new(),
         }
+    }
+
+    /// The same allocator with its budget counted per `scope`.
+    pub fn with_scope(mut self, scope: BudgetScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// What the budget counts.
+    pub fn scope(&self) -> BudgetScope {
+        self.scope
     }
 
     /// The configured voice budget.
@@ -121,6 +150,29 @@ impl VoiceAllocator {
     /// `record_free` for a `Steal`) once the decision has been acted on.
     pub fn request(&mut self) -> Admission {
         self.request_scored(|_| None)
+    }
+
+    /// [`request_scored`](Self::request_scored) for a voice about to join
+    /// `group`. Under [`BudgetScope::PerGroup`] only that group's voices
+    /// count toward the budget and only they can be stolen; under
+    /// [`BudgetScope::Global`] the group is ignored.
+    pub fn request_in(&mut self, group: u64, level: impl Fn(VoiceId) -> Option<f32>) -> Admission {
+        if self.scope == BudgetScope::Global {
+            return self.request_scored(level);
+        }
+        let in_group: Vec<VoiceId> = self
+            .active
+            .iter()
+            .zip(&self.groups)
+            .filter(|&(_, &g)| g == group)
+            .map(|(&v, _)| v)
+            .collect();
+        if in_group.len() < self.budget {
+            return Admission::Admit;
+        }
+        self.pick_victim(|v| in_group.contains(&v), level)
+            .map(Admission::Steal)
+            .unwrap_or(Admission::Reject)
     }
 
     /// [`request`](Self::request), with each active voice's current output
@@ -167,13 +219,23 @@ impl VoiceAllocator {
 
     /// Record that `id` has just been spawned and is now active.
     pub fn record_spawn(&mut self, id: VoiceId) {
+        self.record_spawn_in(id, 0);
+    }
+
+    /// Record that `id` has just been spawned into `group` (see
+    /// [`BudgetScope::PerGroup`]).
+    pub fn record_spawn_in(&mut self, id: VoiceId, group: u64) {
         self.active.push(id);
+        self.groups.push(group);
     }
 
     /// Record that `id` is no longer active (freed directly, stolen, or
     /// finished on its own). A no-op if `id` isn't tracked.
     pub fn record_free(&mut self, id: VoiceId) {
-        self.active.retain(|&v| v != id);
+        if let Some(i) = self.active.iter().position(|&v| v == id) {
+            self.active.remove(i);
+            self.groups.remove(i);
+        }
     }
 }
 
