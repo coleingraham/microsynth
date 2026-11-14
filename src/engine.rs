@@ -7,7 +7,7 @@ use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
 use crate::synthdef::{DonePlan, Synth, SynthDef, SynthParam};
 use crate::ugens;
-use crate::voice::{Admission, VoiceAllocator};
+use crate::voice::{Admission, BudgetScope, StealPolicy, VoiceAllocator};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -39,6 +39,31 @@ struct Voice {
     /// straight to the bus with no `Pan2` in the path. Owned by the voice so
     /// `free_voice` can tear them down alongside its synth.
     pan_nodes: Option<(NodeId, NodeId)>,
+    /// The engine's sample offset when the voice was spawned: it has rendered
+    /// at least one block once the offset has moved past this.
+    born: u64,
+    /// The bus the voice was spawned onto, if any.
+    bus: Option<NodeId>,
+    /// Set once the voice has been stolen: the `StealFade` node now between
+    /// it and its bus slot, the sample offset the fade began at, and the
+    /// index of its [`StealRecord`]. The voice keeps its slot until the fade
+    /// reports done.
+    fade: Option<(NodeId, u64, usize)>,
+}
+
+/// One voice steal, as [`Engine::steals`] records it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StealRecord {
+    /// The engine's sample offset when the voice was stolen (the start of
+    /// the block about to render).
+    pub sample: u64,
+    /// The victim's level at that moment ([`Engine::voice_level`]), if it
+    /// had rendered a block.
+    pub level: Option<f32>,
+    /// `true` when the victim was freed at once instead of faded: it had no
+    /// bus slot to fade through, or its bus was full and the slot was needed
+    /// now.
+    pub cut: bool,
 }
 
 /// The synthesis engine. Owns the audio graph and drives rendering.
@@ -65,6 +90,16 @@ pub struct Engine {
     /// callers that opt in through `spawn_voice_managed`/
     /// `spawn_voice_on_bus_managed`.
     voice_alloc: Option<VoiceAllocator>,
+    /// Every steal made by the managed spawn paths, in order.
+    steals: Vec<StealRecord>,
+}
+
+/// The allocator group of voices spawned onto no bus.
+const OFF_BUS_GROUP: u64 = u64::MAX;
+
+/// The allocator group of voices spawned onto `bus`: the bus itself.
+fn bus_group(bus: NodeId) -> u64 {
+    bus.index() as u64
 }
 
 /// Derive a deterministic noise seed from the voice spawn order and the UGen's
@@ -88,6 +123,7 @@ impl Engine {
             scheduler: Scheduler::new(),
             noise_spawn_seq: 0,
             voice_alloc: None,
+            steals: Vec::new(),
         }
     }
 
@@ -95,6 +131,26 @@ impl Engine {
     /// / `spawn_voice_on_bus_managed` enforce it; the plain `spawn_voice` /
     /// `spawn_voice_on_bus` remain unconditional.
     pub fn set_voice_allocator(&mut self, alloc: VoiceAllocator) {
+        self.voice_alloc = Some(alloc);
+    }
+
+    /// Give every bus a budget of `budget` sounding voices under `policy`
+    /// ([`BudgetScope::PerGroup`] with each bus as its group), enforced by
+    /// the managed spawn paths; `budget == 0` detaches the allocator. Live
+    /// voices are counted from the start (each against its bus; voices
+    /// already fading after a steal are not). A steal fades its victim out
+    /// over 5 ms in its slot, so keep `budget` below
+    /// [`ugens::MAX_BUS_INPUTS`] to leave fading voices room (see
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed)).
+    pub fn set_voice_budget(&mut self, budget: usize, policy: StealPolicy) {
+        if budget == 0 {
+            self.voice_alloc = None;
+            return;
+        }
+        let mut alloc = VoiceAllocator::new(budget, policy).with_scope(BudgetScope::PerGroup);
+        for v in self.voices.iter().filter(|v| v.fade.is_none()) {
+            alloc.record_spawn_in(v.id, v.bus.map_or(OFF_BUS_GROUP, bus_group));
+        }
         self.voice_alloc = Some(alloc);
     }
 
@@ -208,6 +264,9 @@ impl Engine {
             id,
             synth: synth.clone_handle(),
             pan_nodes: None,
+            born: self.context.sample_offset,
+            bus: None,
+            fade: None,
         });
         id
     }
@@ -285,58 +344,248 @@ impl Engine {
             id,
             synth: synth.clone_handle(),
             pan_nodes,
+            born: self.context.sample_offset,
+            bus: Some(bus_node),
+            fade: None,
         });
         Some(id)
     }
 
     /// Spawn a voice through the attached voice allocator, if any.
     ///
-    /// Enforces its budget and stealing policy: may free an existing voice
-    /// first to make room, or decline the spawn entirely. Falls back to
-    /// `spawn_voice`'s unconditional behavior when no allocator is attached.
+    /// Enforces its budget and stealing policy: may steal an existing voice
+    /// first to make room (see [`spawn_voice_on_bus_managed`]
+    /// (Self::spawn_voice_on_bus_managed) for what a steal does), or decline
+    /// the spawn entirely. Falls back to `spawn_voice`'s unconditional
+    /// behavior when no allocator is attached.
     ///
     /// Returns `None` only when an allocator is attached, its budget is
     /// full, and its policy declines to make room (`StealPolicy::Reject`).
     pub fn spawn_voice_managed(&mut self, def: &SynthDef) -> Option<VoiceId> {
-        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
-        match admission {
+        match self.request_admission(OFF_BUS_GROUP) {
             Some(Admission::Reject) => return None,
-            Some(Admission::Steal(victim)) => self.free_voice(victim),
+            Some(Admission::Steal(victim)) => self.steal_voice(victim),
             Some(Admission::Admit) | None => {}
         }
         let id = self.spawn_voice(def);
         if let Some(alloc) = self.voice_alloc.as_mut() {
-            alloc.record_spawn(id);
+            alloc.record_spawn_in(id, OFF_BUS_GROUP);
         }
         Some(id)
     }
 
     /// Like `spawn_voice_managed`, but connects the voice to a bus (see
-    /// `spawn_voice_on_bus`). Returns `None` either because the allocator's
-    /// policy declined the spawn, or because the bus had no free slot.
+    /// `spawn_voice_on_bus`).
     ///
-    /// These two `None` cases are not equivalent for side effects: if the
-    /// allocator's policy called for a steal, that victim voice is freed
-    /// *before* the bus is checked for a free slot. So a `None` return does
-    /// not mean nothing happened — a voice may already have been freed (the
-    /// steal succeeded) even though this call itself failed (the bus didn't
-    /// have room). Treating `None` as a no-op will silently lose that voice.
+    /// **A steal fades, it does not cut.** The victim leaves the allocator's
+    /// count at once, but stays in the graph behind a [`ugens::StealFade`]
+    /// spliced into its bus slot: its output falls to silence along a raised
+    /// cosine over [`ugens::steal_fade_samples`] (221 samples at 44.1 kHz,
+    /// 5 ms), and [`free_done_synths`](Self::free_done_synths) frees it once
+    /// the fade is done. Until then it keeps its slot. A victim with no bus
+    /// (spawned through `spawn_voice_managed`) has nothing to fade through
+    /// and is freed at once.
+    ///
+    /// **A full bus.** If the bus has no free slot, an allocator-managed
+    /// spawn makes one rather than fail: it frees the fading voice on this
+    /// bus that started fading earliest, else (under any policy but
+    /// `Reject`) the voice on this bus the policy picks, freed at once. Both
+    /// are recorded as cut steals. Leave the budget below the bus's slot
+    /// count so stolen voices have room to finish their fades.
+    ///
+    /// Returns `None` because the allocator's policy declined the spawn, or
+    /// because the bus had no free slot and nothing on it could be freed.
+    /// These two `None` cases are not equivalent for side effects: a steal
+    /// the budget called for happens before the bus is checked for a free
+    /// slot, so a `None` return does not mean nothing happened.
     pub fn spawn_voice_on_bus_managed(
         &mut self,
         def: &SynthDef,
         bus_node: NodeId,
     ) -> Option<VoiceId> {
-        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
-        match admission {
+        self.spawn_voice_on_bus_panned_managed(def, bus_node, 0.0)
+    }
+
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed) at a
+    /// stereo position (see [`spawn_voice_on_bus_panned`]
+    /// (Self::spawn_voice_on_bus_panned)).
+    pub fn spawn_voice_on_bus_panned_managed(
+        &mut self,
+        def: &SynthDef,
+        bus_node: NodeId,
+        pan: f32,
+    ) -> Option<VoiceId> {
+        let group = bus_group(bus_node);
+        match self.request_admission(group) {
             Some(Admission::Reject) => return None,
-            Some(Admission::Steal(victim)) => self.free_voice(victim),
+            Some(Admission::Steal(victim)) => self.steal_voice(victim),
             Some(Admission::Admit) | None => {}
         }
-        let id = self.spawn_voice_on_bus(def, bus_node)?;
+        let id = loop {
+            if let Some(id) = self.spawn_voice_on_bus_panned(def, bus_node, pan) {
+                break id;
+            }
+            if !self.reclaim_bus_slot(bus_node) {
+                return None;
+            }
+        };
         if let Some(alloc) = self.voice_alloc.as_mut() {
-            alloc.record_spawn(id);
+            alloc.record_spawn_in(id, group);
         }
         Some(id)
+    }
+
+    /// Steal `victim`: drop it from the allocator's count and fade it out
+    /// through its bus slot, or free it at once if it has no slot to fade
+    /// through. Records the steal.
+    fn steal_voice(&mut self, victim: VoiceId) {
+        let level = self.voice_level(victim);
+        if let Some(alloc) = self.voice_alloc.as_mut() {
+            alloc.record_free(victim);
+        }
+        let record = self.steals.len();
+        let faded = self.begin_fade(victim, record);
+        if !faded {
+            self.free_voice(victim);
+        }
+        self.steals.push(StealRecord {
+            sample: self.context.sample_offset,
+            level,
+            cut: !faded,
+        });
+    }
+
+    /// Splice a `StealFade` between `voice` and its bus slot. Returns false
+    /// (and changes nothing) if the voice is unknown, already fading, or not
+    /// connected to a bus.
+    fn begin_fade(&mut self, voice_id: VoiceId, record: usize) -> bool {
+        let Some(voice) = self.voices.iter().find(|v| v.id == voice_id) else {
+            return false;
+        };
+        let Some(bus) = voice.bus else {
+            return false;
+        };
+        if voice.fade.is_some() {
+            return false;
+        }
+        let feeder = match voice.pan_nodes {
+            Some((pan2, _)) => pan2,
+            None => voice.synth.output_node(),
+        };
+        let Some(slot) = self.graph.input_slot_from(feeder, bus) else {
+            return false;
+        };
+        let len = ugens::steal_fade_samples(self.context.sample_rate);
+        let fade = self
+            .graph
+            .add_node(alloc::boxed::Box::new(ugens::StealFade::new(len)));
+        self.graph.connect(feeder, fade, 0);
+        self.graph.connect(fade, bus, slot);
+        let started = self.context.sample_offset;
+        if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice_id) {
+            v.fade = Some((fade, started, record));
+        }
+        true
+    }
+
+    /// Free one voice on a full `bus` so a managed spawn can take its slot:
+    /// the earliest-started fading voice, else a live one the allocator's
+    /// policy picks. Returns false if there is nothing to free (no allocator,
+    /// or neither kind of voice on this bus).
+    fn reclaim_bus_slot(&mut self, bus: NodeId) -> bool {
+        if self.voice_alloc.is_none() {
+            return false;
+        }
+        let fading = self
+            .voices
+            .iter()
+            .filter(|v| v.bus == Some(bus))
+            .filter_map(|v| v.fade.map(|(_, started, record)| (v.id, started, record)))
+            .min_by_key(|&(_, started, _)| started);
+        if let Some((id, _, record)) = fading {
+            // Already recorded as a steal; freeing it before its fade ends
+            // turns that steal into a cut.
+            self.free_voice(id);
+            if let Some(rec) = self.steals.get_mut(record) {
+                rec.cut = true;
+            }
+            return true;
+        }
+        let on_bus: Vec<(VoiceId, Option<f32>)> = self
+            .voices
+            .iter()
+            .filter(|v| v.bus == Some(bus) && v.fade.is_none())
+            .map(|v| (v.id, self.voice_level(v.id)))
+            .collect();
+        let victim = self.voice_alloc.as_ref().and_then(|a| {
+            a.pick_victim(
+                |v| on_bus.iter().any(|(id, _)| *id == v),
+                |v| on_bus.iter().find(|(id, _)| *id == v).and_then(|(_, l)| *l),
+            )
+        });
+        let Some(id) = victim else {
+            return false;
+        };
+        let level = self.voice_level(id);
+        self.free_voice(id);
+        self.steals.push(StealRecord {
+            sample: self.context.sample_offset,
+            level,
+            cut: true,
+        });
+        true
+    }
+
+    /// Every steal the managed spawn paths have made, in order.
+    pub fn steals(&self) -> &[StealRecord] {
+        &self.steals
+    }
+
+    /// Ask the attached allocator (if any) whether a new voice may spawn,
+    /// giving it each voice's current level when its policy needs one.
+    fn request_admission(&mut self, group: u64) -> Option<Admission> {
+        let quietest = self
+            .voice_alloc
+            .as_ref()
+            .is_some_and(|a| a.policy() == StealPolicy::Quietest);
+        let levels: Vec<(VoiceId, Option<f32>)> = if quietest {
+            self.voices
+                .iter()
+                .map(|v| (v.id, self.voice_level(v.id)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let level = |id: VoiceId| levels.iter().find(|(v, _)| *v == id).and_then(|(_, l)| *l);
+        self.voice_alloc
+            .as_mut()
+            .map(|alloc| alloc.request_in(group, level))
+    }
+
+    /// A voice's current output level: the RMS, over every channel, of its
+    /// output node's last rendered block (before any pan or bus). `None` if
+    /// the voice does not exist or has not rendered a block since it was
+    /// spawned (its output buffer holds nothing of its own yet).
+    ///
+    /// This is the level [`StealPolicy::Quietest`] steals by. It reads the
+    /// signal itself rather than an envelope: a sampled note's envelope can
+    /// sit at full sustain while the recording under it has decayed away,
+    /// and a synth voice has no single envelope to read. It costs nothing
+    /// until a steal asks for it.
+    pub fn voice_level(&self, voice_id: VoiceId) -> Option<f32> {
+        let voice = self.voices.iter().find(|v| v.id == voice_id)?;
+        if self.context.sample_offset <= voice.born {
+            return None;
+        }
+        let buf = self.graph.node_output(voice.synth.output_node())?;
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for ch in 0..buf.num_channels() {
+            for &x in buf.channel(ch).samples() {
+                sum += f64::from(x) * f64::from(x);
+                n += 1;
+            }
+        }
+        (n > 0).then(|| (sum / n as f64).sqrt() as f32)
     }
 
     /// Set a named parameter on a voice by VoiceId.
@@ -361,6 +610,9 @@ impl Engine {
             if let Some((pan2_node, const_node)) = voice.pan_nodes {
                 self.graph.remove_node(pan2_node);
                 self.graph.remove_node(const_node);
+            }
+            if let Some((fade, _, _)) = voice.fade {
+                self.graph.remove_node(fade);
             }
         }
         // Keep the allocator's bookkeeping accurate regardless of whether
@@ -567,10 +819,25 @@ impl Engine {
     /// once per synth at instantiation; a synth with no done-reporting node
     /// on it is never freed here (free it with `free_voice`).
     ///
+    /// Also frees every stolen voice whose fade-out has finished (see
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed)).
+    ///
     /// Returns the number of synths removed.
     /// After calling this, you must call `prepare()` before rendering.
     pub fn free_done_synths(&mut self) -> usize {
         let mut removed = 0;
+        // Stolen voices whose fade has run out (see
+        // `spawn_voice_on_bus_managed`).
+        let faded: Vec<VoiceId> = self
+            .voices
+            .iter()
+            .filter(|v| v.fade.is_some_and(|(f, _, _)| self.graph.node_is_done(f)))
+            .map(|v| v.id)
+            .collect();
+        for id in faded {
+            self.free_voice(id);
+            removed += 1;
+        }
         let mut i = 0;
         while i < self.synths.len() {
             let is_done = self.synths[i].output_is_done(&self.graph);
@@ -594,6 +861,14 @@ impl Engine {
                     .filter(|v| v.synth.output_node() == synth.output_node())
                     .filter_map(|v| v.pan_nodes)
                     .collect();
+                // And the fade a stolen voice was playing through, if it
+                // finished on its own first.
+                let freed_fades: Vec<NodeId> = self
+                    .voices
+                    .iter()
+                    .filter(|v| v.synth.output_node() == synth.output_node())
+                    .filter_map(|v| v.fade.map(|(f, _, _)| f))
+                    .collect();
                 self.voices
                     .retain(|v| v.synth.output_node() != synth.output_node());
                 if let Some(alloc) = self.voice_alloc.as_mut() {
@@ -607,6 +882,9 @@ impl Engine {
                 for (pan2_node, const_node) in freed_pan_nodes {
                     self.graph.remove_node(pan2_node);
                     self.graph.remove_node(const_node);
+                }
+                for fade in freed_fades {
+                    self.graph.remove_node(fade);
                 }
                 removed += 1;
             } else {
@@ -731,6 +1009,19 @@ impl Engine {
     ) -> Option<VoiceId> {
         let bus_node = routing.bus_node(bus_id)?;
         self.spawn_voice_on_bus(def, bus_node)
+    }
+
+    /// [`spawn_voice_on_routing_bus`](Self::spawn_voice_on_routing_bus)
+    /// through the attached allocator (see
+    /// [`spawn_voice_on_bus_managed`](Self::spawn_voice_on_bus_managed)).
+    pub fn spawn_voice_on_routing_bus_managed(
+        &mut self,
+        def: &SynthDef,
+        routing: &RoutingGraph,
+        bus_id: BusId,
+    ) -> Option<VoiceId> {
+        let bus_node = routing.bus_node(bus_id)?;
+        self.spawn_voice_on_bus_managed(def, bus_node)
     }
 
     /// Set a named parameter on an effect by EffectId.

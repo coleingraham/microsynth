@@ -140,6 +140,15 @@ impl AudioGraph {
         self.dirty = true;
     }
 
+    /// The input port of `to` that `from` feeds, if they are connected (the
+    /// first such edge when `from` feeds several ports of `to`).
+    pub fn input_slot_from(&self, from: NodeId, to: NodeId) -> Option<usize> {
+        self.edges
+            .iter()
+            .find(|e| e.from == from && e.to == to)
+            .map(|e| e.to_input)
+    }
+
     /// Disconnect a specific input port.
     pub fn disconnect(&mut self, to: NodeId, input_index: usize) {
         self.edges
@@ -182,28 +191,41 @@ impl AudioGraph {
         self.input_sources.clear();
         self.input_sources.resize(n, Vec::new());
 
+        // Size each live node's port table, then place every edge in one pass
+        // over the edge list: O(edges + ports), not O(ports × edges). A bus
+        // has hundreds of ports, so a per-port edge scan made every
+        // `prepare()` cost ports × edges per bus.
+        //
+        // `seen` reproduces the per-port scan exactly: the FIRST edge listed
+        // for a (node, port) decides it, even when its source has since been
+        // removed (the port then stays unconnected). `connect` keeps at most
+        // one edge per (node, port), so in practice there is only one.
+        let mut seen: Vec<Vec<bool>> = Vec::with_capacity(n);
+        for idx in 0..n {
+            let ports = self.nodes[idx]
+                .as_ref()
+                .map_or(0, |slot| slot.ugen.spec().inputs.len());
+            self.input_sources[idx].resize(ports, None);
+            seen.push(alloc::vec![false; ports]);
+        }
+        for edge in &self.edges {
+            let (to, port) = (edge.to.index(), edge.to_input);
+            if to >= n || port >= seen[to].len() || seen[to][port] {
+                continue;
+            }
+            seen[to][port] = true;
+            if self.nodes[edge.from.index()].is_some() {
+                self.input_sources[to][port] = Some(edge.from);
+            }
+        }
+
         for idx in 0..n {
             let spec = match &self.nodes[idx] {
                 Some(slot) => slot.ugen.spec(),
-                None => {
-                    self.input_sources[idx].clear();
-                    continue;
-                }
+                None => continue,
             };
-
-            let node_id = NodeId(idx as u32);
-            let sources = &mut self.input_sources[idx];
-            sources.clear();
             for (input_idx, input_spec) in spec.inputs.iter().enumerate() {
-                let src = self
-                    .edges
-                    .iter()
-                    .find(|e| e.to == node_id && e.to_input == input_idx)
-                    .map(|e| e.from)
-                    // Only keep the source if the node still exists.
-                    .filter(|from| self.nodes[from.index()].is_some());
-
-                if src.is_none() && input_spec.required {
+                if input_spec.required && self.input_sources[idx][input_idx].is_none() {
                     panic!(
                         "AudioGraph::prepare: node {} ({}) has an unconnected required \
                          input port {} ({}) — connect a source to this port before \
@@ -211,8 +233,6 @@ impl AudioGraph {
                         idx, spec.name, input_idx, input_spec.name
                     );
                 }
-
-                sources.push(src);
             }
         }
     }

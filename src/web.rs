@@ -454,7 +454,7 @@ pub unsafe extern "C" fn ms_spawn_voice_named(name_ptr: *const u8, name_len: usi
         None => return 0,
     };
 
-    match engine.spawn_voice_on_bus(def, bus_id) {
+    match engine.spawn_voice_on_bus_managed(def, bus_id) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0
@@ -506,7 +506,7 @@ pub unsafe extern "C" fn ms_spawn_voice_named_panned(
         None => return 0,
     };
 
-    match engine.spawn_voice_on_bus_panned(def, bus_id, pan) {
+    match engine.spawn_voice_on_bus_panned_managed(def, bus_id, pan) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0
@@ -828,7 +828,7 @@ pub extern "C" fn ms_spawn_voice() -> u64 {
         return 0;
     }
 
-    match engine.spawn_voice_on_bus(&defs[0], bus_id) {
+    match engine.spawn_voice_on_bus_managed(&defs[0], bus_id) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0
@@ -871,7 +871,7 @@ pub extern "C" fn ms_spawn_voice_panned(pan: f32) -> u64 {
         return 0;
     }
 
-    match engine.spawn_voice_on_bus_panned(&defs[0], bus_id, pan) {
+    match engine.spawn_voice_on_bus_panned_managed(&defs[0], bus_id, pan) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0
@@ -984,6 +984,91 @@ pub extern "C" fn ms_free_done() -> u32 {
         engine.prepare();
     }
     count as u32
+}
+
+// ============================================================================
+// Voice budget and stealing
+// ============================================================================
+//
+// Every spawn export (`ms_spawn_voice`, `ms_spawn_voice_panned`,
+// `ms_spawn_voice_named`, `ms_spawn_voice_named_panned`,
+// `ms_spawn_voice_on_routing_bus_named`) goes through the engine's managed
+// spawn path. With no budget set (the default, and after every session
+// init) that path is exactly the unmanaged one: a voice that finds its bus
+// full is refused (the export returns 0). `ms_set_voice_budget` gives each
+// bus a budget of sounding voices; past it, a new voice steals one chosen by
+// the policy, and the victim fades out over 5 ms in its slot before it is
+// freed (by `ms_free_done`). See `Engine::spawn_voice_on_bus_managed`.
+
+/// Set every bus's voice budget and steal policy for this session, or
+/// detach it with `budget == 0` (the default state). Call after the session
+/// init export and before spawning; live voices are counted from then on.
+///
+/// `policy`: `0` = reject (refuse the new voice, as with no budget), `1` =
+/// oldest, `2` = newest, `3` = quietest (lowest output RMS over its last
+/// rendered block; see `StealPolicy::Quietest`). Leave `budget` below
+/// `ms_bus_max_inputs()` so stolen voices have slots to fade out in; when a
+/// bus is full anyway, the spawn cuts a fading voice (or, failing that, one
+/// the policy picks) without a fade, counted by `ms_voice_cuts`.
+///
+/// Returns 0 on success, 1 if no session is initialized, 2 for an unknown
+/// policy code.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_set_voice_budget(budget: u32, policy: u32) -> u32 {
+    let policy = match policy {
+        0 => crate::voice::StealPolicy::Reject,
+        1 => crate::voice::StealPolicy::Oldest,
+        2 => crate::voice::StealPolicy::Newest,
+        3 => crate::voice::StealPolicy::Quietest,
+        _ => return 2,
+    };
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 1,
+    };
+    engine.set_voice_budget(budget as usize, policy);
+    0
+}
+
+/// How many voices this session has stolen (faded or cut). 0 with no
+/// session.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_voice_steals() -> u32 {
+    match unsafe { ENGINE.get_mut() }.as_ref() {
+        Some(e) => e.steals().len() as u32,
+        None => 0,
+    }
+}
+
+/// How many of `ms_voice_steals` were cut without a fade: the victim had no
+/// bus slot to fade through, or its bus was full and the slot was needed at
+/// once. 0 with no session.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_voice_cuts() -> u32 {
+    match unsafe { ENGINE.get_mut() }.as_ref() {
+        Some(e) => e.steals().iter().filter(|r| r.cut).count() as u32,
+        None => 0,
+    }
+}
+
+/// The level of steal number `index` (0-based, in steal order): the
+/// victim's output RMS over its last rendered block, linear. NaN if there
+/// is no such steal or the victim had not rendered a block yet.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_voice_steal_level(index: u32) -> f32 {
+    unsafe { ENGINE.get_mut() }
+        .as_ref()
+        .and_then(|e| e.steals().get(index as usize))
+        .and_then(|r| r.level)
+        .unwrap_or(f32::NAN)
+}
+
+/// The number of input slots on every bus (voices plus effect returns):
+/// the most voices a bus can sound at once. A host sizes its voice budget
+/// from this.
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_bus_max_inputs() -> u32 {
+    crate::ugens::MAX_BUS_INPUTS as u32
 }
 
 // ============================================================================
@@ -1272,7 +1357,7 @@ pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named(
         None => return 0,
     };
 
-    match engine.spawn_voice_on_routing_bus(def, routing, bus_id) {
+    match engine.spawn_voice_on_routing_bus_managed(def, routing, bus_id) {
         Some(voice_id) => {
             engine.prepare();
             voice_id.0

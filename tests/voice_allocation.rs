@@ -134,14 +134,14 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    // A bus's input-slot count is a fixed 64 regardless of the channel count
-    // passed to `Bus::new` — fill every slot with voices the allocator never
-    // sees, so there is truly no room left.
+    // A bus's input-slot count is a fixed `MAX_BUS_INPUTS` regardless of the
+    // channel count passed to `Bus::new` — fill every slot with voices the
+    // allocator never sees, so there is truly no room left.
     let bus = engine
         .graph_mut()
         .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
-    let bus_voices: Vec<_> = (0..64)
+    let bus_voices: Vec<_> = (0..ugens::MAX_BUS_INPUTS)
         .map(|_| engine.spawn_voice_on_bus(&defs[0], bus).unwrap())
         .collect();
     engine.prepare();
@@ -153,7 +153,7 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     let count_before = engine.synths().len();
 
     // Budget is full, so this must steal `victim` — but the bus still has no
-    // free slot (all 64 are `bus_voices`, untouched by the steal), so the
+    // free slot (every one is a `bus_voices` entry, untouched by the steal), so the
     // spawn itself fails.
     let result = engine.spawn_voice_on_bus_managed(&defs[0], bus);
 
@@ -186,7 +186,7 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     }
     assert_eq!(
         engine.synths().len(),
-        64,
+        ugens::MAX_BUS_INPUTS,
         "only the original bus voices should remain"
     );
 }
@@ -242,6 +242,142 @@ fn test_free_done_synths_updates_allocator_bookkeeping() {
         "allocator bookkeeping should follow natural voice death, not just explicit free_voice"
     );
     let _ = v1;
+}
+
+// ============================================================================
+// StealPolicy::Quietest: steal the voice with the lowest output level
+// ============================================================================
+
+#[test]
+fn test_quietest_picks_lowest_level_ties_to_oldest() {
+    let mut alloc = VoiceAllocator::new(4, StealPolicy::Quietest);
+    let ids = [VoiceId(1), VoiceId(2), VoiceId(3), VoiceId(4)];
+    for id in ids {
+        alloc.record_spawn(id);
+    }
+    let levels = |id: VoiceId| match id.0 {
+        1 => Some(0.5),
+        2 => Some(0.1),
+        3 => Some(0.1),
+        _ => Some(0.9),
+    };
+    assert_eq!(
+        alloc.request_scored(levels),
+        Admission::Steal(VoiceId(2)),
+        "the lowest level wins; of two equal ones, the older"
+    );
+    // A voice with no level yet is never the quietest while another has one.
+    let unknown_quiet = |id: VoiceId| if id.0 == 1 { None } else { Some(0.3) };
+    assert_eq!(
+        alloc.request_scored(unknown_quiet),
+        Admission::Steal(VoiceId(2))
+    );
+    // No levels at all: oldest.
+    assert_eq!(alloc.request_scored(|_| None), Admission::Steal(VoiceId(1)));
+    assert_eq!(alloc.request(), Admission::Steal(VoiceId(1)));
+    // Under budget nothing is stolen.
+    let mut roomy = VoiceAllocator::new(5, StealPolicy::Quietest);
+    roomy.record_spawn(VoiceId(1));
+    assert_eq!(roomy.request_scored(levels), Admission::Admit);
+}
+
+#[test]
+fn test_pick_victim_respects_eligibility_and_reject() {
+    let mut alloc = VoiceAllocator::new(1, StealPolicy::Oldest);
+    alloc.record_spawn(VoiceId(7));
+    alloc.record_spawn(VoiceId(8));
+    assert_eq!(alloc.pick_victim(|v| v.0 != 7, |_| None), Some(VoiceId(8)));
+    assert_eq!(alloc.pick_victim(|_| false, |_| None), None);
+    let reject = VoiceAllocator::new(1, StealPolicy::Reject);
+    assert_eq!(reject.pick_victim(|_| true, |_| None), None);
+}
+
+#[test]
+fn test_per_group_budget_counts_and_steals_within_the_group() {
+    let mut alloc = VoiceAllocator::new(2, StealPolicy::Oldest).with_scope(BudgetScope::PerGroup);
+    alloc.record_spawn_in(VoiceId(1), 10);
+    alloc.record_spawn_in(VoiceId(2), 20);
+    alloc.record_spawn_in(VoiceId(3), 10);
+    assert_eq!(alloc.request_in(20, |_| None), Admission::Admit);
+    assert_eq!(alloc.request_in(10, |_| None), Admission::Steal(VoiceId(1)));
+    // Global scope ignores groups: three voices over a budget of two
+    let mut global = VoiceAllocator::new(2, StealPolicy::Oldest);
+    global.record_spawn_in(VoiceId(1), 10);
+    global.record_spawn_in(VoiceId(2), 20);
+    assert_eq!(
+        global.request_in(30, |_| None),
+        Admission::Steal(VoiceId(1))
+    );
+    alloc.record_free(VoiceId(1));
+    assert_eq!(alloc.request_in(10, |_| None), Admission::Admit);
+}
+
+/// A bus-sink engine plus a def whose output is its `amp` parameter, so a
+/// voice's level is exactly the `amp` it was given.
+fn level_engine() -> (Engine, NodeId, SynthDef) {
+    let registry = builtin_registry();
+    let def = dsl::compile("synthdef dc amp=0.1 = amp * 1.0", &registry)
+        .unwrap()
+        .remove(0);
+    let mut engine = make_engine(64);
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
+    engine.graph_mut().set_sink(bus);
+    engine.prepare();
+    (engine, bus, def)
+}
+
+fn spawn_at(engine: &mut Engine, bus: NodeId, def: &SynthDef, amp: f32) -> VoiceId {
+    let id = engine.spawn_voice_on_bus_managed(def, bus).unwrap();
+    assert!(engine.set_voice_param(id, "amp", amp));
+    engine.prepare();
+    id
+}
+
+#[test]
+fn test_voice_level_is_last_block_rms_and_unknown_before_render() {
+    let (mut engine, bus, def) = level_engine();
+    let v = spawn_at(&mut engine, bus, &def, 0.25);
+    assert_eq!(engine.voice_level(v), None, "nothing rendered yet");
+    engine.render();
+    let l = engine.voice_level(v).unwrap();
+    assert!((l - 0.25).abs() < 1e-6, "DC 0.25 has RMS 0.25, got {l}");
+    assert_eq!(engine.voice_level(VoiceId(9999)), None);
+}
+
+#[test]
+fn test_quietest_steals_the_quietest_rendered_voice() {
+    let (mut engine, bus, def) = level_engine();
+    engine.set_voice_allocator(VoiceAllocator::new(3, StealPolicy::Quietest));
+    let loud = spawn_at(&mut engine, bus, &def, 0.5);
+    let quiet = spawn_at(&mut engine, bus, &def, 0.02);
+    engine.render();
+    // Spawned after the render: no level yet, so never the quietest even
+    // though its output buffer holds nothing.
+    let fresh = spawn_at(&mut engine, bus, &def, 0.3);
+    let newest = spawn_at(&mut engine, bus, &def, 0.4);
+    let active = engine.voice_allocator().unwrap().active_voices().to_vec();
+    assert!(
+        !active.contains(&quiet),
+        "the 0.02 voice is the one stolen, active = {active:?}"
+    );
+    assert_eq!(active, vec![loud, fresh, newest]);
+}
+
+#[test]
+fn test_oldest_ignores_levels() {
+    let (mut engine, bus, def) = level_engine();
+    engine.set_voice_allocator(VoiceAllocator::new(2, StealPolicy::Oldest));
+    let first = spawn_at(&mut engine, bus, &def, 0.5);
+    let second = spawn_at(&mut engine, bus, &def, 0.01);
+    engine.render();
+    let third = spawn_at(&mut engine, bus, &def, 0.4);
+    assert_eq!(
+        engine.voice_allocator().unwrap().active_voices(),
+        &[second, third]
+    );
+    let _ = first;
 }
 
 // ============================================================================
