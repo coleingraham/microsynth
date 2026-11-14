@@ -140,6 +140,15 @@ impl AudioGraph {
         self.dirty = true;
     }
 
+    /// The input port of `to` that `from` feeds, if they are connected (the
+    /// first such edge when `from` feeds several ports of `to`).
+    pub fn input_slot_from(&self, from: NodeId, to: NodeId) -> Option<usize> {
+        self.edges
+            .iter()
+            .find(|e| e.from == from && e.to == to)
+            .map(|e| e.to_input)
+    }
+
     /// Disconnect a specific input port.
     pub fn disconnect(&mut self, to: NodeId, input_index: usize) {
         self.edges
