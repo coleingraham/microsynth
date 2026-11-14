@@ -488,3 +488,45 @@ fn scheduled_note_records_both_onsets() {
         assert_eq!(kept, vec![(1000, 1000), (1000, 963), (20, 0)]);
     }
 }
+
+#[test]
+fn a_bus_tap_equals_the_sink_on_a_split_block() {
+    // The stem taps read a node's output after the block. After a block
+    // rendered in pieces that output must be the whole block, aligned with
+    // the sink's, not the last piece.
+    let reg = builtin_registry();
+    let def = dsl::compile("synthdef plain gate=0.0 = gate * 0.5", &reg)
+        .unwrap()
+        .remove(0);
+    for &b in &BLOCKS {
+        let mut engine = Engine::new(EngineConfig {
+            sample_rate: SR,
+            block_size: b,
+        });
+        let stem = engine
+            .graph_mut()
+            .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
+        let main = engine
+            .graph_mut()
+            .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
+        engine.graph_mut().connect(stem, main, 0);
+        engine.graph_mut().set_sink(main);
+        let v = engine.spawn_voice_on_bus(&def, stem).unwrap();
+        engine.prepare();
+        // The gate opens at sample 37 and a second step lands at 50: the
+        // first block renders in three pieces.
+        let n = 37;
+        engine.scheduler_mut().schedule_gate(n, v, 1.0);
+        engine.scheduler_mut().schedule_gate(50, v, 0.0);
+        let sink: Vec<Vec<f32>> = {
+            let buf = engine.render().expect("sink");
+            (0..2).map(|c| buf.channel(c).samples().to_vec()).collect()
+        };
+        let tap = engine.graph().node_output(stem).expect("stem bus");
+        assert_eq!(tap.block_size(), b, "the tap is a whole block");
+        for (c, want) in sink.iter().enumerate() {
+            assert_eq!(tap.channel(c).samples(), &want[..], "block {b} channel {c}");
+        }
+        assert_eq!(first_nonzero(&sink[0]), Some(n as usize));
+    }
+}

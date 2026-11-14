@@ -98,11 +98,6 @@ pub struct Engine {
     /// Every note scheduled through [`schedule_note`](Self::schedule_note)
     /// or [`schedule_note_span`](Self::schedule_note_span), in order.
     note_onsets: Vec<NoteOnsets>,
-    /// The block assembled from pieces when events fall inside it.
-    split_out: AudioBuffer,
-    /// The graph's buffers hold the length of the last piece rendered, not
-    /// the block length.
-    graph_shrunk: bool,
 }
 
 /// The two onsets of one scheduled note, in samples.
@@ -152,8 +147,6 @@ impl Engine {
             steals: Vec::new(),
             prerolls: Vec::new(),
             note_onsets: Vec::new(),
-            split_out: AudioBuffer::new(0, 0),
-            graph_shrunk: false,
         }
     }
 
@@ -696,18 +689,15 @@ impl Engine {
     /// a parameter change lands on its sample whatever the UGen. A block
     /// with no event strictly inside it renders whole, exactly as before.
     /// `FreeSynth` events stay at the block start, since freeing a voice
-    /// needs `prepare`. After a block rendered in pieces,
-    /// [`voice_level`](Self::voice_level) reads the last piece only.
+    /// needs `prepare`. After a block rendered in pieces every node's output
+    /// is the whole block, so taps and [`voice_level`](Self::voice_level)
+    /// read it as they would after a block rendered whole.
     ///
     /// Returns a reference to the sink node's output, or `None` if
     /// no sink is set.
     pub fn render(&mut self) -> Option<&AudioBuffer> {
         let full = self.context.block_size;
         let start = self.context.sample_offset;
-        if self.graph_shrunk {
-            self.graph.set_block_len(&self.context);
-            self.graph_shrunk = false;
-        }
         let events = self.scheduler.drain_before(start + full as u64);
 
         let mut needs_prepare = false;
@@ -765,14 +755,18 @@ impl Engine {
         let has_output = self.render_piece(start, done, full, &mut split);
         self.context.block_size = full;
         self.context.sample_offset = start;
-        self.graph_shrunk = true;
+        self.graph.finish_split(full);
         self.context.advance();
-        has_output.then_some(&self.split_out)
+        if has_output {
+            self.graph.sink_output()
+        } else {
+            None
+        }
     }
 
-    /// Render samples `from..to` of the block that starts at `start` into
-    /// `split_out`, as one piece, and say whether the graph produced
-    /// output. Does nothing for an empty piece.
+    /// Render samples `from..to` of the block that starts at `start` as one
+    /// piece, add it to every node's whole-block output, and say whether
+    /// the graph produced output. Does nothing for an empty piece.
     fn render_piece(&mut self, start: u64, from: usize, to: usize, split: &mut bool) -> bool {
         if to <= from {
             return false;
@@ -782,16 +776,9 @@ impl Engine {
         self.context.block_size = to - from;
         self.context.sample_offset = start + from as u64;
         self.graph.set_block_len(&self.context);
-        let mut has_output = false;
-        if let Some(buf) = self.graph.render(&self.context) {
-            has_output = true;
-            self.split_out.set_num_channels(buf.num_channels(), full);
-            self.split_out.set_block_size(full);
-            for ch in 0..buf.num_channels() {
-                let src = buf.channel(ch).samples();
-                self.split_out.channel_mut(ch).samples_mut()[from..from + src.len()]
-                    .copy_from_slice(src);
-            }
+        let has_output = self.graph.render(&self.context).is_some();
+        if has_output {
+            self.graph.collect_piece(from, full);
         }
         self.context.block_size = full;
         has_output
