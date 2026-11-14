@@ -2166,9 +2166,7 @@ pub extern "C" fn ms_schedule_note(voice_id: u64, on_time: u64, off_time: u64) {
         Some(e) => e,
         None => return,
     };
-    engine
-        .scheduler_mut()
-        .schedule_note(crate::scheduler::VoiceId(voice_id), on_time, off_time);
+    engine.schedule_note_span(crate::scheduler::VoiceId(voice_id), on_time, off_time);
 }
 
 /// Schedule a note with attack-aligned pre-trigger.

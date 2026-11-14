@@ -85,8 +85,8 @@
 //! **Where it differs from sfizz.** Offsets from `offset_random` are never
 //! honoured (a program carries none; rendering stays sample-deterministic).
 //! The kernel defaults to the measured choice ([`DEFAULT_INTERP`]), not
-//! sfizz's Hermite. Gate edges land on engine blocks (the engine applies
-//! scheduled gates at block starts). Group-level polyphony limits other than
+//! sfizz's Hermite. Gate edges land on their own sample (the engine applies
+//! a scheduled gate at its sample). Group-level polyphony limits other than
 //! a region's own `polyphony` are not modelled. A note-off releases only
 //! this voice's note, not every sounding note of the same key.
 //!

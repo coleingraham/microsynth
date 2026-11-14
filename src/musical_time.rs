@@ -150,12 +150,10 @@ impl TimeConfig {
     /// Rounding rule: each segment's position and glide length are rounded
     /// to the nearest sample, exactly as [`TimeConfig::position_to_samples`]
     /// and [`TimeConfig::steps_to_secs`] already do — this function performs
-    /// no additional rounding. Because the sample-based scheduler dispatches
-    /// an event scheduled for sample N at the start of the block *containing*
-    /// N (see `crate::scheduler`), a position that falls strictly between
-    /// two block boundaries is not truncated or pushed to a neighboring
-    /// block: it lands in whichever block's sample range contains its
-    /// rounded sample time.
+    /// no additional rounding. The engine applies an event scheduled for
+    /// sample N at sample N (see `Engine::render`), so a position that falls
+    /// strictly between two block boundaries is not truncated or pushed to a
+    /// neighboring block: it lands on its rounded sample time.
     ///
     /// Determinism: identical `segments` and an identical `TimeConfig`
     /// always produce an identical output sequence. Rendering the same
