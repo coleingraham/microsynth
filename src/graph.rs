@@ -21,6 +21,11 @@ struct NodeSlot {
     ugen: Box<dyn UGen>,
     /// Pre-allocated output buffer for this node.
     output: AudioBuffer,
+    /// The node's output over a whole block, built up piece by piece while
+    /// the engine renders a block in pieces (`collect_piece`).
+    assembled: AudioBuffer,
+    /// Whether `assembled` holds pieces of the current block.
+    assembled_valid: bool,
     /// Resolved output channel count after multichannel expansion.
     output_channels: usize,
     /// Whether this node has been processed in the current block.
@@ -106,6 +111,8 @@ impl AudioGraph {
         self.nodes.push(Some(NodeSlot {
             ugen,
             output: AudioBuffer::new(1, 1), // placeholder, resized in prepare()
+            assembled: AudioBuffer::new(1, 1), // placeholder, resized in prepare()
+            assembled_valid: false,
             output_channels: 1,
             processed: false,
             initialized: false,
@@ -305,6 +312,73 @@ impl AudioGraph {
         self.nodes[sink_id.index()].as_ref().map(|s| &s.output)
     }
 
+    /// Set the active length of every node's output buffer to the block
+    /// length `context` describes, without reallocating.
+    ///
+    /// `render` writes `context.block_size_for_rate(rate)` samples per node,
+    /// so a caller that renders a block in pieces (see `Engine::render`)
+    /// retargets the lengths before each piece. `prepare()` does the same
+    /// for the whole graph; this one touches only the lengths.
+    pub fn set_block_len(&mut self, context: &ProcessContext) {
+        for slot in self.nodes.iter_mut().flatten() {
+            let rate = slot
+                .ugen
+                .spec()
+                .outputs
+                .first()
+                .map_or(crate::context::Rate::Audio, |o| o.rate);
+            slot.output
+                .set_block_size(context.block_size_for_rate(rate));
+        }
+    }
+
+    /// After a piece of a block has rendered, copy every audio-rate node's
+    /// output into its whole-block buffer at `from`, so that once the last
+    /// piece is in (`finish_split`) a tap on any node reads the full block,
+    /// aligned with the sink's. `full` is the block length.
+    pub fn collect_piece(&mut self, from: usize, full: usize) {
+        for slot in self.nodes.iter_mut().flatten() {
+            let audio = slot
+                .ugen
+                .spec()
+                .outputs
+                .first()
+                .is_none_or(|o| o.rate == crate::context::Rate::Audio);
+            if !audio {
+                continue;
+            }
+            let channels = slot.output.num_channels();
+            // Sized by `prepare()`: nothing is allocated here.
+            debug_assert_eq!(slot.assembled.num_channels(), channels);
+            slot.assembled.set_block_size(full);
+            for ch in 0..channels {
+                let src = slot.output.channel(ch).samples();
+                slot.assembled.channel_mut(ch).samples_mut()[from..from + src.len()]
+                    .copy_from_slice(src);
+            }
+            slot.assembled_valid = true;
+        }
+    }
+
+    /// End a block rendered in pieces: every audio-rate node's output is its
+    /// whole block again.
+    pub fn finish_split(&mut self, full: usize) {
+        for slot in self.nodes.iter_mut().flatten() {
+            if slot.assembled_valid {
+                core::mem::swap(&mut slot.output, &mut slot.assembled);
+                slot.assembled_valid = false;
+            } else if slot.output.block_size() > 1 {
+                slot.output.set_block_size(full);
+            }
+        }
+    }
+
+    /// The sink node's output buffer, if a sink is set.
+    pub fn sink_output(&self) -> Option<&AudioBuffer> {
+        self.sink
+            .and_then(|id| self.nodes[id.index()].as_ref().map(|s| &s.output))
+    }
+
     /// Compute topological ordering using Kahn's algorithm.
     fn topological_sort(&mut self) {
         let n = self.nodes.len();
@@ -395,6 +469,10 @@ impl AudioGraph {
 
             slot.output.set_num_channels(out_ch, block_size);
             slot.output.set_block_size(block_size);
+            // The whole-block buffer is sized here too, so a block rendered
+            // in pieces never allocates (see `collect_piece`).
+            slot.assembled.set_num_channels(out_ch, block_size);
+            slot.assembled.set_block_size(block_size);
         }
     }
 
