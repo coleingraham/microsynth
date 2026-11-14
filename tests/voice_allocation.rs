@@ -245,6 +245,122 @@ fn test_free_done_synths_updates_allocator_bookkeeping() {
 }
 
 // ============================================================================
+// StealPolicy::Quietest: steal the voice with the lowest output level
+// ============================================================================
+
+#[test]
+fn test_quietest_picks_lowest_level_ties_to_oldest() {
+    let mut alloc = VoiceAllocator::new(4, StealPolicy::Quietest);
+    let ids = [VoiceId(1), VoiceId(2), VoiceId(3), VoiceId(4)];
+    for id in ids {
+        alloc.record_spawn(id);
+    }
+    let levels = |id: VoiceId| match id.0 {
+        1 => Some(0.5),
+        2 => Some(0.1),
+        3 => Some(0.1),
+        _ => Some(0.9),
+    };
+    assert_eq!(
+        alloc.request_scored(levels),
+        Admission::Steal(VoiceId(2)),
+        "the lowest level wins; of two equal ones, the older"
+    );
+    // A voice with no level yet is never the quietest while another has one.
+    let unknown_quiet = |id: VoiceId| if id.0 == 1 { None } else { Some(0.3) };
+    assert_eq!(
+        alloc.request_scored(unknown_quiet),
+        Admission::Steal(VoiceId(2))
+    );
+    // No levels at all: oldest.
+    assert_eq!(alloc.request_scored(|_| None), Admission::Steal(VoiceId(1)));
+    assert_eq!(alloc.request(), Admission::Steal(VoiceId(1)));
+    // Under budget nothing is stolen.
+    let mut roomy = VoiceAllocator::new(5, StealPolicy::Quietest);
+    roomy.record_spawn(VoiceId(1));
+    assert_eq!(roomy.request_scored(levels), Admission::Admit);
+}
+
+#[test]
+fn test_pick_victim_respects_eligibility_and_reject() {
+    let mut alloc = VoiceAllocator::new(1, StealPolicy::Oldest);
+    alloc.record_spawn(VoiceId(7));
+    alloc.record_spawn(VoiceId(8));
+    assert_eq!(alloc.pick_victim(|v| v.0 != 7, |_| None), Some(VoiceId(8)));
+    assert_eq!(alloc.pick_victim(|_| false, |_| None), None);
+    let reject = VoiceAllocator::new(1, StealPolicy::Reject);
+    assert_eq!(reject.pick_victim(|_| true, |_| None), None);
+}
+
+/// A bus-sink engine plus a def whose output is its `amp` parameter, so a
+/// voice's level is exactly the `amp` it was given.
+fn level_engine() -> (Engine, NodeId, SynthDef) {
+    let registry = builtin_registry();
+    let def = dsl::compile("synthdef dc amp=0.1 = amp * 1.0", &registry)
+        .unwrap()
+        .remove(0);
+    let mut engine = make_engine(64);
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
+    engine.graph_mut().set_sink(bus);
+    engine.prepare();
+    (engine, bus, def)
+}
+
+fn spawn_at(engine: &mut Engine, bus: NodeId, def: &SynthDef, amp: f32) -> VoiceId {
+    let id = engine.spawn_voice_on_bus_managed(def, bus).unwrap();
+    assert!(engine.set_voice_param(id, "amp", amp));
+    engine.prepare();
+    id
+}
+
+#[test]
+fn test_voice_level_is_last_block_rms_and_unknown_before_render() {
+    let (mut engine, bus, def) = level_engine();
+    let v = spawn_at(&mut engine, bus, &def, 0.25);
+    assert_eq!(engine.voice_level(v), None, "nothing rendered yet");
+    engine.render();
+    let l = engine.voice_level(v).unwrap();
+    assert!((l - 0.25).abs() < 1e-6, "DC 0.25 has RMS 0.25, got {l}");
+    assert_eq!(engine.voice_level(VoiceId(9999)), None);
+}
+
+#[test]
+fn test_quietest_steals_the_quietest_rendered_voice() {
+    let (mut engine, bus, def) = level_engine();
+    engine.set_voice_allocator(VoiceAllocator::new(3, StealPolicy::Quietest));
+    let loud = spawn_at(&mut engine, bus, &def, 0.5);
+    let quiet = spawn_at(&mut engine, bus, &def, 0.02);
+    engine.render();
+    // Spawned after the render: no level yet, so never the quietest even
+    // though its output buffer holds nothing.
+    let fresh = spawn_at(&mut engine, bus, &def, 0.3);
+    let newest = spawn_at(&mut engine, bus, &def, 0.4);
+    let active = engine.voice_allocator().unwrap().active_voices().to_vec();
+    assert!(
+        !active.contains(&quiet),
+        "the 0.02 voice is the one stolen, active = {active:?}"
+    );
+    assert_eq!(active, vec![loud, fresh, newest]);
+}
+
+#[test]
+fn test_oldest_ignores_levels() {
+    let (mut engine, bus, def) = level_engine();
+    engine.set_voice_allocator(VoiceAllocator::new(2, StealPolicy::Oldest));
+    let first = spawn_at(&mut engine, bus, &def, 0.5);
+    let second = spawn_at(&mut engine, bus, &def, 0.01);
+    engine.render();
+    let third = spawn_at(&mut engine, bus, &def, 0.4);
+    assert_eq!(
+        engine.voice_allocator().unwrap().active_voices(),
+        &[second, third]
+    );
+    let _ = first;
+}
+
+// ============================================================================
 // LegatoVoice: mono/legato mode
 // ============================================================================
 

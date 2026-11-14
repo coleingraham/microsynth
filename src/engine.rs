@@ -7,7 +7,7 @@ use crate::routing::{BusId, EffectId, RoutingGraph};
 use crate::scheduler::{EventAction, Scheduler, VoiceId};
 use crate::synthdef::{DonePlan, Synth, SynthDef, SynthParam};
 use crate::ugens;
-use crate::voice::{Admission, VoiceAllocator};
+use crate::voice::{Admission, StealPolicy, VoiceAllocator};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -39,6 +39,9 @@ struct Voice {
     /// straight to the bus with no `Pan2` in the path. Owned by the voice so
     /// `free_voice` can tear them down alongside its synth.
     pan_nodes: Option<(NodeId, NodeId)>,
+    /// The engine's sample offset when the voice was spawned: it has rendered
+    /// at least one block once the offset has moved past this.
+    born: u64,
 }
 
 /// The synthesis engine. Owns the audio graph and drives rendering.
@@ -208,6 +211,7 @@ impl Engine {
             id,
             synth: synth.clone_handle(),
             pan_nodes: None,
+            born: self.context.sample_offset,
         });
         id
     }
@@ -285,6 +289,7 @@ impl Engine {
             id,
             synth: synth.clone_handle(),
             pan_nodes,
+            born: self.context.sample_offset,
         });
         Some(id)
     }
@@ -298,7 +303,7 @@ impl Engine {
     /// Returns `None` only when an allocator is attached, its budget is
     /// full, and its policy declines to make room (`StealPolicy::Reject`).
     pub fn spawn_voice_managed(&mut self, def: &SynthDef) -> Option<VoiceId> {
-        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
+        let admission = self.request_admission();
         match admission {
             Some(Admission::Reject) => return None,
             Some(Admission::Steal(victim)) => self.free_voice(victim),
@@ -326,7 +331,7 @@ impl Engine {
         def: &SynthDef,
         bus_node: NodeId,
     ) -> Option<VoiceId> {
-        let admission = self.voice_alloc.as_mut().map(|alloc| alloc.request());
+        let admission = self.request_admission();
         match admission {
             Some(Admission::Reject) => return None,
             Some(Admission::Steal(victim)) => self.free_voice(victim),
@@ -337,6 +342,53 @@ impl Engine {
             alloc.record_spawn(id);
         }
         Some(id)
+    }
+
+    /// Ask the attached allocator (if any) whether a new voice may spawn,
+    /// giving it each voice's current level when its policy needs one.
+    fn request_admission(&mut self) -> Option<Admission> {
+        let quietest = self
+            .voice_alloc
+            .as_ref()
+            .is_some_and(|a| a.policy() == StealPolicy::Quietest);
+        let levels: Vec<(VoiceId, Option<f32>)> = if quietest {
+            self.voices
+                .iter()
+                .map(|v| (v.id, self.voice_level(v.id)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let level = |id: VoiceId| levels.iter().find(|(v, _)| *v == id).and_then(|(_, l)| *l);
+        self.voice_alloc
+            .as_mut()
+            .map(|alloc| alloc.request_scored(level))
+    }
+
+    /// A voice's current output level: the RMS, over every channel, of its
+    /// output node's last rendered block (before any pan or bus). `None` if
+    /// the voice does not exist or has not rendered a block since it was
+    /// spawned (its output buffer holds nothing of its own yet).
+    ///
+    /// This is the level [`StealPolicy::Quietest`] steals by. It reads the
+    /// signal itself rather than an envelope: a sampled note's envelope can
+    /// sit at full sustain while the recording under it has decayed away,
+    /// and a synth voice has no single envelope to read. It costs nothing
+    /// until a steal asks for it.
+    pub fn voice_level(&self, voice_id: VoiceId) -> Option<f32> {
+        let voice = self.voices.iter().find(|v| v.id == voice_id)?;
+        if self.context.sample_offset <= voice.born {
+            return None;
+        }
+        let buf = self.graph.node_output(voice.synth.output_node())?;
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for ch in 0..buf.num_channels() {
+            for &x in buf.channel(ch).samples() {
+                sum += f64::from(x) * f64::from(x);
+                n += 1;
+            }
+        }
+        (n > 0).then(|| (sum / n as f64).sqrt() as f32)
     }
 
     /// Set a named parameter on a voice by VoiceId.

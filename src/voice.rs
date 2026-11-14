@@ -37,6 +37,15 @@ pub enum StealPolicy {
     /// Free the most-recently-allocated active voice to make room for the
     /// new one.
     Newest,
+    /// Free the active voice with the lowest current output level to make
+    /// room for the new one: the one whose loss is least audible. The level
+    /// is supplied by the caller (see [`VoiceAllocator::request_scored`]);
+    /// `Engine` reads it as the RMS of the voice's output node over its last
+    /// rendered block. A voice with no level yet (spawned since the last
+    /// render) is never chosen while one with a level exists; ties go to the
+    /// oldest. Without levels (plain [`VoiceAllocator::request`]) this acts
+    /// as [`StealPolicy::Oldest`].
+    Quietest,
 }
 
 /// The outcome of requesting a voice from a [`VoiceAllocator`].
@@ -111,23 +120,48 @@ impl VoiceAllocator {
     /// Does not itself mutate any bookkeeping — pair with `record_spawn` (and
     /// `record_free` for a `Steal`) once the decision has been acted on.
     pub fn request(&mut self) -> Admission {
+        self.request_scored(|_| None)
+    }
+
+    /// [`request`](Self::request), with each active voice's current output
+    /// level for [`StealPolicy::Quietest`] (`None` = not known yet; other
+    /// policies ignore it). Like `request`, does not mutate bookkeeping.
+    pub fn request_scored(&mut self, level: impl Fn(VoiceId) -> Option<f32>) -> Admission {
         if self.active.len() < self.budget {
             return Admission::Admit;
         }
+        self.pick_victim(|_| true, level)
+            .map(Admission::Steal)
+            .unwrap_or(Admission::Reject)
+    }
+
+    /// The voice the policy would free among the active voices `eligible`
+    /// accepts, regardless of the budget: `None` under
+    /// [`StealPolicy::Reject`] or when no active voice is eligible.
+    pub fn pick_victim(
+        &self,
+        eligible: impl Fn(VoiceId) -> bool,
+        level: impl Fn(VoiceId) -> Option<f32>,
+    ) -> Option<VoiceId> {
+        let mut candidates = self.active.iter().copied().filter(|&v| eligible(v));
         match self.policy {
-            StealPolicy::Reject => Admission::Reject,
-            StealPolicy::Oldest => self
-                .active
-                .first()
-                .copied()
-                .map(Admission::Steal)
-                .unwrap_or(Admission::Reject),
-            StealPolicy::Newest => self
-                .active
-                .last()
-                .copied()
-                .map(Admission::Steal)
-                .unwrap_or(Admission::Reject),
+            StealPolicy::Reject => None,
+            StealPolicy::Oldest => candidates.next(),
+            StealPolicy::Newest => candidates.last(),
+            StealPolicy::Quietest => {
+                let mut oldest = None;
+                let mut quietest: Option<(VoiceId, f32)> = None;
+                for v in candidates {
+                    oldest.get_or_insert(v);
+                    if let Some(l) = level(v)
+                        // strictly lower: a tie keeps the older voice
+                        && quietest.is_none_or(|(_, q)| l < q)
+                    {
+                        quietest = Some((v, l));
+                    }
+                }
+                quietest.map(|(v, _)| v).or(oldest)
+            }
         }
     }
 
