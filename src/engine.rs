@@ -92,6 +92,32 @@ pub struct Engine {
     voice_alloc: Option<VoiceAllocator>,
     /// Every steal made by the managed spawn paths, in order.
     steals: Vec<StealRecord>,
+    /// Preroll in samples per synthdef name, set by
+    /// [`set_preroll`](Self::set_preroll). Absent means 0.
+    prerolls: Vec<(String, u64)>,
+    /// Every note scheduled through [`schedule_note`](Self::schedule_note)
+    /// or [`schedule_note_span`](Self::schedule_note_span), in order.
+    note_onsets: Vec<NoteOnsets>,
+    /// The block assembled from pieces when events fall inside it.
+    split_out: AudioBuffer,
+    /// The graph's buffers hold the length of the last piece rendered, not
+    /// the block length.
+    graph_shrunk: bool,
+}
+
+/// The two onsets of one scheduled note, in samples.
+///
+/// `notated` is where the note is written. `sound` is where the voice
+/// starts: `notated` minus the preroll of the voice's synthdef (see
+/// [`Engine::set_preroll`]), but never before sample 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoteOnsets {
+    /// The voice the note was scheduled on.
+    pub voice: VoiceId,
+    /// The written onset.
+    pub notated: u64,
+    /// The sample the voice's gate opens at.
+    pub sound: u64,
 }
 
 /// The allocator group of voices spawned onto no bus.
@@ -124,6 +150,10 @@ impl Engine {
             noise_spawn_seq: 0,
             voice_alloc: None,
             steals: Vec::new(),
+            prerolls: Vec::new(),
+            note_onsets: Vec::new(),
+            split_out: AudioBuffer::new(0, 0),
+            graph_shrunk: false,
         }
     }
 
@@ -657,26 +687,59 @@ impl Engine {
     /// Advances the internal clock.
     ///
     /// This is the main render method when using the scheduler.
-    /// Events whose time falls within this block are dispatched before rendering.
+    ///
+    /// An event at sample N takes effect at sample N, not at the start of
+    /// the block that holds N: the block is rendered in pieces that end at
+    /// each event's sample, and the event is applied between pieces. Every
+    /// UGen sees a piece as a block of its own length (`block_size` and
+    /// `sample_offset` of the context are those of the piece), so a gate or
+    /// a parameter change lands on its sample whatever the UGen. A block
+    /// with no event strictly inside it renders whole, exactly as before.
+    /// `FreeSynth` events stay at the block start, since freeing a voice
+    /// needs `prepare`. After a block rendered in pieces,
+    /// [`voice_level`](Self::voice_level) reads the last piece only.
     ///
     /// Returns a reference to the sink node's output, or `None` if
     /// no sink is set.
     pub fn render(&mut self) -> Option<&AudioBuffer> {
-        // Dispatch events for this block
-        let deadline = self.context.sample_offset + self.context.block_size as u64;
-        let events = self.scheduler.drain_before(deadline);
+        let full = self.context.block_size;
+        let start = self.context.sample_offset;
+        if self.graph_shrunk {
+            self.graph.set_block_len(&self.context);
+            self.graph_shrunk = false;
+        }
+        let events = self.scheduler.drain_before(start + full as u64);
 
         let mut needs_prepare = false;
+        for event in &events {
+            if let EventAction::FreeSynth { voice } = event.action {
+                self.free_voice(voice);
+                needs_prepare = true;
+            }
+        }
+        if needs_prepare {
+            self.graph.prepare(&self.context);
+        }
+
+        // Render up to each event's sample, apply it, go on.
+        let mut done = 0usize;
+        let mut split = false;
         for event in events {
+            let at = (event.time.saturating_sub(start) as usize).min(full - 1);
             match event.action {
+                EventAction::FreeSynth { .. } => continue,
                 EventAction::SetParam {
                     voice,
                     param,
                     value,
                 } => {
+                    self.render_piece(start, done, at, &mut split);
+                    done = done.max(at);
                     self.set_voice_param(voice, &param, value);
                 }
                 EventAction::SetGate { voice, value } => {
+                    self.render_piece(start, done, at, &mut split);
+                    done = done.max(at);
                     self.set_voice_param(voice, "gate", value);
                 }
                 EventAction::SetParamGlide {
@@ -687,22 +750,51 @@ impl Engine {
                     shape,
                     space,
                 } => {
+                    self.render_piece(start, done, at, &mut split);
+                    done = done.max(at);
                     self.set_voice_param_glide(voice, &param, target, glide_secs, shape, space);
-                }
-                EventAction::FreeSynth { voice } => {
-                    self.free_voice(voice);
-                    needs_prepare = true;
                 }
             }
         }
 
-        if needs_prepare {
-            self.graph.prepare(&self.context);
+        if !split {
+            let result = self.graph.render(&self.context);
+            self.context.advance();
+            return result;
         }
-
-        let result = self.graph.render(&self.context);
+        let has_output = self.render_piece(start, done, full, &mut split);
+        self.context.block_size = full;
+        self.context.sample_offset = start;
+        self.graph_shrunk = true;
         self.context.advance();
-        result
+        has_output.then_some(&self.split_out)
+    }
+
+    /// Render samples `from..to` of the block that starts at `start` into
+    /// `split_out`, as one piece, and say whether the graph produced
+    /// output. Does nothing for an empty piece.
+    fn render_piece(&mut self, start: u64, from: usize, to: usize, split: &mut bool) -> bool {
+        if to <= from {
+            return false;
+        }
+        *split = true;
+        let full = self.context.block_size;
+        self.context.block_size = to - from;
+        self.context.sample_offset = start + from as u64;
+        self.graph.set_block_len(&self.context);
+        let mut has_output = false;
+        if let Some(buf) = self.graph.render(&self.context) {
+            has_output = true;
+            self.split_out.set_num_channels(buf.num_channels(), full);
+            self.split_out.set_block_size(full);
+            for ch in 0..buf.num_channels() {
+                let src = buf.channel(ch).samples();
+                self.split_out.channel_mut(ch).samples_mut()[from..from + src.len()]
+                    .copy_from_slice(src);
+            }
+        }
+        self.context.block_size = full;
+        has_output
     }
 
     /// Render `num_blocks` blocks of audio into a flat buffer.
@@ -894,13 +986,75 @@ impl Engine {
         removed
     }
 
-    /// Schedule a gate-on at `on_time` and auto gate-off after `duration_samples`.
+    /// Declare how many samples of lead-in the sound of synthdef `def_name`
+    /// has: the voice's own silence or ramp before its attack. The engine
+    /// opens a note's gate that many samples before the notated onset (see
+    /// [`schedule_note`](Self::schedule_note)), so the attack lands on the
+    /// notated time. A def with no declaration has preroll 0. This is
+    /// engine state, outside the compiled def, so it never changes a
+    /// def's content hash.
+    pub fn set_preroll(&mut self, def_name: &str, samples: u64) {
+        match self.prerolls.iter_mut().find(|(n, _)| n == def_name) {
+            Some(entry) => entry.1 = samples,
+            None => self.prerolls.push((String::from(def_name), samples)),
+        }
+    }
+
+    /// The preroll in samples declared for `def_name` (0 if none).
+    pub fn preroll(&self, def_name: &str) -> u64 {
+        self.prerolls
+            .iter()
+            .find(|(n, _)| n == def_name)
+            .map_or(0, |(_, p)| *p)
+    }
+
+    /// Schedule a note whose written onset is `notated_on` and whose gate
+    /// closes after `duration_samples` from it.
     ///
-    /// Both times are absolute sample offsets. Use `TimeConfig::position_to_samples`
-    /// and `TimeConfig::steps_to_samples` to convert from musical time.
-    pub fn schedule_note(&mut self, voice: VoiceId, on_time: u64, duration_samples: u64) {
-        self.scheduler
-            .schedule_note(voice, on_time, on_time + duration_samples);
+    /// The gate opens at `notated_on` minus the preroll of the voice's
+    /// synthdef, or at sample 0 if that is earlier. The gate closes at
+    /// `notated_on + duration_samples`, unshifted. Both onsets are returned
+    /// and kept in [`note_onsets`](Self::note_onsets).
+    ///
+    /// All times are absolute sample offsets. Use
+    /// `TimeConfig::position_to_samples` and `TimeConfig::steps_to_samples`
+    /// to convert from musical time.
+    pub fn schedule_note(
+        &mut self,
+        voice: VoiceId,
+        notated_on: u64,
+        duration_samples: u64,
+    ) -> NoteOnsets {
+        self.schedule_note_span(voice, notated_on, notated_on + duration_samples)
+    }
+
+    /// [`schedule_note`](Self::schedule_note) with the gate-off given as an
+    /// absolute sample offset instead of a duration.
+    pub fn schedule_note_span(
+        &mut self,
+        voice: VoiceId,
+        notated_on: u64,
+        off_time: u64,
+    ) -> NoteOnsets {
+        let preroll = self
+            .voices
+            .iter()
+            .find(|v| v.id == voice)
+            .map_or(0, |v| self.preroll(v.synth.def_name()));
+        let onsets = NoteOnsets {
+            voice,
+            notated: notated_on,
+            sound: notated_on.saturating_sub(preroll),
+        };
+        self.scheduler.schedule_note(voice, onsets.sound, off_time);
+        self.note_onsets.push(onsets);
+        onsets
+    }
+
+    /// Every note scheduled through `schedule_note` or `schedule_note_span`,
+    /// in order, with its notated and sound onsets.
+    pub fn note_onsets(&self) -> &[NoteOnsets] {
+        &self.note_onsets
     }
 
     /// Schedule a note with attack-aligned pre-trigger.

@@ -1,7 +1,7 @@
 //! Sample-accurate event scheduler for the synthesis engine.
 //!
-//! Events are dispatched at block boundaries: an event scheduled for sample N
-//! is processed at the start of the block containing sample N.
+//! The scheduler holds events in time order and hands over the ones that fall
+//! in a block. `Engine::render` applies each at its own sample.
 //!
 //! # Event types
 //!

@@ -305,6 +305,26 @@ impl AudioGraph {
         self.nodes[sink_id.index()].as_ref().map(|s| &s.output)
     }
 
+    /// Set the active length of every node's output buffer to the block
+    /// length `context` describes, without reallocating.
+    ///
+    /// `render` writes `context.block_size_for_rate(rate)` samples per node,
+    /// so a caller that renders a block in pieces (see `Engine::render`)
+    /// retargets the lengths before each piece. `prepare()` does the same
+    /// for the whole graph; this one touches only the lengths.
+    pub fn set_block_len(&mut self, context: &ProcessContext) {
+        for slot in self.nodes.iter_mut().flatten() {
+            let rate = slot
+                .ugen
+                .spec()
+                .outputs
+                .first()
+                .map_or(crate::context::Rate::Audio, |o| o.rate);
+            slot.output
+                .set_block_size(context.block_size_for_rate(rate));
+        }
+    }
+
     /// Compute topological ordering using Kahn's algorithm.
     fn topological_sort(&mut self) {
         let n = self.nodes.len();
