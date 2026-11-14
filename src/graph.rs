@@ -111,7 +111,7 @@ impl AudioGraph {
         self.nodes.push(Some(NodeSlot {
             ugen,
             output: AudioBuffer::new(1, 1), // placeholder, resized in prepare()
-            assembled: AudioBuffer::new(0, 0),
+            assembled: AudioBuffer::new(1, 1), // placeholder, resized in prepare()
             assembled_valid: false,
             output_channels: 1,
             processed: false,
@@ -348,7 +348,8 @@ impl AudioGraph {
                 continue;
             }
             let channels = slot.output.num_channels();
-            slot.assembled.set_num_channels(channels, full);
+            // Sized by `prepare()`: nothing is allocated here.
+            debug_assert_eq!(slot.assembled.num_channels(), channels);
             slot.assembled.set_block_size(full);
             for ch in 0..channels {
                 let src = slot.output.channel(ch).samples();
@@ -468,6 +469,10 @@ impl AudioGraph {
 
             slot.output.set_num_channels(out_ch, block_size);
             slot.output.set_block_size(block_size);
+            // The whole-block buffer is sized here too, so a block rendered
+            // in pieces never allocates (see `collect_piece`).
+            slot.assembled.set_num_channels(out_ch, block_size);
+            slot.assembled.set_block_size(block_size);
         }
     }
 
