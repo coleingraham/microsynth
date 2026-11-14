@@ -134,14 +134,14 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     let defs = dsl::compile("synthdef test freq=440.0 = sinOsc freq 0.0", &registry).unwrap();
 
     let mut engine = make_engine(64);
-    // A bus's input-slot count is a fixed 64 regardless of the channel count
-    // passed to `Bus::new` — fill every slot with voices the allocator never
-    // sees, so there is truly no room left.
+    // A bus's input-slot count is a fixed `MAX_BUS_INPUTS` regardless of the
+    // channel count passed to `Bus::new` — fill every slot with voices the
+    // allocator never sees, so there is truly no room left.
     let bus = engine
         .graph_mut()
         .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
     engine.graph_mut().set_sink(bus);
-    let bus_voices: Vec<_> = (0..64)
+    let bus_voices: Vec<_> = (0..ugens::MAX_BUS_INPUTS)
         .map(|_| engine.spawn_voice_on_bus(&defs[0], bus).unwrap())
         .collect();
     engine.prepare();
@@ -153,7 +153,7 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     let count_before = engine.synths().len();
 
     // Budget is full, so this must steal `victim` — but the bus still has no
-    // free slot (all 64 are `bus_voices`, untouched by the steal), so the
+    // free slot (every one is a `bus_voices` entry, untouched by the steal), so the
     // spawn itself fails.
     let result = engine.spawn_voice_on_bus_managed(&defs[0], bus);
 
@@ -186,7 +186,7 @@ fn test_spawn_on_bus_managed_steal_then_bus_full_still_frees_the_victim() {
     }
     assert_eq!(
         engine.synths().len(),
-        64,
+        ugens::MAX_BUS_INPUTS,
         "only the original bus voices should remain"
     );
 }

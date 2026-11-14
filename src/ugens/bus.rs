@@ -1,16 +1,39 @@
 //! Bus UGen for summing multiple voice outputs.
 //!
-//! A Bus accepts up to `max_voices` inputs and sums them together.
+//! A Bus accepts up to [`MAX_BUS_INPUTS`] inputs and sums them together.
 //! Each input slot is a separate port that a voice's output can be connected to.
 
 use crate::buffer::AudioBuffer;
 use crate::context::{ProcessContext, Rate};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 
-/// Maximum number of simultaneous voice inputs on a single bus.
-const MAX_BUS_INPUTS: usize = 64;
+/// Maximum number of simultaneous inputs (voices, effect returns) on a single
+/// bus.
+///
+/// 256 is sized for offline rendering of long-tail sampled instruments: a
+/// harp or vibraphone whose release outlasts the recording keeps every voice
+/// alive to the end of its sample, and a phrase of chords on one of them
+/// legitimately holds 70 or more voices at once. A voice that finds no free
+/// slot is refused (or, through the managed spawn path with a voice budget,
+/// makes room by stealing). An unconnected slot costs one null pointer
+/// gathered and skipped per block; the slot specs are one shared static
+/// table, so the count adds no per-bus allocation.
+pub const MAX_BUS_INPUTS: usize = 256;
+
+/// The input-port table every bus shares: [`MAX_BUS_INPUTS`] identical,
+/// optional audio ports. One static array instead of a per-bus leaked
+/// allocation — every bus's slots are the same, so they can share it.
+static BUS_INPUT_SPECS: [InputSpec; MAX_BUS_INPUTS] = [BUS_SLOT; MAX_BUS_INPUTS];
+
+/// One bus input slot.
+const BUS_SLOT: InputSpec = InputSpec {
+    name: "in",
+    rate: Rate::Audio,
+    // Every slot is optional: a bus with only some of its slots wired is the
+    // normal case (unused voice/effect capacity), and an unconnected slot
+    // contributes silence to the sum — never a construction error.
+    required: false,
+};
 
 /// A bus's declared *output* channel count, expressed as intent rather than
 /// a bare `usize`.
@@ -47,11 +70,11 @@ impl ChannelCount {
 
 /// A summing bus that mixes multiple inputs together.
 ///
-/// Has up to 64 input ports. Each input slot can receive a voice or effect output.
+/// Has [`MAX_BUS_INPUTS`] input ports. Each input slot can receive a voice or effect output.
 /// Outputs the sum of all connected inputs with a fixed channel count.
 /// Unconnected inputs contribute silence.
 pub struct Bus {
-    /// Leaked static reference to input specs (allocated once, lives for program duration).
+    /// The shared static input-port table ([`BUS_INPUT_SPECS`]).
     input_specs: &'static [InputSpec],
     /// Declared output channel count (e.g. 2 for stereo).
     channels: usize,
@@ -59,27 +82,12 @@ pub struct Bus {
 
 impl Bus {
     /// Create a bus with the given output channel count.
-    /// Input slot count defaults to 64 (internal detail) regardless of the
-    /// output channel count requested here — see [`ChannelCount`]'s doc for
-    /// why the count is typed instead of a bare `usize`.
+    /// Input slot count is [`MAX_BUS_INPUTS`] (internal detail) regardless of
+    /// the output channel count requested here — see [`ChannelCount`]'s doc
+    /// for why the count is typed instead of a bare `usize`.
     pub fn new(channels: ChannelCount) -> Self {
-        let max_inputs = MAX_BUS_INPUTS;
-        let mut specs = Vec::with_capacity(max_inputs);
-        for _ in 0..max_inputs {
-            specs.push(InputSpec {
-                name: "in",
-                rate: Rate::Audio,
-                // Every slot is optional: a bus with only some of its 64
-                // slots wired is the normal case (unused voice/effect
-                // capacity), and an unconnected slot contributes silence to
-                // the sum below — never a construction error.
-                required: false,
-            });
-        }
-        // Leak once — Bus nodes are infrastructure and live for the engine's lifetime
-        let input_specs: &'static [InputSpec] = Box::leak(specs.into_boxed_slice());
         Bus {
-            input_specs,
+            input_specs: &BUS_INPUT_SPECS,
             channels: channels.channels(),
         }
     }
