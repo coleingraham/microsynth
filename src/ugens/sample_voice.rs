@@ -64,7 +64,9 @@
 //! sounding note-on region of the program with `off_by = g` (unless it is in
 //! `g` itself on the same note), with its `off_mode` (`fast` 6 ms,
 //! `normal` its own release, `time` its `off_time`); a choked note fires its
-//! release regions. `note_polyphony` and `polyphony` steal as sfizz does
+//! release regions. A choke or note-off on a region's own first sample takes
+//! effect after one attack step, as in sfizz: an instant attack is released
+//! from full level, not from silence. `note_polyphony` and `polyphony` steal as sfizz does
 //! (lowest velocity first on one note and group; oldest of the region).
 //! Every voice of the program sees the others through the shared session
 //! table: an off requested by another voice takes effect at its sample if
@@ -176,6 +178,9 @@ struct Env {
     transition_delta: f32,
     free_running: bool,
     sample_rate: f32,
+    /// A release that landed before the attack's first step: it takes effect
+    /// after that step (see [`Env::release`]).
+    release_after_step: bool,
 }
 
 fn lin_rate(t: f32, sr: f32) -> f32 {
@@ -212,6 +217,7 @@ impl Env {
             transition_delta: 0.0,
             free_running: sustain <= SUSTAIN_FREE_RUNNING || oscillator_one_shot,
             sample_rate: sr,
+            release_after_step: false,
         }
     }
 
@@ -219,7 +225,7 @@ impl Env {
         self.state == EgState::Done
     }
     fn released(&self) -> bool {
-        self.state >= EgState::Release
+        self.state >= EgState::Release || self.release_after_step
     }
     fn remaining_delay(&self) -> i64 {
         if self.state == EgState::Delay {
@@ -228,8 +234,23 @@ impl Env {
             0
         }
     }
+    /// Start the release. Callers end a player whose delay has not yet run
+    /// out instead (sfizz's `Voice::Impl::release` cleans such a voice up).
+    ///
+    /// A release that lands once the delay is over but before the envelope's
+    /// first sample (a choke or note-off on the region's own first sample)
+    /// takes effect after one attack step, so it releases from
+    /// `min(start + attack step, 1)`: the full level for an instant attack,
+    /// the first step of a slower one. This is sfizz's
+    /// `ADSREnvelope::getBlockInternal` (`src/sfizz/ADSREnvelope.cpp`, the
+    /// reference build f5c6e29): with `releaseDelay == 0 && delay == 0` the
+    /// release "takes effect the next frame" (`size = 1`), so one attack
+    /// iteration runs before `currentState = State::Release`. Later releases
+    /// (mid-attack included) start from the current value, as there.
     fn release(&mut self) {
-        if self.state < EgState::Release {
+        if self.state == EgState::Delay {
+            self.release_after_step = true;
+        } else if self.state < EgState::Release {
             self.state = EgState::Release;
         }
     }
@@ -251,6 +272,15 @@ impl Env {
                 }
                 EgState::Attack => {
                     self.value += self.attack_step;
+                    if self.release_after_step {
+                        self.release_after_step = false;
+                        self.state = EgState::Release;
+                        if self.value < 1.0 {
+                            return self.value;
+                        }
+                        self.value = 1.0;
+                        continue;
+                    }
                     if self.value < 1.0 {
                         return self.value;
                     }
@@ -1424,6 +1454,38 @@ mod tests {
         }
         // -80 dB at 9/100 nepers per sample, then 50 ms of fade
         assert!(k > 80 && k < 150, "{k}");
+    }
+
+    #[test]
+    fn a_release_before_the_first_sample_takes_one_attack_step() {
+        let sr = 1000.0;
+        let env = |attack: f32, start: f32| Region {
+            ampeg: crate::sampler::program::Envelope {
+                attack,
+                start,
+                release: 0.1,
+                ..Default::default()
+            },
+            ..region()
+        };
+        // instant attack: released from 1
+        let mut e = Env::new(&env(0.0, 0.0), 0, sr, false);
+        e.release();
+        assert!(e.released());
+        let r = (-9.0f32 / 100.0).exp();
+        assert!((e.next() - r).abs() < 1e-6);
+        assert!((e.next() - r * r).abs() < 1e-6);
+        // 10-sample attack from 50 %: the first step, then the release
+        let mut e = Env::new(&env(0.01, 50.0), 0, sr, false);
+        e.release();
+        assert!((e.next() - 0.6).abs() < 1e-6);
+        assert!((e.next() - 0.6 * r).abs() < 1e-6);
+        // released mid-attack: from the current value
+        let mut e = Env::new(&env(0.01, 0.0), 0, sr, false);
+        e.next();
+        e.next();
+        e.release();
+        assert!((e.next() - 0.2 * r).abs() < 1e-6);
     }
 
     #[test]

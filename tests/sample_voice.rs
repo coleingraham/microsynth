@@ -1131,3 +1131,82 @@ fn ir_binding_errors_are_named() {
         Err(IrError::MissingTableBinding { .. })
     ));
 }
+
+#[test]
+fn a_region_choked_on_its_first_sample_releases_from_its_attack_level() {
+    // Virtuosity's hi-hat pedal: the pedal region and a `*silence` region in
+    // its own group start on the same note; the silence region's
+    // note_polyphony chokes the pedal on the pedal's first sample. sfizz
+    // plays the hit and releases it over the pedal's release; the envelope
+    // must not release from its starting level (0).
+    const REL: f32 = 0.7;
+    let a = dc(1, 0.5, 4 * 44_100);
+    let pedal = |off_mode: OffMode, attack: f32| Region {
+        lokey: 60,
+        hikey: 60,
+        group: 41,
+        off_mode,
+        ampeg: Envelope {
+            attack,
+            release: REL,
+            ..Envelope::default()
+        },
+        ..reg(0)
+    };
+    let silence = Region {
+        sample: SILENCE,
+        lokey: 60,
+        hikey: 60,
+        group: 41,
+        note_polyphony: Some(0),
+        off_mode: OffMode::Fast,
+        ..reg(0)
+    };
+    let run = |regions: Vec<Region>, at: f32| {
+        let bk = banks(vec![a.clone()], program(&[&a], regions));
+        render(&bk, &[note(at, 0.05, 60.0, 100)], at + 1.5)
+    };
+    let peak = |o: &Out, t0: f32, t1: f32| {
+        let (i, j) = ((t0 * SR) as usize, (t1 * SR) as usize);
+        o.l[i..j].iter().fold(0.0f32, |m, x| m.max(x.abs()))
+    };
+    let db = |x: f32| 20.0 * x.max(1e-12).log10();
+    // on a block start and mid-block
+    for at in [0.0f32, 0.1 + 37.0 / SR] {
+        let alone = run(vec![pedal(OffMode::Normal, 0.0)], at);
+        let choked = run(vec![pedal(OffMode::Normal, 0.0), silence.clone()], at);
+        let p0 = peak(&alone, at, at + 0.02);
+        let p1 = peak(&choked, at, at + 0.02);
+        assert!(
+            (db(p1) - db(p0)).abs() < 1.0,
+            "at {at}: choked hit {} dB vs {} dB",
+            db(p1),
+            db(p0)
+        );
+        // the release: -40 dB at 40/78 of the release time (-78 dB over it)
+        let i0 = (at * SR) as usize;
+        let k = choked.l[i0..]
+            .iter()
+            .position(|x| x.abs() < p1 * 0.01)
+            .expect("decays") as f32
+            / SR;
+        let want = REL * 40.0 / 78.0;
+        assert!(
+            (k - want).abs() <= 0.2 * want,
+            "at {at}: -40 dB after {k} s, release says {want} s"
+        );
+        assert!(choked.peak_after(at + REL + 0.1) < 1e-6);
+    }
+    // off_mode=fast releases from the same level over 6 ms
+    let fast = run(vec![pedal(OffMode::Fast, 0.0), silence.clone()], 0.0);
+    assert!((db(peak(&fast, 0.0, 0.001)) - db(0.5 * MONO)).abs() < 1.0);
+    assert!(fast.peak_after(0.01) < 0.5 * MONO * 1e-3);
+    // a slower attack releases from its first step, as sfizz does
+    let slow = run(vec![pedal(OffMode::Normal, 0.005), silence], 0.0);
+    let step = 1.0 / (0.005 * SR);
+    assert!(
+        close(peak(&slow, 0.0, 0.02), 0.5 * MONO * step, 1e-4),
+        "{}",
+        peak(&slow, 0.0, 0.02)
+    );
+}
