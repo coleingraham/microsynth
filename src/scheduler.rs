@@ -5,7 +5,7 @@
 //!
 //! # Event types
 //!
-//! - **SpawnSynth**: Instantiate a SynthDef and connect it to a target bus/node.
+//! - **StartVoice**: Start a voice spawned deferred, at its sample.
 //! - **SetParam**: Change a named parameter on a live synth.
 //! - **FreeSynth**: Remove a synth from the graph.
 //! - **SetGate**: Shorthand for setting the "gate" parameter (note-on/note-off).
@@ -42,6 +42,9 @@ pub enum EventAction {
     SetGate { voice: VoiceId, value: f32 },
     /// Remove a voice from the graph.
     FreeSynth { voice: VoiceId },
+    /// Start a voice that was spawned deferred (`Engine::start_voice_at`):
+    /// from this sample its nodes run, every one for the first time.
+    StartVoice { voice: VoiceId },
 }
 
 /// A scheduled event: an action to perform at a specific sample time.
@@ -141,6 +144,14 @@ impl Scheduler {
         self.schedule(Event {
             time,
             action: EventAction::FreeSynth { voice },
+        });
+    }
+
+    /// Schedule the start of a deferred voice at a specific sample time.
+    pub fn schedule_start(&mut self, time: u64, voice: VoiceId) {
+        self.schedule(Event {
+            time,
+            action: EventAction::StartVoice { voice },
         });
     }
 

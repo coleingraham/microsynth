@@ -36,6 +36,10 @@ struct NodeSlot {
     /// in place), so this flag's lifetime matches the one `UGen` instance
     /// living at this slot and can never leak onto a later, unrelated node.
     initialized: bool,
+    /// Whether the node runs. An inactive node is not processed: its output
+    /// is zeros of the block's length until it is activated (a voice spawned
+    /// deferred, see `Engine::start_voice_at`). Every node starts active.
+    active: bool,
 }
 
 /// A directed acyclic audio processing graph.
@@ -116,6 +120,7 @@ impl AudioGraph {
             output_channels: 1,
             processed: false,
             initialized: false,
+            active: true,
         }));
         self.dirty = true;
         id
@@ -303,7 +308,11 @@ impl AudioGraph {
             };
 
             let slot = self.nodes[idx].as_mut().unwrap();
-            slot.ugen.process(context, input_refs, &mut slot.output);
+            if slot.active {
+                slot.ugen.process(context, input_refs, &mut slot.output);
+            } else {
+                slot.output.clear();
+            }
             slot.processed = true;
         }
 
@@ -505,6 +514,16 @@ impl AudioGraph {
     /// Whether the graph needs `prepare()` called before rendering.
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Switch a node on or off. An inactive node is not processed and its
+    /// output is silence of the block's length, so everything it feeds sees
+    /// zeros. Its state stays as `prepare()` left it: the first block it
+    /// processes after activation is its first. Needs no `prepare()`.
+    pub fn set_node_active(&mut self, id: NodeId, active: bool) {
+        if let Some(Some(slot)) = self.nodes.get_mut(id.index()) {
+            slot.active = active;
+        }
     }
 
     /// Set an internal scalar value on a node (e.g. change a Const node's value).
