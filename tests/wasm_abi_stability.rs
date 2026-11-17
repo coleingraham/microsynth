@@ -118,6 +118,9 @@ fn test_new_exports_are_additive_not_replacements() {
         "ms_voice_cuts",
         "ms_voice_steal_level",
         "ms_bus_max_inputs",
+        // A voice that starts at a sample inside its block.
+        "ms_spawn_voice_on_routing_bus_named_at",
+        "ms_voice_start_at",
     ];
     for name in new_names {
         assert!(

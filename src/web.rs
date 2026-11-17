@@ -1366,6 +1366,47 @@ pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named(
     }
 }
 
+/// [`ms_spawn_voice_on_routing_bus_named`] with the voice starting at absolute
+/// sample `start_sample` instead of at the block about to render. The voice id
+/// comes back at once, so parameters, glides and a gate can be set on it as
+/// for any voice; none of its nodes runs before `start_sample`, and every
+/// oscillator, envelope, delay and noise source then begins there. A
+/// `start_sample` at or before the current block start spawns the voice as
+/// `ms_spawn_voice_on_routing_bus_named` does, byte for byte. Returns voice_id
+/// > 0, or 0 on failure.
+///
+/// # Safety
+/// As for [`ms_spawn_voice_on_routing_bus_named`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ms_spawn_voice_on_routing_bus_named_at(
+    name_ptr: *const u8,
+    name_len: usize,
+    bus_name_ptr: *const u8,
+    bus_name_len: usize,
+    start_sample: u64,
+) -> u64 {
+    let id = unsafe {
+        ms_spawn_voice_on_routing_bus_named(name_ptr, name_len, bus_name_ptr, bus_name_len)
+    };
+    if id != 0 {
+        ms_voice_start_at(id, start_sample);
+    }
+    id
+}
+
+/// Start a voice just spawned (by any spawn export) at absolute sample
+/// `start_sample`: see [`ms_spawn_voice_on_routing_bus_named_at`]. Returns 1
+/// if the start was deferred, 0 if the voice simply starts with the next block
+/// (`start_sample` not after the current block start, or no such voice).
+#[unsafe(no_mangle)]
+pub extern "C" fn ms_voice_start_at(voice_id: u64, start_sample: u64) -> u32 {
+    let engine = match unsafe { ENGINE.get_mut() }.as_mut() {
+        Some(e) => e,
+        None => return 0,
+    };
+    u32::from(engine.start_voice_at(crate::scheduler::VoiceId(voice_id), start_sample))
+}
+
 /// Read a named routing bus's summed output for the block `ms_render` just
 /// produced (128 samples/channel) -- the bus's OWN signal, not the graph
 /// sink's. `name` is the bus's `busId` per `ir::container`'s doc (the exact
