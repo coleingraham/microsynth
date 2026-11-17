@@ -49,6 +49,9 @@ struct Voice {
     /// index of its [`StealRecord`]. The voice keeps its slot until the fade
     /// reports done.
     fade: Option<(NodeId, u64, usize)>,
+    /// Set while the voice waits for its start sample (`start_voice_at`): its
+    /// nodes are switched off until the engine reaches it.
+    pending: bool,
 }
 
 /// One voice steal, as [`Engine::steals`] records it.
@@ -290,6 +293,7 @@ impl Engine {
             born: self.context.sample_offset,
             bus: None,
             fade: None,
+            pending: false,
         });
         id
     }
@@ -370,6 +374,7 @@ impl Engine {
             born: self.context.sample_offset,
             bus: Some(bus_node),
             fade: None,
+            pending: false,
         });
         Some(id)
     }
@@ -611,6 +616,47 @@ impl Engine {
         (n > 0).then(|| (sum / n as f64).sqrt() as f32)
     }
 
+    /// Start a voice at sample `start` instead of at the block that is about
+    /// to render. The voice keeps its id and everything set on it, but none
+    /// of its nodes runs before `start`: every oscillator, envelope, delay
+    /// and noise source begins at that sample, as if the voice had been
+    /// spawned there. What the voice feeds sees silence until then.
+    ///
+    /// Call it right after the spawn. Parameters set on the voice, and
+    /// events scheduled for it at or after `start`, apply as for any voice. A
+    /// `start` at or before the engine's current sample offset leaves the
+    /// voice as spawned (it starts with the next block) and returns `false`,
+    /// as does an unknown voice or one already started.
+    pub fn start_voice_at(&mut self, voice_id: VoiceId, start: u64) -> bool {
+        if start <= self.context.sample_offset {
+            return false;
+        }
+        let Some(voice) = self.voices.iter_mut().find(|v| v.id == voice_id) else {
+            return false;
+        };
+        if voice.pending || self.context.sample_offset > voice.born {
+            return false;
+        }
+        voice.pending = true;
+        voice.born = start;
+        for &id in voice.synth.node_ids() {
+            self.graph.set_node_active(id, false);
+        }
+        self.scheduler.schedule_start(start, voice_id);
+        true
+    }
+
+    /// Switch a deferred voice's nodes on. Does nothing if it was freed.
+    fn begin_voice(&mut self, voice_id: VoiceId) {
+        let Some(voice) = self.voices.iter_mut().find(|v| v.id == voice_id) else {
+            return;
+        };
+        voice.pending = false;
+        for &id in voice.synth.node_ids() {
+            self.graph.set_node_active(id, true);
+        }
+    }
+
     /// Set a named parameter on a voice by VoiceId.
     /// Returns true if the voice and parameter were found.
     pub fn set_voice_param(&mut self, voice_id: VoiceId, name: &str, value: f32) -> bool {
@@ -689,7 +735,8 @@ impl Engine {
     /// a parameter change lands on its sample whatever the UGen. A block
     /// with no event strictly inside it renders whole, exactly as before.
     /// `FreeSynth` events stay at the block start, since freeing a voice
-    /// needs `prepare`. After a block rendered in pieces every node's output
+    /// needs `prepare`. A voice deferred with `start_voice_at` is a node
+    /// switch, not a graph change, so it starts at its sample the same way. After a block rendered in pieces every node's output
     /// is the whole block, so taps and [`voice_level`](Self::voice_level)
     /// read it as they would after a block rendered whole.
     ///
@@ -718,6 +765,11 @@ impl Engine {
             let at = (event.time.saturating_sub(start) as usize).min(full - 1);
             match event.action {
                 EventAction::FreeSynth { .. } => continue,
+                EventAction::StartVoice { voice } => {
+                    self.render_piece(start, done, at, &mut split);
+                    done = done.max(at);
+                    self.begin_voice(voice);
+                }
                 EventAction::SetParam {
                     voice,
                     param,
@@ -919,7 +971,12 @@ impl Engine {
         }
         let mut i = 0;
         while i < self.synths.len() {
-            let is_done = self.synths[i].output_is_done(&self.graph);
+            let out = self.synths[i].output_node();
+            let waiting = self
+                .voices
+                .iter()
+                .any(|v| v.pending && v.synth.output_node() == out);
+            let is_done = !waiting && self.synths[i].output_is_done(&self.graph);
             if is_done {
                 let synth = self.synths.remove(i);
                 // Also remove from voices list, keeping the allocator's
