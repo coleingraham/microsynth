@@ -77,6 +77,12 @@ pub struct AudioGraph {
 struct TopoScratch {
     in_degree: Vec<u32>,
     queue: Vec<NodeId>,
+    /// Out-adjacency in compressed form: the targets of node `i` are
+    /// `adj_targets[adj_start[i]..adj_start[i + 1]]`, in edge-list order.
+    adj_start: Vec<u32>,
+    adj_targets: Vec<NodeId>,
+    /// Per-node input channel counts, reused by `resolve_channels`.
+    input_channels: Vec<usize>,
 }
 
 impl TopoScratch {
@@ -84,6 +90,9 @@ impl TopoScratch {
         TopoScratch {
             in_degree: Vec::new(),
             queue: Vec::new(),
+            adj_start: Vec::new(),
+            adj_targets: Vec::new(),
+            input_channels: Vec::new(),
         }
     }
 }
@@ -135,6 +144,39 @@ impl AudioGraph {
         if self.sink == Some(id) {
             self.sink = None;
         }
+        self.dirty = true;
+    }
+
+    /// Remove several nodes at once, with one pass over the edge list.
+    ///
+    /// Leaves the graph exactly as calling [`remove_node`](Self::remove_node)
+    /// on each id in turn would (same remaining edges in the same order, same
+    /// sink), but costs O(ids + nodes + edges) rather than O(ids × edges).
+    /// Freeing a voice removes all of its nodes, so this is the voice path.
+    pub fn remove_nodes(&mut self, ids: &[NodeId]) {
+        if ids.is_empty() {
+            return;
+        }
+        // Sized to cover every id, even one past the node list, so an edge
+        // naming such an id is dropped just as `remove_node` would drop it.
+        let len = ids
+            .iter()
+            .map(|id| id.index() + 1)
+            .max()
+            .unwrap_or(0)
+            .max(self.nodes.len());
+        let mut removed = alloc::vec![false; len];
+        for &id in ids {
+            removed[id.index()] = true;
+            if let Some(slot) = self.nodes.get_mut(id.index()) {
+                *slot = None;
+            }
+            if self.sink == Some(id) {
+                self.sink = None;
+            }
+        }
+        let gone = |n: NodeId| removed.get(n.index()).copied().unwrap_or(false);
+        self.edges.retain(|e| !gone(e.from) && !gone(e.to));
         self.dirty = true;
     }
 
@@ -388,23 +430,63 @@ impl AudioGraph {
             .and_then(|id| self.nodes[id.index()].as_ref().map(|s| &s.output))
     }
 
-    /// Compute topological ordering using Kahn's algorithm.
+    /// Compute topological ordering using Kahn's algorithm, in O(nodes + edges).
+    ///
+    /// The order is fixed by three rules, and every one of them is part of
+    /// what the engine renders (nodes run in this order), so they must not
+    /// change:
+    /// 1. an edge counts only when both its ends are live nodes; parallel
+    ///    edges each count;
+    /// 2. the queue is seeded with the live zero-in-degree nodes in index
+    ///    order, and is first-in first-out;
+    /// 3. when a node is popped, its outgoing edges are visited in edge-list
+    ///    order, and a target is queued the moment its count reaches zero.
+    ///
+    /// Rule 3 used to be a scan of the whole edge list per popped node
+    /// (O(nodes × edges)). Here the out-adjacency is built once, by a stable
+    /// counting sort of the counted edges on their source, so each node's
+    /// targets keep edge-list order and the visits happen in the same
+    /// sequence. `topological_sort_reference` (tests only) keeps the scan.
     fn topological_sort(&mut self) {
         let n = self.nodes.len();
         let scratch = &mut self.topo_scratch;
+        let nodes = &self.nodes;
+        let live = |id: NodeId| nodes[id.index()].is_some();
 
         scratch.in_degree.clear();
         scratch.in_degree.resize(n, 0);
         scratch.queue.clear();
 
-        // Compute in-degrees
+        // In-degrees and out-degrees of the counted edges (rule 1). The
+        // out-degrees go in `adj_start[i + 1]`, to become offsets below.
+        scratch.adj_start.clear();
+        scratch.adj_start.resize(n + 1, 0);
+        let mut counted = 0usize;
         for edge in &self.edges {
-            if self.nodes[edge.to.index()].is_some() && self.nodes[edge.from.index()].is_some() {
+            if live(edge.to) && live(edge.from) {
                 scratch.in_degree[edge.to.index()] += 1;
+                scratch.adj_start[edge.from.index() + 1] += 1;
+                counted += 1;
+            }
+        }
+        for i in 0..n {
+            scratch.adj_start[i + 1] += scratch.adj_start[i];
+        }
+
+        // Fill the targets in edge-list order (stable), using `cursor` as
+        // each source's next free position.
+        scratch.adj_targets.clear();
+        scratch.adj_targets.resize(counted, NodeId(0));
+        let mut cursor: Vec<u32> = scratch.adj_start[..n].to_vec();
+        for edge in &self.edges {
+            if live(edge.to) && live(edge.from) {
+                let c = &mut cursor[edge.from.index()];
+                scratch.adj_targets[*c as usize] = edge.to;
+                *c += 1;
             }
         }
 
-        // Seed with nodes that have zero in-degree
+        // Seed with nodes that have zero in-degree (rule 2).
         for (i, slot) in self.nodes.iter().enumerate() {
             if slot.is_some() && scratch.in_degree[i] == 0 {
                 scratch.queue.push(NodeId(i as u32));
@@ -419,48 +501,91 @@ impl AudioGraph {
             head += 1;
             self.topo_order.push(node);
 
-            for edge in &self.edges {
-                if edge.from == node && self.nodes[edge.to.index()].is_some() {
-                    scratch.in_degree[edge.to.index()] -= 1;
-                    if scratch.in_degree[edge.to.index()] == 0 {
-                        scratch.queue.push(edge.to);
-                    }
+            // Rule 3. A popped node is live, so every edge out of it whose
+            // target is live is exactly a counted edge.
+            let (from, to) = (
+                scratch.adj_start[node.index()] as usize,
+                scratch.adj_start[node.index() + 1] as usize,
+            );
+            for k in from..to {
+                let target = scratch.adj_targets[k];
+                scratch.in_degree[target.index()] -= 1;
+                if scratch.in_degree[target.index()] == 0 {
+                    scratch.queue.push(target);
                 }
             }
         }
     }
 
+    /// The topological sort as it was before `topological_sort` built an
+    /// adjacency list: a scan of the whole edge list per popped node. Kept
+    /// as the reference the fast sort is tested against.
+    #[cfg(test)]
+    fn topological_sort_reference(&self) -> Vec<NodeId> {
+        let n = self.nodes.len();
+        let mut in_degree: Vec<u32> = alloc::vec![0; n];
+        let mut queue: Vec<NodeId> = Vec::new();
+
+        for edge in &self.edges {
+            if self.nodes[edge.to.index()].is_some() && self.nodes[edge.from.index()].is_some() {
+                in_degree[edge.to.index()] += 1;
+            }
+        }
+
+        for (i, slot) in self.nodes.iter().enumerate() {
+            if slot.is_some() && in_degree[i] == 0 {
+                queue.push(NodeId(i as u32));
+            }
+        }
+
+        let mut order = Vec::new();
+        let mut head = 0;
+
+        while head < queue.len() {
+            let node = queue[head];
+            head += 1;
+            order.push(node);
+
+            for edge in &self.edges {
+                if edge.from == node && self.nodes[edge.to.index()].is_some() {
+                    in_degree[edge.to.index()] -= 1;
+                    if in_degree[edge.to.index()] == 0 {
+                        queue.push(edge.to);
+                    }
+                }
+            }
+        }
+        order
+    }
+
     /// Resolve multichannel expansion: propagate channel counts through the
     /// graph in topological order and resize output buffers.
+    ///
+    /// An input port's channel count is its source's (`input_sources`, which
+    /// `resolve_inputs` has just built: the first edge listed for the port
+    /// decides), or 1 when the port is unconnected or that first edge's
+    /// source has been removed.
     fn resolve_channels(&mut self, context: &ProcessContext) {
+        let mut input_channels = core::mem::take(&mut self.topo_scratch.input_channels);
         for order_idx in 0..self.topo_order.len() {
             let node_id = self.topo_order[order_idx];
             let idx = node_id.index();
 
-            let num_inputs = match &self.nodes[idx] {
-                Some(slot) => slot.ugen.spec().inputs.len(),
-                None => continue,
-            };
+            if self.nodes[idx].is_none() {
+                continue;
+            }
 
-            // Gather input channel counts
-            let mut input_channels = Vec::new();
-            for input_idx in 0..num_inputs {
-                let source = self
-                    .edges
-                    .iter()
-                    .find(|e| e.to == node_id && e.to_input == input_idx);
-
-                match source {
-                    Some(edge) => {
-                        let src_ch = self.nodes[edge.from.index()]
-                            .as_ref()
-                            .map_or(1, |s| s.output_channels);
-                        input_channels.push(src_ch);
-                    }
-                    None => {
-                        input_channels.push(1);
-                    }
-                }
+            // Gather input channel counts. `input_sources[idx]` has one entry
+            // per port of the node's spec, and names only live sources.
+            input_channels.clear();
+            for src in &self.input_sources[idx] {
+                let src_ch = match src {
+                    Some(src_id) => self.nodes[src_id.index()]
+                        .as_ref()
+                        .map_or(1, |s| s.output_channels),
+                    None => 1,
+                };
+                input_channels.push(src_ch);
             }
 
             let slot = self.nodes[idx].as_mut().unwrap();
@@ -483,6 +608,7 @@ impl AudioGraph {
             slot.assembled.set_num_channels(out_ch, block_size);
             slot.assembled.set_block_size(block_size);
         }
+        self.topo_scratch.input_channels = input_channels;
     }
 
     /// Call `init` on every node that has not been initialized yet.
@@ -611,5 +737,284 @@ impl AudioGraph {
             .iter()
             .filter(move |e| e.to == node_id)
             .map(|e| e.to_input)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The fast `prepare` path against the edge-scanning code it replaced:
+    //! the same node order, the same channel counts and the same edge list
+    //! after removals, on randomised graphs (cycles, self-loops, parallel
+    //! edges, removed nodes, duplicate ports and ports past a node's spec).
+
+    use super::*;
+    use crate::context::Rate;
+    use crate::node::{InputSpec, OutputSpec, UGenCategory, UGenSpec};
+
+    const fn port(name: &'static str) -> InputSpec {
+        InputSpec {
+            name,
+            rate: Rate::Audio,
+            required: false,
+        }
+    }
+
+    static PORTS: [&[InputSpec]; 5] = [
+        &[],
+        &[port("a")],
+        &[port("a"), port("b")],
+        &[port("a"), port("b"), port("c")],
+        &[port("a"), port("b"), port("c"), port("d")],
+    ];
+    static OUTPUTS: &[OutputSpec] = &[OutputSpec {
+        name: "out",
+        rate: Rate::Audio,
+    }];
+
+    /// A node whose output channel count depends on each port's position
+    /// and channel count, so a wrong source or order shows up in the counts.
+    struct Probe {
+        ports: usize,
+        salt: usize,
+    }
+
+    impl UGen for Probe {
+        fn spec(&self) -> UGenSpec {
+            UGenSpec {
+                name: "Probe",
+                category: UGenCategory::Utility,
+                inputs: PORTS[self.ports],
+                outputs: OUTPUTS,
+            }
+        }
+        fn init(&mut self, _context: &ProcessContext) {}
+        fn reset(&mut self) {}
+        fn output_channels(&self, input_channels: &[usize]) -> usize {
+            assert_eq!(input_channels.len(), self.ports);
+            let mix: usize = input_channels
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i + 1) * c)
+                .sum();
+            1 + (self.salt + mix) % 4
+        }
+        fn process(
+            &mut self,
+            _context: &ProcessContext,
+            _inputs: &[Option<&AudioBuffer>],
+            output: &mut AudioBuffer,
+        ) {
+            output.clear();
+        }
+    }
+
+    /// Small deterministic generator (no dev-dependency needed).
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn chance(&mut self, percent: u64) -> bool {
+            self.next() % 100 < percent
+        }
+    }
+
+    fn add_probe(g: &mut AudioGraph, rng: &mut Lcg) -> NodeId {
+        let ports = rng.below(5);
+        let salt = rng.below(7);
+        g.add_node(Box::new(Probe { ports, salt }))
+    }
+
+    /// Add `count` random edges among `0..n`: mostly forward (a DAG), with
+    /// back edges and self-loops (cycles), parallel edges, edges pushed
+    /// directly so a (node, port) is listed twice, and ports past the spec.
+    fn add_edges(g: &mut AudioGraph, rng: &mut Lcg, n: usize, count: usize) {
+        for _ in 0..count {
+            let a = rng.below(n);
+            let b = rng.below(n);
+            let (from, to) = if rng.chance(85) {
+                (a.min(b), a.max(b).max(a.min(b) + 1).min(n - 1))
+            } else {
+                (a, b)
+            };
+            let (from, to) = (NodeId(from as u32), NodeId(to as u32));
+            let to_input = rng.below(6);
+            if rng.chance(25) {
+                g.edges.push(Edge { from, to, to_input });
+                g.dirty = true;
+            } else {
+                g.connect(from, to, to_input);
+            }
+        }
+    }
+
+    /// The channel counts the edge-searching `resolve_channels` produced,
+    /// starting from the counts the nodes hold now, in `order`.
+    fn channels_reference(g: &AudioGraph, order: &[NodeId]) -> Vec<usize> {
+        let mut chans: Vec<usize> = g
+            .nodes
+            .iter()
+            .map(|s| s.as_ref().map_or(0, |s| s.output_channels))
+            .collect();
+        for &node_id in order {
+            let slot = match &g.nodes[node_id.index()] {
+                Some(slot) => slot,
+                None => continue,
+            };
+            let num_inputs = slot.ugen.spec().inputs.len();
+            let mut input_channels = Vec::new();
+            for input_idx in 0..num_inputs {
+                let source = g
+                    .edges
+                    .iter()
+                    .find(|e| e.to == node_id && e.to_input == input_idx);
+                input_channels.push(match source {
+                    Some(edge) => g.nodes[edge.from.index()]
+                        .as_ref()
+                        .map_or(1, |_| chans[edge.from.index()]),
+                    None => 1,
+                });
+            }
+            chans[node_id.index()] = slot.ugen.output_channels(&input_channels);
+        }
+        chans
+    }
+
+    fn channels_now(g: &AudioGraph) -> Vec<usize> {
+        g.nodes
+            .iter()
+            .map(|s| s.as_ref().map_or(0, |s| s.output_channels))
+            .collect()
+    }
+
+    fn edge_list(g: &AudioGraph) -> Vec<(NodeId, NodeId, usize)> {
+        g.edges.iter().map(|e| (e.from, e.to, e.to_input)).collect()
+    }
+
+    /// Prepare `g` and check order and channels against the references.
+    fn prepare_and_check(g: &mut AudioGraph, context: &ProcessContext, case: u64) {
+        let order = g.topological_sort_reference();
+        let chans = channels_reference(g, &order);
+        g.prepare(context);
+        assert_eq!(
+            g.topo_order, order,
+            "topological order differs, case {case}"
+        );
+        assert_eq!(channels_now(g), chans, "channel counts differ, case {case}");
+    }
+
+    #[test]
+    fn fast_prepare_matches_reference_on_random_graphs() {
+        let context = ProcessContext::new(48000.0, 64);
+        let mut cycles_seen = 0;
+        for case in 0..1500u64 {
+            let mut rng = Lcg(case.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5);
+            let mut g = AudioGraph::new();
+            let n = 1 + rng.below(48);
+            for _ in 0..n {
+                add_probe(&mut g, &mut rng);
+            }
+            let e = rng.below(3 * n + 1);
+            add_edges(&mut g, &mut rng, n, e);
+            g.set_sink(NodeId(rng.below(n) as u32));
+            prepare_and_check(&mut g, &context, case);
+            if g.topo_order.len() < n {
+                cycles_seen += 1;
+            }
+
+            // A few rounds of structural change, as spawns and frees do.
+            for _ in 0..3 {
+                let n_now = g.nodes.len();
+                let doomed: Vec<NodeId> = (0..n_now)
+                    .filter(|_| rng.chance(15))
+                    .map(|i| NodeId(i as u32))
+                    .collect();
+                g.remove_nodes(&doomed);
+                let added = rng.below(12);
+                for _ in 0..added {
+                    add_probe(&mut g, &mut rng);
+                }
+                let n_now = g.nodes.len();
+                let e = rng.below(2 * added + 4);
+                add_edges(&mut g, &mut rng, n_now, e);
+                // Edges whose ends were removed earlier, pushed directly
+                // (the engine never makes one, but the sort must not care).
+                if rng.chance(20) && !doomed.is_empty() {
+                    let dead = doomed[rng.below(doomed.len())];
+                    let live = NodeId(rng.below(n_now) as u32);
+                    g.edges.push(Edge {
+                        from: dead,
+                        to: live,
+                        to_input: rng.below(4),
+                    });
+                    g.edges.push(Edge {
+                        from: live,
+                        to: dead,
+                        to_input: rng.below(4),
+                    });
+                }
+                prepare_and_check(&mut g, &context, case);
+            }
+        }
+        assert!(cycles_seen > 50, "the cases should include cycles");
+    }
+
+    #[test]
+    fn remove_nodes_matches_remove_node_in_turn() {
+        for case in 0..1000u64 {
+            let build = || {
+                let mut rng = Lcg(case ^ 0x5DEE_CE66);
+                let mut g = AudioGraph::new();
+                let n = 1 + rng.below(40);
+                for _ in 0..n {
+                    add_probe(&mut g, &mut rng);
+                }
+                let e = rng.below(4 * n + 1);
+                add_edges(&mut g, &mut rng, n, e);
+                g.set_sink(NodeId(rng.below(n) as u32));
+                (g, rng, n)
+            };
+            let (mut batch, mut rng, n) = build();
+            let (mut one_by_one, _, _) = build();
+            assert_eq!(edge_list(&batch), edge_list(&one_by_one));
+
+            // Ids in any order, repeated, already removed, or past the end.
+            let mut ids: Vec<NodeId> = (0..rng.below(n + 1))
+                .map(|_| NodeId(rng.below(n + 2) as u32))
+                .collect();
+            if rng.chance(30) {
+                ids.push(NodeId(rng.below(n) as u32));
+                one_by_one.remove_node(ids[ids.len() - 1]);
+                batch.remove_node(ids[ids.len() - 1]);
+            }
+            if rng.chance(10) {
+                // An edge naming an id past the node list.
+                let ghost = NodeId((n + 1) as u32);
+                for g in [&mut batch, &mut one_by_one] {
+                    g.edges.push(Edge {
+                        from: NodeId(0),
+                        to: ghost,
+                        to_input: 0,
+                    });
+                }
+            }
+
+            batch.remove_nodes(&ids);
+            for &id in &ids {
+                one_by_one.remove_node(id);
+            }
+            assert_eq!(edge_list(&batch), edge_list(&one_by_one), "case {case}");
+            assert_eq!(batch.sink, one_by_one.sink, "case {case}");
+            let live = |g: &AudioGraph| g.nodes.iter().map(Option::is_some).collect::<Vec<_>>();
+            assert_eq!(live(&batch), live(&one_by_one), "case {case}");
+            assert_eq!(batch.dirty, one_by_one.dirty, "case {case}");
+        }
     }
 }
