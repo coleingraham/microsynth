@@ -157,25 +157,27 @@ impl AudioGraph {
         if ids.is_empty() {
             return;
         }
-        // Sized to cover every id, even one past the node list, so an edge
-        // naming such an id is dropped just as `remove_node` would drop it.
-        let len = ids
-            .iter()
-            .map(|id| id.index() + 1)
-            .max()
-            .unwrap_or(0)
-            .max(self.nodes.len());
-        let mut removed = alloc::vec![false; len];
+        // Ids past the node list are kept aside rather than sized for, so
+        // `NodeId(u32::MAX)` costs nothing; an edge naming one is still
+        // dropped, just as `remove_node` would drop it.
+        let mut removed = alloc::vec![false; self.nodes.len()];
+        let mut beyond: Vec<NodeId> = Vec::new();
         for &id in ids {
-            removed[id.index()] = true;
-            if let Some(slot) = self.nodes.get_mut(id.index()) {
-                *slot = None;
+            match self.nodes.get_mut(id.index()) {
+                Some(slot) => {
+                    *slot = None;
+                    removed[id.index()] = true;
+                }
+                None => beyond.push(id),
             }
             if self.sink == Some(id) {
                 self.sink = None;
             }
         }
-        let gone = |n: NodeId| removed.get(n.index()).copied().unwrap_or(false);
+        let gone = |n: NodeId| match removed.get(n.index()) {
+            Some(&r) => r,
+            None => beyond.contains(&n),
+        };
         self.edges.retain(|e| !gone(e.from) && !gone(e.to));
         self.dirty = true;
     }
@@ -968,6 +970,8 @@ mod tests {
 
     #[test]
     fn remove_nodes_matches_remove_node_in_turn() {
+        let context = ProcessContext::new(48000.0, 64);
+        let mut empty_cases = 0;
         for case in 0..1000u64 {
             let build = || {
                 let mut rng = Lcg(case ^ 0x5DEE_CE66);
@@ -985,24 +989,36 @@ mod tests {
             let (mut one_by_one, _, _) = build();
             assert_eq!(edge_list(&batch), edge_list(&one_by_one));
 
-            // Ids in any order, repeated, already removed, or past the end.
+            // Ids in any order, repeated, already removed, or past the end
+            // (just past, or as far past as an id can be).
             let mut ids: Vec<NodeId> = (0..rng.below(n + 1))
                 .map(|_| NodeId(rng.below(n + 2) as u32))
                 .collect();
+            if !ids.is_empty() && rng.chance(20) {
+                ids.push(NodeId(u32::MAX));
+            }
             if rng.chance(30) {
                 ids.push(NodeId(rng.below(n) as u32));
                 one_by_one.remove_node(ids[ids.len() - 1]);
                 batch.remove_node(ids[ids.len() - 1]);
             }
+            // Prepared, so the dirty flag below says what the removal did
+            // (the ghost edges below go in after, as `prepare` would not
+            // accept them; pushing them leaves the flag alone).
+            batch.prepare(&context);
+            one_by_one.prepare(&context);
+            assert!(!batch.dirty && !one_by_one.dirty);
+
             if rng.chance(10) {
-                // An edge naming an id past the node list.
-                let ghost = NodeId((n + 1) as u32);
-                for g in [&mut batch, &mut one_by_one] {
-                    g.edges.push(Edge {
-                        from: NodeId(0),
-                        to: ghost,
-                        to_input: 0,
-                    });
+                // Edges naming ids past the node list.
+                for ghost in [NodeId((n + 1) as u32), NodeId(u32::MAX)] {
+                    for g in [&mut batch, &mut one_by_one] {
+                        g.edges.push(Edge {
+                            from: NodeId(0),
+                            to: ghost,
+                            to_input: 0,
+                        });
+                    }
                 }
             }
 
@@ -1015,6 +1031,11 @@ mod tests {
             let live = |g: &AudioGraph| g.nodes.iter().map(Option::is_some).collect::<Vec<_>>();
             assert_eq!(live(&batch), live(&one_by_one), "case {case}");
             assert_eq!(batch.dirty, one_by_one.dirty, "case {case}");
+            assert_eq!(batch.dirty, !ids.is_empty(), "case {case}");
+            if ids.is_empty() {
+                empty_cases += 1;
+            }
         }
+        assert!(empty_cases > 10, "the cases should include empty id lists");
     }
 }
