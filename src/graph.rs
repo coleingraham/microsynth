@@ -83,6 +83,8 @@ struct TopoScratch {
     adj_targets: Vec<NodeId>,
     /// Per-node input channel counts, reused by `resolve_channels`.
     input_channels: Vec<usize>,
+    /// Each source's next free position in `adj_targets` while it is filled.
+    cursor: Vec<u32>,
 }
 
 impl TopoScratch {
@@ -93,6 +95,7 @@ impl TopoScratch {
             adj_start: Vec::new(),
             adj_targets: Vec::new(),
             input_channels: Vec::new(),
+            cursor: Vec::new(),
         }
     }
 }
@@ -479,10 +482,11 @@ impl AudioGraph {
         // each source's next free position.
         scratch.adj_targets.clear();
         scratch.adj_targets.resize(counted, NodeId(0));
-        let mut cursor: Vec<u32> = scratch.adj_start[..n].to_vec();
+        scratch.cursor.clear();
+        scratch.cursor.extend_from_slice(&scratch.adj_start[..n]);
         for edge in &self.edges {
             if live(edge.to) && live(edge.from) {
-                let c = &mut cursor[edge.from.index()];
+                let c = &mut scratch.cursor[edge.from.index()];
                 scratch.adj_targets[*c as usize] = edge.to;
                 *c += 1;
             }
