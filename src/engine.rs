@@ -341,7 +341,7 @@ impl Engine {
         // the rest of the render. Reading the graph directly makes voice spawns and
         // routing-effect wiring agree on occupancy by construction, and self-maintains
         // across the render's life: freeing a voice (`free_voice`/`free_done_synths`, both
-        // via `remove_node`) already strips its edge from the graph, so its slot reopens
+        // via `remove_nodes`) already strips its edge from the graph, so its slot reopens
         // here automatically, while a routing effect's edge -- never touched by either free
         // path -- stays occupied for as long as it lives.
         let used_slots: Vec<usize> = self.graph.used_input_slots(bus_node).collect();
@@ -675,14 +675,19 @@ impl Engine {
     pub fn free_voice(&mut self, voice_id: VoiceId) {
         if let Some(pos) = self.voices.iter().position(|v| v.id == voice_id) {
             let voice = self.voices.remove(pos);
-            self.remove_synth(&voice.synth);
+            // All of the voice's nodes in one pass over the edges (see
+            // `AudioGraph::remove_nodes`).
+            let mut ids: Vec<NodeId> = voice.synth.node_ids().to_vec();
             if let Some((pan2_node, const_node)) = voice.pan_nodes {
-                self.graph.remove_node(pan2_node);
-                self.graph.remove_node(const_node);
+                ids.push(pan2_node);
+                ids.push(const_node);
             }
             if let Some((fade, _, _)) = voice.fade {
-                self.graph.remove_node(fade);
+                ids.push(fade);
             }
+            self.graph.remove_nodes(&ids);
+            self.synths
+                .retain(|s| s.output_node() != voice.synth.output_node());
         }
         // Keep the allocator's bookkeeping accurate regardless of whether
         // this voice was spawned through the managed path.
@@ -709,9 +714,7 @@ impl Engine {
 
     /// Remove a synth instance from the graph.
     pub fn remove_synth(&mut self, synth: &Synth) {
-        for &id in synth.node_ids() {
-            self.graph.remove_node(id);
-        }
+        self.graph.remove_nodes(synth.node_ids());
         self.synths
             .retain(|s| s.output_node() != synth.output_node());
     }
@@ -1012,16 +1015,15 @@ impl Engine {
                         alloc.record_free(id);
                     }
                 }
-                for &id in synth.node_ids() {
-                    self.graph.remove_node(id);
-                }
+                // All of the synth's nodes, and its voices' pan and fade
+                // nodes, in one pass over the edges.
+                let mut ids: Vec<NodeId> = synth.node_ids().to_vec();
                 for (pan2_node, const_node) in freed_pan_nodes {
-                    self.graph.remove_node(pan2_node);
-                    self.graph.remove_node(const_node);
+                    ids.push(pan2_node);
+                    ids.push(const_node);
                 }
-                for fade in freed_fades {
-                    self.graph.remove_node(fade);
-                }
+                ids.extend(freed_fades);
+                self.graph.remove_nodes(&ids);
                 removed += 1;
             } else {
                 i += 1;
