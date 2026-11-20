@@ -546,3 +546,46 @@ fn ir_form_with_inline_consts_matches_the_dsl() {
         .fold(0.0f32, f32::max);
     assert!(d < 1e-6, "IR vs DSL: {d}");
 }
+
+/// At the largest envelope ratio (`r` = 0.99, a bandwidth over 138 · `freq`)
+/// the modulator's denominator falls to about 1e-4 at θ = 0, so an error in
+/// cos θ is magnified ~2·10⁴ there. The node must still agree with the
+/// closed form evaluated with the library's sin/cos of 2π·phase to within an
+/// f32 rounding of the output.
+#[test]
+fn the_widest_ratio_matches_the_closed_form_to_f32_rounding() {
+    for (f0, center) in [(110.0f64, 1045.0f64), (87.31, 3000.0), (523.25, 2616.25)] {
+        // the node reads f32 inputs
+        let (f0, center) = (f0 as f32 as f64, center as f32 as f64);
+        let bw = 1.0e6;
+        let x = render(&paf(f0 as f32, center as f32, bw as f32), 2.0);
+        let r = microsynth::ugens::paf_ratio(f0, bw);
+        assert_eq!(r, 0.99);
+        let (c, inc) = (center / f0, f0 * (1.0 / SR as f64));
+        let (k, alpha) = (c.floor(), c - c.floor());
+        let mut phase = 0.0f64;
+        let mut worst = 0.0f64;
+        let mut peak = 0.0f64;
+        for &got in &x {
+            let (s1, c1) = (core::f64::consts::TAU * phase).sin_cos();
+            let kp = k * phase;
+            let (sk, ck) = (core::f64::consts::TAU * (kp - kp.floor())).sin_cos();
+            let carrier = (1.0 - alpha) * ck + alpha * (ck * c1 - sk * s1);
+            let modulator = (1.0 - r * r) / (1.0 - 2.0 * r * c1 + r * r);
+            let rk = r.powf(k);
+            let y = modulator * carrier - ((1.0 - alpha) * rk + alpha * rk * r);
+            // one f32 ulp of the reference, at least
+            let ulp = (y as f32).abs().max(f32::MIN_POSITIVE);
+            let ulp = (f32::from_bits(ulp.to_bits() + 1) - ulp) as f64;
+            worst = worst.max((got as f64 - y).abs() / ulp);
+            peak = peak.max(y.abs());
+            phase += inc;
+            phase -= phase.floor();
+        }
+        assert!(peak > 150.0, "f0 {f0}: the peak {peak} is not near 199");
+        assert!(
+            worst <= 1.0,
+            "f0 {f0}: {worst} f32 ulps from the closed form"
+        );
+    }
+}

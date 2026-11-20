@@ -7,7 +7,7 @@
 use crate::buffer::{AudioBuffer, read_input};
 use crate::context::ProcessContext;
 use crate::node::UGen;
-use core::f64::consts::TAU;
+use crate::ugens::turns::sin_cos_turns;
 
 /// Largest envelope ratio `r` between neighbouring harmonics (see [`Paf`]).
 /// It bounds the output's peak at `amp · (1 + r) / (1 − r)` = 199 · `amp`
@@ -205,12 +205,12 @@ impl UGen for Paf {
                 let c = center / f0;
                 let k = c.floor();
                 let alpha = c - k;
-                let theta = TAU * phase;
-                let (s1, c1) = theta.sin_cos();
+                // θ = 2π·phase; both sin_cos take the phase in turns
+                let (s1, c1) = sin_cos_turns(phase);
                 // cos kθ and cos (k+1)θ from one sin_cos of kθ (k·phase is
                 // reduced to one cycle first, for precision at high k)
                 let kp = k * phase;
-                let (sk, ck) = (TAU * (kp - kp.floor())).sin_cos();
+                let (sk, ck) = sin_cos_turns(kp - kp.floor());
                 let ck1 = ck * c1 - sk * s1;
                 let carrier = (1.0 - alpha) * ck + alpha * ck1;
                 let modulator = (1.0 - r * r) / (1.0 - 2.0 * r * c1 + r * r);
