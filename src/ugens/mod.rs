@@ -33,6 +33,8 @@
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
 //! - `modal`: ModalBank (a bank of damped two-pole resonators for modal synthesis)
+//! - `turns`: `sin_cos_turns`, sine and cosine of a phase in turns (a helper,
+//!   not a UGen)
 //! - `spectral`: SpectralFreeze, PitchShift, SpectralFilter, SpectralGate, SpectralBlur, Convolution
 //!
 //! # Adding a UGen
@@ -83,6 +85,7 @@ pub mod sample_voice;
 pub mod spectral;
 pub mod steepen;
 pub mod stereo;
+pub mod turns;
 pub mod utility;
 pub mod wavetable;
 
