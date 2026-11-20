@@ -4,10 +4,27 @@
 //! quadrant is `round(4·t)`, and `t − quadrant/4` is computed without
 //! rounding. That leaves an argument of at most π/4 in magnitude for two
 //! short polynomials, with none of the large-argument reduction a general
-//! `sin_cos` of `2π·t` has to do. The result agrees with the library's
-//! `sin_cos(2π·t)` to about 1e-16 (see the tests), is exactly 0 or ±1 at
-//! 0, 1/4, 1/2 and 3/4 turns, and keeps the symmetries
-//! `sin(1 − t) = −sin t`, `cos(1 − t) = cos t` exactly.
+//! `sin_cos` of `2π·t` has to do.
+//!
+//! Accuracy: for `t` in `[0, 1)` both results are within about 1.75e-16
+//! (at most about 1.8 ulp) of the true `sin 2πt` and `cos 2πt`; a test pins
+//! this against a table of values computed at high precision. The
+//! library's `sin_cos(2π·t)` is itself up to about 6.9e-16 from the true
+//! value, because the product `2π·t` is rounded before it is taken, so this
+//! function and the library differ by up to about 7e-16; the tests that
+//! compare with the library therefore bound the difference at 1e-15.
+//!
+//! The results are exactly 0 or ±1 at 0, 1/4, 1/2 and 3/4 turns. The
+//! symmetries `sin(1 − t) = −sin t` and `cos(1 − t) = cos t` hold bit for
+//! bit everywhere except at the odd eighths of a turn, which are the
+//! round-half ties of the quadrant: at 1/8 the sine comes from the cosine
+//! polynomial and at 7/8 from the sine polynomial, so the two agree only to
+//! the last bit or two there.
+//!
+//! This function is used on every target, native included, although the
+//! system libm is faster on some (aarch64 among them): the same arithmetic
+//! everywhere is what makes wasm and native renders agree bit for bit, and
+//! a per-architecture switch to libm would split them.
 
 use core::f64::consts::TAU;
 
@@ -42,8 +59,11 @@ pub fn sin_cos_turns(t: f64) -> (f64, f64) {
     let z = x * x;
     let s = x + x * z * (S3 + z * (S5 + z * (S7 + z * (S9 + z * (S11 + z * (S13 + z * S15))))));
     // 1 − z/2 rounds by up to half an ulp of 1; carry that rounding error
-    // into the small terms (exact by Fast2Sum, since 1 ≥ z/2) so the sum is
-    // within about half an ulp and stays monotonic ulp by ulp
+    // into the small terms (exact by Fast2Sum, since 1 ≥ z/2) so that
+    // summing the polynomial adds only about half an ulp and the result
+    // stays monotonic ulp by ulp. The total error against the true cosine
+    // is larger, up to about 1.6 ulp near |x| = π/4, and comes mostly from
+    // rounding the argument x = 2π·(t − q/4), not from this sum.
     let hz = 0.5 * z;
     let w = 1.0 - hz;
     let c = w
@@ -69,8 +89,8 @@ mod tests {
 
     #[test]
     fn matches_libm_over_a_dense_sweep() {
-        // 2^22 + 1 points over [0, 1) with an irrational step, plus the
-        // regular grid j / 2^20
+        // 2^22 points over [0, 1) with an irrational step, plus the regular
+        // grid j / 2^20
         let n = 1 << 22;
         let mut worst = 0.0f64;
         for j in 0..n {
