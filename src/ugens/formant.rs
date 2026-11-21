@@ -124,6 +124,52 @@ pub fn paf_ratio(f0: f64, bw: f64) -> f64 {
     }
 }
 
+/// `r^k` for a whole-number exponent, by binary powering: one squaring per
+/// bit of `k` and one multiply per set bit, at most 64 of each, against the
+/// general logarithm-and-exponential path of `powf` (which the 0 Hz line
+/// paid on every sample once vibrato moves `r`).
+///
+/// `pow_whole(r, 0)` is 1 (`0⁰` included), `pow_whole(0, k)` is 0 for
+/// `k > 0`. For `0 ≤ r ≤ 1`, the only range the node uses, nothing
+/// overflows, and every partial product and squared base is at least the
+/// result, so while the result is a normal number nothing before it has
+/// lost precision; once it would fall below the smallest subnormal it is 0,
+/// as `powf` gives.
+///
+/// Accuracy: a rounding made while forming `r^(2^j)` is raised to the power
+/// of every later squaring, so the result carries at most `k − 1` roundings
+/// and its relative error is at most `γ(k−1) = (k−1)·u / (1 − (k−1)·u)`
+/// (`u` = 2⁻⁵³) while it is a normal number; measured, it reaches about
+/// 0.9 of that (`powf` stays within about 1 ulp). For the node the absolute
+/// error is what counts: `r^k` ≤ 1 enters the output as the subtracted
+/// 0 Hz line, and `(k−1)·rᵏ` is largest at `k ≈ 1 / ln(1/r)`, so for
+/// `r` ≤ [`PAF_MAX_RATIO`] the error is below `36.6·u` ≈ 4.1e-15 for every
+/// `k` (measured worst about 1.7e-15). Tests pin both against values
+/// computed at high precision.
+///
+/// In the node `k` is at most 0.49·fs / 0.01 Hz (9.4 million at 192 kHz,
+/// 24 bits), so the loop runs at most 24 times.
+///
+/// Written out rather than `f64::powi`: `powi`'s rounding is unspecified
+/// and may differ between targets and compiler versions (on wasm32 it calls
+/// compiler-builtins' `__powidf2`, natively the platform's), and its
+/// exponent is an `i32`. This loop is the same arithmetic on every target,
+/// so native and wasm renders agree bit for bit.
+#[inline]
+fn pow_whole(r: f64, k: u64) -> f64 {
+    let (mut acc, mut base, mut e) = (1.0f64, r, k);
+    while e != 0 {
+        if e & 1 != 0 {
+            acc *= base;
+        }
+        e >>= 1;
+        if e != 0 {
+            base *= base;
+        }
+    }
+    acc
+}
+
 #[inline]
 fn finite_or(x: f32, default: f32) -> f64 {
     if x.is_finite() {
@@ -216,7 +262,8 @@ impl UGen for Paf {
                 let modulator = (1.0 - r * r) / (1.0 - 2.0 * r * c1 + r * r);
                 // the 0 Hz line: the mean of P_r · cos nθ is rⁿ
                 if k != last_k || r != last_r {
-                    rk = if k == 0.0 { 1.0 } else { r.powf(k) };
+                    // k is a whole number in 0 … 0.49·fs / F0_MIN
+                    rk = pow_whole(r, k as u64);
                     last_k = k;
                     last_r = r;
                 }
@@ -233,5 +280,196 @@ impl UGen for Paf {
                 self.prev_reset = prev_reset;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const U: f64 = f64::EPSILON / 2.0;
+
+    /// `γ(n) = n·u / (1 − n·u)`: the relative error bound for `n` roundings.
+    fn gamma(n: u64) -> f64 {
+        let nu = n as f64 * U;
+        nu / (1.0 - nu)
+    }
+
+    /// `(hi, lo)` with `hi + lo` the product of two double-doubles to about
+    /// 2⁻¹⁰⁴ relative (the low parts' product is dropped).
+    fn dd_mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let p = a.0 * b.0;
+        let e = a.0.mul_add(b.0, -p) + (a.0 * b.1 + a.1 * b.0);
+        let h = p + e;
+        (h, e - (h - p))
+    }
+
+    /// `r^k` in double-double by the same binary powering: relative error
+    /// about `k·2⁻¹⁰⁴` (under 1e-24 for every `k` used here), far below
+    /// `pow_whole`'s, while the result is above about 1e-290 (below that
+    /// the low part underflows).
+    fn dd_pow(r: f64, k: u64) -> (f64, f64) {
+        let (mut acc, mut base, mut e) = ((1.0, 0.0), (r, 0.0), k);
+        while e != 0 {
+            if e & 1 != 0 {
+                acc = dd_mul(acc, base);
+            }
+            e >>= 1;
+            if e != 0 {
+                base = dd_mul(base, base);
+            }
+        }
+        acc
+    }
+
+    /// xorshift64, for a reproducible sweep
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn unit(&mut self) -> f64 {
+            (self.next() >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    /// `(r bits, k, r^k)`: every `r` is an exact f64 (given by its bit
+    /// pattern: 0.99, the cap, and `paf_ratio` of the noted `f0`/`bw`), and
+    /// `r^k` was computed once at 60 significant digits (mpmath) and rounded
+    /// correctly to f64; each literal is the shortest decimal that reads
+    /// back as that f64. 9 408 000 is the largest `k` the node can reach
+    /// (0.49 · 192 kHz / 0.01 Hz).
+    #[rustfmt::skip]
+    const TRUE_VALUES: [(u64, u64, f64); 27] = [
+        (0x3fef_ae14_7ae1_47ae,         1, 0.99),                    // r cap
+        (0x3fef_ae14_7ae1_47ae,         2, 0.9801),
+        (0x3fef_ae14_7ae1_47ae,         9, 0.9135172474836408),
+        (0x3fef_ae14_7ae1_47ae,        37, 0.6894490858690777),
+        (0x3fef_ae14_7ae1_47ae,       100, 0.3660323412732292),
+        (0x3fef_ae14_7ae1_47ae,       255, 0.07708584232989273),
+        (0x3fef_ae14_7ae1_47ae,      1000, 4.317124741065786e-5),
+        (0x3fef_ae14_7ae1_47ae,      4097, 1.3103649446228297e-18),
+        (0x3fef_ae14_7ae1_47ae,     65000, 1.9393171619009236e-284),
+        (0x3fef_ae14_7ae1_47ae,     70000, 2.908183650085128e-306),
+        (0x3fef_ae14_7ae1_47ae,     73000, 2.33994e-319),           // subnormal
+        (0x3fef_ae14_7ae1_47ae,     74200, 0.0),                     // below half the least subnormal
+        (0x3fef_ae14_7ae1_47ae,   9408000, 0.0),
+        (0x3fa8_4060_03b2_ae5b,         3, 1.0626837930860883e-4),   // f0 220, bw 100
+        (0x3fa8_4060_03b2_ae5b,        10, 5.6843418860807895e-14),
+        (0x3fa8_4060_03b2_ae5b,        50, 5.934729841099812e-67),
+        (0x3fa8_4060_03b2_ae5b,       230, 2.2784756311112652e-305),
+        (0x3feb_795e_38df_3c5e,         9, 0.2534898699475072),      // f0 110, bw 1000
+        (0x3feb_795e_38df_3c5e,        17, 0.074842419038683),
+        (0x3feb_795e_38df_3c5e,        96, 4.3877966433757393e-7),
+        (0x3feb_795e_38df_3c5e,       400, 3.2311742677852177e-27),
+        (0x3fea_2774_d0d1_3e74,        34, 1.0501904279912916e-3),   // f0 87.31, bw 600
+        (0x3fea_2774_d0d1_3e74,       255, 4.565732012293232e-23),
+        (0x3feb_adb9_e6fa_ee69,         5, 0.48414127495419923),     // f0 523.25, bw 5000
+        (0x3feb_adb9_e6fa_ee69,        16, 0.09815462101082906),
+        (0x3fef_628a_a657_7f3c,        30, 0.5586435690361106),      // f0 98, bw 7000
+        (0x3fef_628a_a657_7f3c,      2047, 5.573971817143062e-18),
+    ];
+
+    #[test]
+    fn within_gamma_k_minus_1_of_the_true_values() {
+        for (bits, k, t) in TRUE_VALUES {
+            let r = f64::from_bits(bits);
+            let got = pow_whole(r, k);
+            if t == 0.0 {
+                assert_eq!(got, 0.0, "r {r}, k {k}");
+            } else if t < f64::MIN_POSITIVE {
+                // subnormal: absolute, a few of the least subnormal's steps
+                // per rounding at most
+                assert!((got - t).abs() <= 1e-300, "r {r}, k {k}: {got:e} vs {t:e}");
+            } else {
+                // the table value is itself within half an ulp of the truth
+                let bound = gamma(k - 1) * t + 0.5 * f64::EPSILON * t;
+                let d = (got - t).abs();
+                assert!(d <= bound, "r {r}, k {k}: off {d:e}, bound {bound:e}");
+            }
+        }
+    }
+
+    #[test]
+    fn within_gamma_k_minus_1_of_a_double_double_reference_and_4e_15_absolute() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut worst_rel = 0.0f64; // as a fraction of γ(k−1)
+        let mut worst_abs = 0.0f64;
+        let mut check = |r: f64, k: u64| {
+            let got = pow_whole(r, k);
+            let (th, tl) = dd_pow(r, k);
+            let d = ((got - th) - tl).abs();
+            worst_abs = worst_abs.max(d);
+            if th > 1e-290 && k > 1 {
+                worst_rel = worst_rel.max(d / th / gamma(k - 1));
+            } else if k <= 1 {
+                assert_eq!(got, if k == 0 { 1.0 } else { r });
+            }
+        };
+        // k in bands up to the node's largest; r uniform in (0, 0.99] and
+        // crowded towards the cap, where r^k stays large longest
+        let bands: [(u64, u64); 5] = [
+            (1, 16),
+            (17, 256),
+            (257, 4096),
+            (4097, 65536),
+            (65537, 9_408_000),
+        ];
+        for (lo, hi) in bands {
+            for i in 0..100_000u64 {
+                let r = if i % 2 == 0 {
+                    PAF_MAX_RATIO * (1.0 - rng.unit())
+                } else {
+                    (1.0 - 10f64.powf(-(0.004_37 + 4.0 * rng.unit()))).min(PAF_MAX_RATIO)
+                };
+                check(r, lo + rng.next() % (hi - lo + 1));
+            }
+        }
+        // every k through the underflow at the cap and a few other ratios
+        for r in [PAF_MAX_RATIO, 0.98, 0.95, 0.9, 0.5, 0.1, 1e-3] {
+            for k in 0..=80_000u64 {
+                check(r, k);
+            }
+        }
+        // measured: about 0.86 of γ(k−1) and 1.7e-15
+        assert!(worst_rel <= 1.0, "worst {worst_rel} of γ(k−1)");
+        assert!(
+            worst_abs <= 36.6 * U * (1.0 + 1e-9),
+            "worst abs {worst_abs:e}"
+        );
+    }
+
+    #[test]
+    fn edge_cases() {
+        // 0⁰ = 1, as the node needs for a centre below the first harmonic
+        assert_eq!(pow_whole(0.0, 0), 1.0);
+        assert_eq!(pow_whole(PAF_MAX_RATIO, 0), 1.0);
+        assert_eq!(pow_whole(0.0, 1), 0.0);
+        assert_eq!(pow_whole(0.0, 9_408_000), 0.0);
+        assert_eq!(pow_whole(0.37, 1), 0.37);
+        assert_eq!(pow_whole(1.0, u64::MAX), 1.0);
+        // the whole exponent range terminates (64 passes) and underflows to 0
+        assert_eq!(pow_whole(PAF_MAX_RATIO, u64::MAX), 0.0);
+        assert_eq!(pow_whole(0.5, 1074), f64::from_bits(1));
+        assert_eq!(pow_whole(0.5, 1075), 0.0);
+        // powers of two are exact all the way down
+        for k in 0..=1074u64 {
+            let exact = if k <= 1022 {
+                f64::from_bits((1023 - k) << 52)
+            } else {
+                f64::from_bits(1 << (1074 - k))
+            };
+            assert_eq!(pow_whole(0.5, k), exact, "k {k}");
+        }
+    }
+
+    #[test]
+    fn the_node_clamps_keep_k_within_24_bits_at_192k() {
+        let k_max = (NYQUIST_GUARD * 192_000.0 / F0_MIN).floor();
+        assert_eq!(k_max, 9_408_000.0);
+        assert!((k_max as u64) < 1 << 24);
     }
 }
