@@ -142,13 +142,14 @@ pub fn paf_ratio(f0: f64, bw: f64) -> f64 {
 /// (`u` = 2⁻⁵³) while it is a normal number; measured, it reaches about
 /// 0.9 of that (`powf` stays within about 1 ulp). For the node the absolute
 /// error is what counts: `r^k` ≤ 1 enters the output as the subtracted
-/// 0 Hz line, and `(k−1)·rᵏ` is largest at `k ≈ 1 / ln(1/r)`, so for
-/// `r` ≤ [`PAF_MAX_RATIO`] the error is below `36.6·u` ≈ 4.1e-15 for every
-/// `k` (measured worst about 1.7e-15). Tests pin both against values
-/// computed at high precision.
+/// 0 Hz line, and `(k−1)·rᵏ` is largest near `k ≈ 1 / ln(1/r)`, where it
+/// is below `1 / (e·ln(1/r))`; so for `r` ≤ [`PAF_MAX_RATIO`] the error is
+/// below `36.6·u` ≈ 4.1e-15 for every `k` (measured worst about 1.7e-15).
+/// Tests pin both against values computed at high precision.
 ///
 /// In the node `k` is at most 0.49·fs / 0.01 Hz (9.4 million at 192 kHz,
-/// 24 bits), so the loop runs at most 24 times.
+/// 24 bits), so the loop runs at most 24 times at 192 kHz, and never more
+/// than 64 times for any exponent.
 ///
 /// Written out rather than `f64::powi`: `powi`'s rounding is unspecified
 /// and may differ between targets and compiler versions (on wasm32 it calls
@@ -381,9 +382,13 @@ mod tests {
             if t == 0.0 {
                 assert_eq!(got, 0.0, "r {r}, k {k}");
             } else if t < f64::MIN_POSITIVE {
-                // subnormal: absolute, a few of the least subnormal's steps
-                // per rounding at most
-                assert!((got - t).abs() <= 1e-300, "r {r}, k {k}: {got:e} vs {t:e}");
+                // subnormal: within a part in a thousand of the truth (a few
+                // dozen of the least subnormal's steps at these values), so
+                // a result of 0 fails
+                assert!(
+                    (got - t).abs() <= 1e-3 * t,
+                    "r {r}, k {k}: {got:e} vs {t:e}"
+                );
             } else {
                 // the table value is itself within half an ulp of the truth
                 let bound = gamma(k - 1) * t + 0.5 * f64::EPSILON * t;
