@@ -77,6 +77,7 @@ pub mod noise;
 pub mod oscillators;
 pub mod partials;
 pub mod partials_blend;
+pub mod partials_ensemble;
 pub mod physical;
 pub mod plane;
 pub mod playbuf;
@@ -108,6 +109,7 @@ pub use noise::*;
 pub use oscillators::*;
 pub use partials::PartialsNoise;
 pub use partials_blend::PartialsBlend;
+pub use partials_ensemble::PartialsEnsemble;
 pub use physical::*;
 pub use plane::*;
 pub use playbuf::*;
@@ -283,5 +285,6 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials::register(reg);
     partials_blend::register(reg);
+    partials_ensemble::register(reg);
     sample_voice::register(reg);
 }

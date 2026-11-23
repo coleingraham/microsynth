@@ -46,9 +46,19 @@
 //! decided once, at construction.
 //!
 //! Ports: `freq` (Hz, default 220), `gain0` (default 1), `gain1`, `gain2`,
-//! `gain3` (default 0). A table with fewer channels than four ignores the
-//! extra gains; channels beyond four are not rendered. An entry lacking a
-//! channel another entry has reads that channel as zero.
+//! `gain3` (default 0), `phase` (default 0). A table with fewer channels than
+//! four ignores the extra gains; channels beyond four are not rendered. An
+//! entry lacking a channel another entry has reads that channel as zero.
+//!
+//! **Initial phases.** By default every partial starts at phase 0, so two
+//! voices started on the same sample at the same pitch have their partials in
+//! step (two such voices crossfaded add partly in amplitude rather than in
+//! power). `phase`, read once at the voice's first sample, scatters the
+//! starting phases: partial `m` starts at `phase · u_m` cycles, `u_m` uniform
+//! in `[0, 1]`, drawn from a stream seeded by the voice's seed (the one
+//! [`UGen::reseed_noise`] hands the voice, so renders stay reproducible).
+//! `1` gives every partial an independent random phase. Unconnected, or `0`,
+//! leaves the output exactly as before the port existed.
 
 use crate::buffer::{AudioBuffer, read_input};
 use crate::coeff_table::CoeffTable;
@@ -72,35 +82,41 @@ use core::f32::consts::TAU;
 pub const MAX_BLEND_CHANNELS: usize = 4;
 
 /// One pitch entry, every channel zero-padded to the bank's sizes.
-struct BlendEntry {
-    f0_hz: f32,
-    stretch: f32,
-    mainlobe_gain: f32,
-    noise_gain: f32,
+pub(crate) struct BlendEntry {
+    pub(crate) f0_hz: f32,
+    pub(crate) stretch: f32,
+    pub(crate) mainlobe_gain: f32,
+    pub(crate) noise_gain: f32,
     /// `k * m_max + m`: channel `k`'s coefficient for partial `m`.
-    partials: Vec<f32>,
+    pub(crate) partials: Vec<f32>,
     /// `k * j_max + j`: channel `k`'s coefficient for noise band `j`.
-    noise: Vec<f32>,
+    pub(crate) noise: Vec<f32>,
 }
 
 /// The table-bound blending partial bank. See the module doc.
 pub struct PartialsBlend {
-    entries: Vec<BlendEntry>,
+    pub(crate) entries: Vec<BlendEntry>,
     /// Channels rendered (`<= MAX_BLEND_CHANNELS`).
-    k: usize,
+    pub(crate) k: usize,
     /// Partials kept: one past the highest index nonzero anywhere.
-    m_max: usize,
+    pub(crate) m_max: usize,
     /// Noise bands as the table defines them (band identity and placement).
-    j_max: usize,
+    pub(crate) j_max: usize,
     /// Bands nonzero somewhere in the table; only these are filtered.
-    live_bands: Vec<usize>,
-    phase: Vec<f32>,
-    noise_state: Vec<BiquadState>,
-    noise_biquad: Vec<(f32, f32, f32, f32, f32)>,
-    noise_center_hz: Vec<f32>,
-    noise_power_compensation: Vec<f32>,
-    rng: Rng,
-    sample_rate: f32,
+    pub(crate) live_bands: Vec<usize>,
+    pub(crate) phase: Vec<f32>,
+    pub(crate) noise_state: Vec<BiquadState>,
+    pub(crate) noise_biquad: Vec<(f32, f32, f32, f32, f32)>,
+    pub(crate) noise_center_hz: Vec<f32>,
+    pub(crate) noise_power_compensation: Vec<f32>,
+    pub(crate) rng: Rng,
+    pub(crate) sample_rate: f32,
+    /// The voice's seed (from [`UGen::reseed_noise`]), kept for the initial
+    /// phase scatter, which is drawn from its own stream.
+    pub(crate) seed: u32,
+    /// Whether the first block has been processed (the `phase` port is read
+    /// once, at the voice's first sample).
+    pub(crate) started: bool,
 }
 
 impl PartialsBlend {
@@ -182,6 +198,8 @@ impl PartialsBlend {
             noise_power_compensation: alloc::vec![1.0; j_max],
             rng: Rng::new(PARTIALS_NOISE_DEFAULT_SEED),
             sample_rate: 44100.0,
+            seed: PARTIALS_NOISE_DEFAULT_SEED,
+            started: false,
         }
     }
 
@@ -197,7 +215,7 @@ impl PartialsBlend {
 
     /// Bracketing entries and the weight toward the upper one (as
     /// `PartialsNoise::bracket`).
-    fn bracket(&self, f0: f32) -> (usize, usize, f32) {
+    pub(crate) fn bracket(&self, f0: f32) -> (usize, usize, f32) {
         let entries = &self.entries;
         let n = entries.len();
         if n <= 1 || f0 <= entries[0].f0_hz {
@@ -232,7 +250,7 @@ impl UGen for PartialsBlend {
         "PartialsBlend",
         category = Oscillator,
         inputs = [],
-        optional_inputs = ["freq", "gain0", "gain1", "gain2", "gain3"],
+        optional_inputs = ["freq", "gain0", "gain1", "gain2", "gain3", "phase"],
         outputs = ["out"]
     );
 
@@ -255,10 +273,13 @@ impl UGen for PartialsBlend {
             .iter_mut()
             .for_each(|s| *s = BiquadState::new());
         self.rng = Rng::new(PARTIALS_NOISE_DEFAULT_SEED);
+        self.seed = PARTIALS_NOISE_DEFAULT_SEED;
+        self.started = false;
     }
 
     fn reseed_noise(&mut self, seed: u32) {
         self.rng = Rng::new(seed);
+        self.seed = seed;
         self.noise_state
             .iter_mut()
             .for_each(|s| *s = BiquadState::new());
@@ -277,6 +298,19 @@ impl UGen for PartialsBlend {
         let inv_sr = 1.0 / sr;
         let nyquist = sr * 0.5;
         let (k_n, m_n, j_n) = (self.k, self.m_max, self.j_max);
+
+        // Initial phase scatter: read once, at the voice's first sample. With
+        // the port unconnected (every def written before it existed) nothing
+        // here runs and every partial starts at phase 0, as before.
+        if !self.started {
+            self.started = true;
+            if let Some(buf) = inputs.get(5).copied().flatten() {
+                let scatter = read_input(Some(buf), 0, 0, 0.0);
+                if scatter.is_finite() && scatter > 0.0 {
+                    scatter_phases(&mut self.phase, self.seed, scatter.min(1.0));
+                }
+            }
+        }
 
         // Every channel starts from the block-start state (see PartialsNoise).
         let phase_snapshot = self.phase.clone();
@@ -358,6 +392,23 @@ impl UGen for PartialsBlend {
     }
 }
 
+/// Salt that separates the phase-scatter stream from the noise stream drawn
+/// from the same voice seed.
+pub(crate) const PHASE_SCATTER_SALT: u32 = 0x5CA7_7E12;
+
+/// Set each partial's starting phase to `scatter` times a uniform draw over
+/// one cycle, from a stream seeded by the voice's seed (so a render is
+/// reproducible, and two voices of one def start their partials at
+/// different phases).
+pub(crate) fn scatter_phases(phase: &mut [f32], seed: u32, scatter: f32) {
+    let mut rng = Rng::new(seed ^ PHASE_SCATTER_SALT);
+    for p in phase.iter_mut() {
+        let u = 0.5 * (rng.next_bipolar() + 1.0); // [0, 1]
+        let v = scatter * u;
+        *p = v - v.floor();
+    }
+}
+
 /// Register the `partialsBlend` table-bound kind.
 pub fn register(reg: &mut UGenRegistry) {
     let factory: TableUGenFactory = Arc::new(|table| Box::new(PartialsBlend::new(table)));
@@ -376,6 +427,7 @@ pub fn register(reg: &mut UGenRegistry) {
             port("gain1"),
             port("gain2"),
             port("gain3"),
+            port("phase"),
         ],
         &[OutputSpec {
             name: "out",
