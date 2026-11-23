@@ -299,8 +299,9 @@ impl Synth {
 /// `FmOp` and `Paf`, which pass silence through their `level` and `amp`
 /// ports) stops the
 /// propagation: oscillators and physical models (their inputs are
-/// parameters), envelopes, and nodes that keep sounding after their input
-/// stops (`CombFilter`, `ModalBank`, `Delay`, `FeedbackDelay`,
+/// parameters; `GuitarString` reports done itself once its loops have rung
+/// out, and its `exc` excitation port passes no silence), envelopes, and
+/// nodes that keep sounding after their input stops (`CombFilter`, `ModalBank`, `Delay`, `FeedbackDelay`,
 /// `PingPongDelay`, `GVerb`, `Convolution`, the spectral processors,
 /// `PitchShift`, `SampleAndHold`), and `Plane2d`, whose output is a value
 /// of its position (the interpolation at a silent position is not 0).
@@ -515,10 +516,11 @@ mod done_rule_tests {
     use alloc::string::String;
     use alloc::vec::Vec;
 
-    /// Kinds with an `in` port that deliberately stop silence there: their
-    /// output keeps sounding after `in` falls silent (delay lines, reverbs,
-    /// a resonator bank, spectral processors, a held sample), or `in` is not an audio path
-    /// out of the synth (`AudioIn`).
+    /// Kinds with an `in` (or excitation `exc`) port that deliberately stop
+    /// silence there: their output keeps sounding after the port falls
+    /// silent (delay lines, reverbs, a resonator bank, a string, spectral
+    /// processors, a held sample), or `in` is not an audio path out of the
+    /// synth (`AudioIn`).
     const STOPS_SILENCE: &[&str] = &[
         "AudioIn",
         "CombFilter",
@@ -526,6 +528,7 @@ mod done_rule_tests {
         "Delay",
         "FeedbackDelay",
         "GVerb",
+        "GuitarString",
         "ModalBank",
         "PingPongDelay",
         "PitchShift",
@@ -536,8 +539,8 @@ mod done_rule_tests {
         "SpectralGate",
     ];
 
-    /// A UGen added with an `in` port must be placed on one side of the done
-    /// rule. Left off both lists it would silently stop silence, so a voice
+    /// A UGen added with an `in` (or `exc`) port must be placed on one side
+    /// of the done rule. Left off both lists it would silently stop silence, so a voice
     /// whose VCA sits upstream of it would never be freed.
     #[test]
     fn every_kind_with_an_in_port_has_a_done_rule() {
@@ -549,7 +552,11 @@ mod done_rule_tests {
         for (kind, entry) in reg.iter() {
             let spec = (entry.factory)().spec();
             spec_names.push(spec.name);
-            if !spec.inputs.iter().any(|p| p.name == "in") {
+            if !spec
+                .inputs
+                .iter()
+                .any(|p| p.name == "in" || p.name == "exc")
+            {
                 continue;
             }
             let passes = SILENCE_PASS_THROUGH.contains(&spec.name);
