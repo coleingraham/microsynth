@@ -479,6 +479,42 @@
 //! per-instrument constants, written by a generator as inline consts in the
 //! IR; the output is recomputed only when the position moves.
 //!
+//! ## Partial Banks (bound to an uploaded table)
+//!
+//! | Name | Inputs | Description |
+//! |------|--------|-------------|
+//! | `partialsNoise` | `freq`, `gain` | Harmonic partials at `m · freq` plus noise bands, amplitudes from one channel of a per-pitch coefficient table |
+//! | `partialsBlend` | `freq`, `gain0` … `gain3` | One partial bank blending up to four table channels by audio-rate gains (one sine per partial whatever the channels) |
+//! | `partialsEnsemble` | `freq`, `gain0` … `gain3`, `players`, `spread` (cents), `vib` (cents), `onset` (s), `width` (0–1), `ctrl` (samples), `phase` (0–1) | `partialsBlend` sounding as a section of `players`: each partial one sine under a seeded random complex envelope with the statistics of that many detuned players; stereo out |
+//! | `tableValue` | `freq`, `slot`, `default` | Entry metadata `value.<slot>` of the bound table, interpolated at `freq` (a per-register constant) |
+//!
+//! None is written in DSL text: the table is uploaded at run time
+//! (`ms_coeff_table_register`; `docs/coeff-table-bank-format.md`) and an IR
+//! def binds the node to it through `table_bindings`. Entries are
+//! interpolated linearly in f0 between the two bracketing the current
+//! `freq`. `partialsEnsemble`'s `players` sets how much each partial's level
+//! wanders (`1` none, as one player; large, a Rayleigh wander), `spread` and
+//! `vib` how fast (the players' detune and the part of their vibrato that is
+//! not common to the section), `onset` smears the attack over that many
+//! seconds, `width` decorrelates the right channel, `phase` scatters the
+//! partials' start phases; all of these are read at the voice's first sample
+//! and every random draw is seeded from the voice. With the default `spread`
+//! 0 and `vib` 0 the players have no detune: each partial is held at one
+//! random level and phase for the whole note (steady within a note,
+//! different from note to note). A moving section needs a spread, e.g. the
+//! string sections' `spread` 5, `vib` = the instrument's vibrato depth in
+//! cents, `onset` 0.013, `width` 0.7, `players` 6 (small) or 1e6 (large). A `tableValue` bound to the
+//! bank's own table carries a def's register-dependent constants (vibrato
+//! rate, envelope times) beside the spectra. See `src/ugens/partials.rs`,
+//! `partials_blend.rs`, `partials_ensemble.rs`, `table_value.rs`.
+//!
+//! ```text
+//! IR nodes: Param freq, …,
+//!           UGen partialsEnsemble <- freq:0, gains:1-4, consts [(5, 6.0), (6, 5.0), (9, 0.7)]
+//!           UGen tableValue       <- freq:0, consts [(1, 2.0)]   -- value.2 of the same table
+//! table_bindings: [{ node: <partialsEnsemble>, table_id: T }, { node: <tableValue>, table_id: T }]
+//! ```
+//!
 //! ## Sample Playback (bound to an uploaded program)
 //!
 //! | Name | Inputs | Description |

@@ -37,7 +37,8 @@
 //! **Equivalence.** Against `K` `partialsNoise` banks bound to the `K`
 //! single-channel tables and summed, the partial half differs only by
 //! floating-point summation order (relative error of order 1e-7); see
-//! `tests/partials_blend.rs`.
+//! `tests/partials_blend.rs`. `partialsEnsemble` (`ugens::partials_ensemble`)
+//! builds on this bank's table preparation.
 //!
 //! **Work skipped without changing the output.** A partial index whose
 //! coefficient is zero in every channel of every entry can never sound, so
@@ -72,35 +73,35 @@ use core::f32::consts::TAU;
 pub const MAX_BLEND_CHANNELS: usize = 4;
 
 /// One pitch entry, every channel zero-padded to the bank's sizes.
-struct BlendEntry {
-    f0_hz: f32,
-    stretch: f32,
-    mainlobe_gain: f32,
-    noise_gain: f32,
+pub(crate) struct BlendEntry {
+    pub(crate) f0_hz: f32,
+    pub(crate) stretch: f32,
+    pub(crate) mainlobe_gain: f32,
+    pub(crate) noise_gain: f32,
     /// `k * m_max + m`: channel `k`'s coefficient for partial `m`.
-    partials: Vec<f32>,
+    pub(crate) partials: Vec<f32>,
     /// `k * j_max + j`: channel `k`'s coefficient for noise band `j`.
-    noise: Vec<f32>,
+    pub(crate) noise: Vec<f32>,
 }
 
 /// The table-bound blending partial bank. See the module doc.
 pub struct PartialsBlend {
-    entries: Vec<BlendEntry>,
+    pub(crate) entries: Vec<BlendEntry>,
     /// Channels rendered (`<= MAX_BLEND_CHANNELS`).
-    k: usize,
+    pub(crate) k: usize,
     /// Partials kept: one past the highest index nonzero anywhere.
-    m_max: usize,
+    pub(crate) m_max: usize,
     /// Noise bands as the table defines them (band identity and placement).
-    j_max: usize,
+    pub(crate) j_max: usize,
     /// Bands nonzero somewhere in the table; only these are filtered.
-    live_bands: Vec<usize>,
-    phase: Vec<f32>,
-    noise_state: Vec<BiquadState>,
-    noise_biquad: Vec<(f32, f32, f32, f32, f32)>,
-    noise_center_hz: Vec<f32>,
-    noise_power_compensation: Vec<f32>,
-    rng: Rng,
-    sample_rate: f32,
+    pub(crate) live_bands: Vec<usize>,
+    pub(crate) phase: Vec<f32>,
+    pub(crate) noise_state: Vec<BiquadState>,
+    pub(crate) noise_biquad: Vec<(f32, f32, f32, f32, f32)>,
+    pub(crate) noise_center_hz: Vec<f32>,
+    pub(crate) noise_power_compensation: Vec<f32>,
+    pub(crate) rng: Rng,
+    pub(crate) sample_rate: f32,
 }
 
 impl PartialsBlend {
@@ -197,7 +198,7 @@ impl PartialsBlend {
 
     /// Bracketing entries and the weight toward the upper one (as
     /// `PartialsNoise::bracket`).
-    fn bracket(&self, f0: f32) -> (usize, usize, f32) {
+    pub(crate) fn bracket(&self, f0: f32) -> (usize, usize, f32) {
         let entries = &self.entries;
         let n = entries.len();
         if n <= 1 || f0 <= entries[0].f0_hz {

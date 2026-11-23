@@ -105,6 +105,14 @@ fn table_bound_ugens_have_expected_categories() {
         .table_bound_entry("partialsBlend")
         .expect("partialsBlend not registered as table-bound");
     assert_eq!(entry.category, Oscillator, "category of partialsBlend");
+    let entry = reg
+        .table_bound_entry("partialsEnsemble")
+        .expect("partialsEnsemble not registered as table-bound");
+    assert_eq!(entry.category, Oscillator, "category of partialsEnsemble");
+    let entry = reg
+        .table_bound_entry("tableValue")
+        .expect("tableValue not registered as table-bound");
+    assert_eq!(entry.category, Utility, "category of tableValue");
     // program-bound: bound to a sample program instead of a table
     let entry = reg
         .program_bound_entry("sampleVoice")

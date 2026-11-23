@@ -77,6 +77,7 @@ pub mod noise;
 pub mod oscillators;
 pub mod partials;
 pub mod partials_blend;
+pub mod partials_ensemble;
 pub mod physical;
 pub mod plane;
 pub mod playbuf;
@@ -85,6 +86,7 @@ pub mod sample_voice;
 pub mod spectral;
 pub mod steepen;
 pub mod stereo;
+pub mod table_value;
 pub mod turns;
 pub mod utility;
 pub mod wavetable;
@@ -108,6 +110,7 @@ pub use noise::*;
 pub use oscillators::*;
 pub use partials::PartialsNoise;
 pub use partials_blend::PartialsBlend;
+pub use partials_ensemble::PartialsEnsemble;
 pub use physical::*;
 pub use plane::*;
 pub use playbuf::*;
@@ -115,6 +118,7 @@ pub use sample_voice::SampleVoice;
 pub use spectral::*;
 pub use steepen::*;
 pub use stereo::*;
+pub use table_value::TableValue;
 pub use utility::*;
 pub use wavetable::*;
 
@@ -276,12 +280,16 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 /// wasm build) and is a separate, real gap for a table-bound kind used
 /// natively via the CLI, not covered by MOT-640's wasm-reachability scope.
 ///
-/// Currently registers `partialsNoise` (`ugens::partials`, MOT-636) and
-/// `partialsBlend` (`ugens::partials_blend`), and the program-bound
-/// `sampleVoice` (`ugens::sample_voice`), whose binding names a registered
-/// sample program instead of a table (`docs/sample-program-format.md`).
+/// Currently registers `partialsNoise` (`ugens::partials`, MOT-636),
+/// `partialsBlend` (`ugens::partials_blend`), `partialsEnsemble`
+/// (`ugens::partials_ensemble`), `tableValue` (`ugens::table_value`), and
+/// the program-bound `sampleVoice` (`ugens::sample_voice`), whose binding
+/// names a registered sample program instead of a table
+/// (`docs/sample-program-format.md`).
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials::register(reg);
     partials_blend::register(reg);
+    partials_ensemble::register(reg);
+    table_value::register(reg);
     sample_voice::register(reg);
 }

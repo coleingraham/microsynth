@@ -123,6 +123,14 @@ impl AudioBuffer {
         &mut self.channels[index]
     }
 
+    /// Mutable sample slices of two distinct channels at once, `a < b`.
+    #[inline]
+    pub fn channel_pair_mut(&mut self, a: usize, b: usize) -> (&mut [f32], &mut [f32]) {
+        assert!(a < b, "channel_pair_mut needs a < b");
+        let (lo, hi) = self.channels.split_at_mut(b);
+        (lo[a].samples_mut(), hi[0].samples_mut())
+    }
+
     /// Set the number of channels, reusing existing allocations.
     /// New channels are zeroed.
     pub fn set_num_channels(&mut self, num_channels: usize, block_size: usize) {
