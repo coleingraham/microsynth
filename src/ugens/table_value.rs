@@ -9,16 +9,22 @@
 //! `value.0`, `value.1`, …; this node outputs entry metadata `value.<slot>`
 //! interpolated at `freq` exactly as the partial banks interpolate their
 //! coefficients: between the two entries bracketing `freq`, linear in f0,
-//! clamped to the first and last entries outside the grid. An entry without
-//! the key reads `default`.
+//! clamped to the first and last entries outside the grid. Wherever the key
+//! is missing (an entry without it, every entry, or a table with no entries)
+//! the value there is `default`: an entry lacking the key counts as carrying
+//! `default` in the interpolation, and a table where nothing carries it reads
+//! `default` everywhere. Entries that fail the table format's checks
+//! (`PitchEntry::is_well_formed`) are skipped, as the partial banks skip
+//! them.
 //!
 //! Bound to the same table as the def's bank (two `table_bindings` naming
 //! one table id), so the spectra and the constants of a register travel
 //! together.
 //!
-//! **Cost.** The value is recomputed only when `freq` changes from one
-//! sample to the next (a binary search over the entries); driven by the
-//! note's `freq` param it is computed once per note.
+//! **Cost.** Every `value.<n>` key is parsed once, when the node is built
+//! (no allocation while rendering). The value is recomputed only when `freq`
+//! changes from one sample to the next (a binary search over the entries);
+//! driven by the note's `freq` param it is computed once per note.
 //!
 //! **Channels.** One output channel per `freq` channel, each from its own
 //! channel of `freq` (with a cache per channel); `slot` and `default` are
@@ -47,20 +53,56 @@ const CACHED_CHANNELS: usize = 2;
 
 /// The table-bound value node. See the module doc.
 pub struct TableValue {
-    table: Arc<CoeffTable>,
-    /// `(f0, value)` of the entries, sorted by f0, for the latched slot.
-    points: Vec<(f32, f32)>,
+    /// The well-formed entries' f0, sorted ascending.
+    f0: Vec<f32>,
+    /// `(slot, values)`: one value per entry in `f0`'s order, `NaN` where the
+    /// entry lacks the key. Sorted by slot.
+    slots: Vec<(usize, Vec<f32>)>,
+    /// The latched slot's index into `slots` (`None`: no entry carries it).
+    slot: Option<usize>,
+    default: f32,
     started: bool,
     /// Last `freq` and value per cached channel.
     cache: [(f32, f32); CACHED_CHANNELS],
 }
 
 impl TableValue {
-    /// Construct bound to `table`.
+    /// Construct bound to `table`: parse every `value.<n>` key.
     pub fn new(table: Arc<CoeffTable>) -> Self {
+        let mut entries: Vec<_> = table
+            .entries
+            .iter()
+            .filter(|e| e.is_well_formed() && e.f0_hz.is_finite())
+            .collect();
+        entries.sort_by(|a, b| a.f0_hz.total_cmp(&b.f0_hz));
+        let f0: Vec<f32> = entries.iter().map(|e| e.f0_hz).collect();
+        let mut slots: Vec<(usize, Vec<f32>)> = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            for (key, v) in &e.metadata {
+                let Some(n) = key
+                    .strip_prefix("value.")
+                    .and_then(|n| n.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                if n > MAX_TABLE_VALUE_SLOT {
+                    continue;
+                }
+                let at = match slots.binary_search_by_key(&n, |s| s.0) {
+                    Ok(at) => at,
+                    Err(at) => {
+                        slots.insert(at, (n, alloc::vec![f32::NAN; entries.len()]));
+                        at
+                    }
+                };
+                slots[at].1[i] = *v;
+            }
+        }
         TableValue {
-            table,
-            points: Vec::new(),
+            f0,
+            slots,
+            slot: None,
+            default: 0.0,
             started: false,
             cache: [(f32::NAN, 0.0); CACHED_CHANNELS],
         }
@@ -71,56 +113,55 @@ impl TableValue {
         format!("value.{slot}")
     }
 
-    fn latch(&mut self, slot: usize, default: f32) {
-        let key = Self::key(slot);
-        let mut points: Vec<(f32, f32)> = self
-            .table
-            .entries
-            .iter()
-            .filter(|e| e.f0_hz.is_finite())
-            .map(|e| {
-                let v = e
-                    .metadata
-                    .iter()
-                    .find(|(k, _)| *k == key)
-                    .map_or(default, |&(_, v)| v);
-                (e.f0_hz, v)
-            })
-            .collect();
-        points.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.points = points;
+    /// The value of slot `slot` at `f0`, `default` where the key is missing
+    /// (see the module doc).
+    pub fn value_at(&self, slot: usize, f0: f32, default: f32) -> f32 {
+        match self.slots.binary_search_by_key(&slot, |s| s.0) {
+            Ok(at) => self.lookup(&self.slots[at].1, f0, default),
+            Err(_) => default,
+        }
     }
 
-    /// The value at `f0` (see the module doc).
-    pub fn value_at(&self, f0: f32, default: f32) -> f32 {
-        let p = &self.points;
+    fn lookup(&self, values: &[f32], f0: f32, default: f32) -> f32 {
+        let v = |i: usize| {
+            let x = values[i];
+            if x.is_nan() { default } else { x }
+        };
+        let p = &self.f0;
         let n = p.len();
         if n == 0 {
             return default;
         }
-        if n == 1 || f0 <= p[0].0 || !f0.is_finite() {
-            return p[0].1;
+        if n == 1 || f0 <= p[0] || !f0.is_finite() {
+            return v(0);
         }
         let last = n - 1;
-        if f0 >= p[last].0 {
-            return p[last].1;
+        if f0 >= p[last] {
+            return v(last);
         }
         let (mut lo, mut hi) = (0usize, last);
         while lo + 1 < hi {
             let mid = (lo + hi) / 2;
-            if p[mid].0 <= f0 {
+            if p[mid] <= f0 {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        let (f_lo, f_hi) = (p[lo].0, p[hi].0);
+        let (f_lo, f_hi) = (p[lo], p[hi]);
         let t = if f_hi > f_lo {
             (f0 - f_lo) / (f_hi - f_lo)
         } else {
             0.0
         };
-        p[lo].1 + t * (p[hi].1 - p[lo].1)
+        v(lo) + t * (v(hi) - v(lo))
+    }
+
+    fn current(&self, f0: f32) -> f32 {
+        match self.slot {
+            Some(at) => self.lookup(&self.slots[at].1, f0, self.default),
+            None => self.default,
+        }
     }
 }
 
@@ -159,6 +200,8 @@ impl UGen for TableValue {
 
     fn reset(&mut self) {
         self.started = false;
+        self.slot = None;
+        self.default = 0.0;
         self.cache = [(f32::NAN, 0.0); CACHED_CHANNELS];
     }
 
@@ -169,19 +212,17 @@ impl UGen for TableValue {
         output: &mut AudioBuffer,
     ) {
         let freq_buf = inputs.first().copied().flatten();
-        let default = {
-            let d = read_input(inputs.get(2).copied().flatten(), 0, 0, 0.0);
-            if d.is_finite() { d } else { 0.0 }
-        };
         if !self.started {
             self.started = true;
+            let d = read_input(inputs.get(2).copied().flatten(), 0, 0, 0.0);
+            self.default = if d.is_finite() { d } else { 0.0 };
             let s = read_input(inputs.get(1).copied().flatten(), 0, 0, 0.0);
             let slot = if s.is_finite() {
                 (s.round().max(0.0) as usize).min(MAX_TABLE_VALUE_SLOT)
             } else {
                 0
             };
-            self.latch(slot, default);
+            self.slot = self.slots.binary_search_by_key(&slot, |s| s.0).ok();
         }
         for ch in 0..output.num_channels() {
             let mut cache = self.cache.get(ch).copied().unwrap_or((f32::NAN, 0.0));
@@ -190,7 +231,7 @@ impl UGen for TableValue {
                 let f = read_input(freq_buf, ch, i, DEFAULT_FREQ_HZ);
                 // NaN never equals itself, so the first sample always computes
                 if f != cache.0 {
-                    cache = (f, self.value_at(f, default));
+                    cache = (f, self.current(f));
                 }
                 *o = cache.1;
             }

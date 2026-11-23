@@ -498,7 +498,12 @@
 //! not common to the section), `onset` smears the attack over that many
 //! seconds, `width` decorrelates the right channel, `phase` scatters the
 //! partials' start phases; all of these are read at the voice's first sample
-//! and every random draw is seeded from the voice. A `tableValue` bound to the
+//! and every random draw is seeded from the voice. With the default `spread`
+//! 0 and `vib` 0 the players have no detune: each partial is held at one
+//! random level and phase for the whole note (steady within a note,
+//! different from note to note). A moving section needs a spread, e.g. the
+//! string sections' `spread` 5, `vib` = the instrument's vibrato depth in
+//! cents, `onset` 0.013, `width` 0.7, `players` 6 (small) or 1e6 (large). A `tableValue` bound to the
 //! bank's own table carries a def's register-dependent constants (vibrato
 //! rate, envelope times) beside the spectra. See `src/ugens/partials.rs`,
 //! `partials_blend.rs`, `partials_ensemble.rs`, `table_value.rs`.

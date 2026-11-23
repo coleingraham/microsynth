@@ -641,3 +641,82 @@ mod sample_voice {
         assert_ne!(st[1], st_r_changed[1]);
     }
 }
+
+// --- partialsEnsemble (table-bound, stereo by design) ---
+
+/// `partialsEnsemble` computes both output channels from one state (the
+/// section's left and right desks); its control inputs are read from their
+/// first channel. A different channel-1 `freq` must leave both outputs
+/// unchanged; a different channel-0 `freq` must change them.
+mod partials_ensemble {
+    use super::*;
+    use microsynth::coeff_table::{CoeffTable, PitchEntry};
+    use microsynth::ugens::PartialsEnsemble;
+    use std::sync::Arc;
+
+    fn table() -> CoeffTable {
+        CoeffTable {
+            name: "ens".into(),
+            entries: [180.0f32, 330.0]
+                .iter()
+                .map(|&f0| PitchEntry {
+                    f0_hz: f0,
+                    inharmonicity_stretch: 1.0,
+                    partial_freqs: (1..=8).map(|m| m as f32 * f0).collect(),
+                    k_channels: 1,
+                    j_noise: 2,
+                    coefficients: (0..10).map(|i| 0.3 / (i as f32 + 1.0)).collect(),
+                    metadata: vec![
+                        ("noise_band_min_hz".into(), 100.0),
+                        ("noise_band_max_hz".into(), 8000.0),
+                    ],
+                })
+                .collect(),
+        }
+    }
+
+    fn render(f0: f32, f1: f32) -> [Vec<f32>; 2] {
+        let mut v = PartialsEnsemble::new(Arc::new(table()));
+        let ctx0 = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
+        v.init(&ctx0);
+        v.reseed_noise(17);
+        let mut out = [Vec::new(), Vec::new()];
+        let konst = |x: f32| {
+            let mut a = AudioBuffer::new(1, BLOCK_SIZE);
+            a.channel_mut(0).samples_mut().fill(x);
+            a
+        };
+        let (players, spread, width) = (konst(6.0), konst(5.0), konst(0.7));
+        for b in 0..NUM_BLOCKS * 4 {
+            let mut ctx = ctx0.clone();
+            ctx.sample_offset = (b * BLOCK_SIZE) as u64;
+            let mut freq = AudioBuffer::new(2, BLOCK_SIZE);
+            freq.channel_mut(0).samples_mut().fill(f0);
+            freq.channel_mut(1).samples_mut().fill(f1);
+            let mut inputs: Vec<Option<&AudioBuffer>> = vec![None; 12];
+            inputs[0] = Some(&freq);
+            inputs[5] = Some(&players);
+            inputs[6] = Some(&spread);
+            inputs[9] = Some(&width);
+            let mut o = AudioBuffer::new(2, BLOCK_SIZE);
+            v.process(&ctx, &inputs, &mut o);
+            out[0].extend_from_slice(o.channel(0).samples());
+            out[1].extend_from_slice(o.channel(1).samples());
+        }
+        out
+    }
+
+    #[test]
+    fn partials_ensemble_reads_its_inputs_from_channel_0_only() {
+        let base = render(261.63, 261.63);
+        assert_ne!(
+            base[0], base[1],
+            "width 0.7: the two desks differ by design"
+        );
+        let other = render(261.63, 523.25);
+        assert_eq!(base, other, "input channel 1 must not reach either output");
+        let moved = render(293.66, 261.63);
+        assert_ne!(base[0], moved[0], "control: channel 0 does");
+        assert_ne!(base[1], moved[1], "control: channel 0 does");
+    }
+}

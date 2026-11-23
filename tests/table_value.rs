@@ -223,3 +223,36 @@ fn binds_with_a_bank_to_one_table() {
     let peak = out.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
     assert!((peak - 1.25).abs() < 0.01, "peak {peak}");
 }
+
+#[test]
+fn missing_keys_read_the_default_alike_in_empty_and_full_tables() {
+    // a table with no entries, and one whose entries lack the key, both read
+    // `default` at every pitch
+    for t in [CoeffTable::default(), table()] {
+        let node = TableValue::new(Arc::new(t));
+        for f in [50.0f32, 150.0, 1000.0] {
+            assert_eq!(node.value_at(9, f, 4.5), 4.5);
+        }
+    }
+    let node = TableValue::new(Arc::new(table()));
+    assert_eq!(node.value_at(3, 150.0, 4.5), 2.0);
+}
+
+#[test]
+fn malformed_entries_are_skipped_as_the_banks_skip_them() {
+    let mut t = table();
+    // a malformed entry (coefficient count not k * (m + j)) at 150 Hz with a
+    // value that would otherwise dominate the interpolation there
+    t.entries.push(PitchEntry {
+        f0_hz: 150.0,
+        inharmonicity_stretch: 1.0,
+        partial_freqs: vec![150.0, 300.0],
+        k_channels: 1,
+        j_noise: 0,
+        coefficients: vec![0.5],
+        metadata: vec![("value.3".into(), 100.0)],
+    });
+    assert!(!t.entries.last().unwrap().is_well_formed());
+    let node = TableValue::new(Arc::new(t));
+    assert_eq!(node.value_at(3, 150.0, 0.0), 2.0);
+}

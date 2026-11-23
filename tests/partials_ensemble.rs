@@ -149,6 +149,7 @@ const ONSET: usize = 8;
 const WIDTH: usize = 9;
 const CTRL: usize = 10;
 const PHASE: usize = 11;
+const _: () = assert!(VIB == 7);
 
 fn rms_diff_db(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
@@ -363,4 +364,330 @@ fn a_finished_envelope_after_the_bank_frees_the_voice() {
     }
     assert!(peak > 0.01, "the def sounded before it ended");
     assert!(freed_at.is_some(), "the voice was never freed");
+}
+
+// --- direct process: inputs set sample by sample ---
+
+/// Run a bank through `process` directly: `freq` and `gains` per sample,
+/// `ports` as constants, `block` samples per call. Returns (L, R).
+fn run_direct(
+    bank: &mut PartialsEnsemble,
+    sr: f32,
+    block: usize,
+    freq: &[f32],
+    gains: &[Vec<f32>],
+    ports: &[(usize, f32)],
+) -> (Vec<f32>, Vec<f32>) {
+    use microsynth::node::UGen;
+    let ctx0 = ProcessContext::new(sr, block);
+    let mut out = (Vec::new(), Vec::new());
+    for (b, start) in (0..freq.len()).step_by(block).enumerate() {
+        let n = block.min(freq.len() - start);
+        let mut ctx = ctx0.clone();
+        ctx.sample_offset = (b * block) as u64;
+        let fill = |v: &[f32]| {
+            let mut a = AudioBuffer::new(1, n);
+            a.channel_mut(0)
+                .samples_mut()
+                .copy_from_slice(&v[start..start + n]);
+            a
+        };
+        let f = fill(freq);
+        let g: Vec<AudioBuffer> = gains.iter().map(|g| fill(g)).collect();
+        let consts: Vec<(usize, AudioBuffer)> = ports
+            .iter()
+            .map(|&(p, v)| {
+                let mut a = AudioBuffer::new(1, n);
+                a.channel_mut(0).samples_mut().fill(v);
+                (p, a)
+            })
+            .collect();
+        let mut inputs: Vec<Option<&AudioBuffer>> = vec![None; 12];
+        inputs[0] = Some(&f);
+        for (k, gb) in g.iter().enumerate() {
+            inputs[1 + k] = Some(gb);
+        }
+        for (p, a) in &consts {
+            inputs[*p] = Some(a);
+        }
+        let mut o = AudioBuffer::new(2, n);
+        bank.process(&ctx, &inputs, &mut o);
+        out.0.extend_from_slice(o.channel(0).samples());
+        out.1.extend_from_slice(o.channel(1).samples());
+    }
+    out
+}
+
+fn fresh(t: CoeffTable, sr: f32, block: usize, seed: u32) -> PartialsEnsemble {
+    use microsynth::node::UGen;
+    let mut b = PartialsEnsemble::new(Arc::new(t));
+    b.init(&ProcessContext::new(sr, block));
+    b.reseed_noise(seed);
+    b
+}
+
+/// 240 Hz with a 1.5 % vibrato, and three gain lines, `n` samples.
+fn direct_lanes(n: usize, sr: f32) -> (Vec<f32>, Vec<Vec<f32>>) {
+    let freq = (0..n)
+        .map(|i| 240.0 * (1.0 + 0.015 * (core::f32::consts::TAU * 5.5 * i as f32 / sr).sin()))
+        .collect();
+    let x = |i: usize| i as f32 / n as f32;
+    let gains = vec![
+        (0..n).map(|i| 1.0 - x(i)).collect(),
+        (0..n).map(|i| 0.4 * x(i)).collect(),
+        (0..n).map(|i| 0.6 * x(i)).collect(),
+    ];
+    (freq, gains)
+}
+
+const SET: [(usize, f32); 4] = [(PLAYERS, 6.0), (SPREAD, 5.0), (ONSET, 0.013), (WIDTH, 0.7)];
+
+#[test]
+fn non_finite_gains_play_as_zero_at_and_off_a_control_boundary() {
+    let n = 4096;
+    let (freq, gains) = direct_lanes(n, SR);
+    // sample 160 starts a control period (16 · 10); 171 is inside one
+    for (at, bad) in [
+        (160usize, f32::NAN),
+        (171, f32::INFINITY),
+        (171, f32::NAN),
+        (160, f32::NEG_INFINITY),
+    ] {
+        for k in 0..3 {
+            let mut g_bad = gains.clone();
+            g_bad[k][at] = bad;
+            let mut g_zero = gains.clone();
+            g_zero[k][at] = 0.0;
+            let a = run_direct(
+                &mut fresh(table(true), SR, BLOCK, 9),
+                SR,
+                BLOCK,
+                &freq,
+                &g_bad,
+                &SET,
+            );
+            let b = run_direct(
+                &mut fresh(table(true), SR, BLOCK, 9),
+                SR,
+                BLOCK,
+                &freq,
+                &g_zero,
+                &SET,
+            );
+            assert!(
+                a.0.iter().chain(&a.1).all(|v| v.is_finite()),
+                "gain{k} = {bad} at {at}: non-finite output"
+            );
+            assert_eq!(a, b, "gain{k} = {bad} at {at} must play as 0");
+        }
+    }
+}
+
+#[test]
+fn freq_at_or_below_zero_or_not_finite_silences_the_partials() {
+    let n = 2048;
+    let (_, gains) = direct_lanes(n, SR);
+    for f in [0.0f32, -5.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let freq = vec![f; n];
+        let (l, r) = run_direct(
+            &mut fresh(table(false), SR, BLOCK, 3),
+            SR,
+            BLOCK,
+            &freq,
+            &gains,
+            &SET,
+        );
+        assert!(
+            l.iter().chain(&r).all(|&v| v == 0.0),
+            "freq {f}: not silent"
+        );
+    }
+    // stopped for one stretch inside a note: silent there, sounding around it
+    let mut freq = vec![240.0f32; n];
+    for v in freq.iter_mut().take(1100).skip(700) {
+        *v = 0.0;
+    }
+    let (l, _) = run_direct(
+        &mut fresh(table(false), SR, BLOCK, 3),
+        SR,
+        BLOCK,
+        &freq,
+        &gains,
+        &SET,
+    );
+    assert!(l[700..1100].iter().all(|&v| v == 0.0));
+    assert!(l[..700].iter().any(|&v| v.abs() > 1e-3) && l[1100..].iter().any(|&v| v.abs() > 1e-3));
+}
+
+#[test]
+fn spread_zero_holds_each_partial_for_the_note_and_draws_per_note() {
+    // constant gains: with no detune and no vibrato the level never moves
+    // within a note, and differs from one note (seed) to the next
+    let n = 44_100;
+    let freq = vec![240.0f32; n];
+    let gains = vec![vec![0.0f32; n], vec![0.4; n], vec![0.6; n]];
+    let level = |x: &[f32], a: usize, b: usize| {
+        10.0 * (x[a..b].iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / (b - a) as f64).log10()
+    };
+    let mut per_note = Vec::new();
+    for seed in 0..12 {
+        let (l, _) = run_direct(
+            &mut fresh(table(false), SR, BLOCK, seed),
+            SR,
+            BLOCK,
+            &freq,
+            &gains,
+            &[(PLAYERS, 12.0)],
+        );
+        let (a, b) = (level(&l, 4410, 13_230), level(&l, 30_870, 39_690));
+        assert!(
+            (a - b).abs() < 0.05,
+            "seed {seed}: level moved {a:.2} -> {b:.2} dB within the note"
+        );
+        per_note.push(a);
+    }
+    let range = per_note.iter().cloned().fold(f64::MIN, f64::max)
+        - per_note.iter().cloned().fold(f64::MAX, f64::min);
+    assert!(range > 1.0, "notes should differ: range {range:.2} dB");
+    // one player: the same level whatever the seed (no fluctuation)
+    let one: Vec<f64> = (0..4)
+        .map(|seed| {
+            let (l, _) = run_direct(
+                &mut fresh(table(false), SR, BLOCK, seed),
+                SR,
+                BLOCK,
+                &freq,
+                &gains,
+                &[],
+            );
+            level(&l, 4410, 13_230)
+        })
+        .collect();
+    assert!(one.iter().all(|v| (v - one[0]).abs() < 0.05), "{one:?}");
+    eprintln!("spread 0, 12 players: note levels range {range:.2} dB over 12 seeds");
+}
+
+#[test]
+fn reset_restores_a_fresh_bank_including_the_onset_smear() {
+    use microsynth::node::UGen;
+    let n = 1024;
+    let (freq, gains) = direct_lanes(n, SR);
+    let mut b = fresh(table(true), SR, BLOCK, 5);
+    let _ = run_direct(
+        &mut b,
+        SR,
+        BLOCK,
+        &freq,
+        &gains,
+        &[(PLAYERS, 6.0), (SPREAD, 5.0), (ONSET, 0.04)],
+    );
+    b.reset();
+    b.reseed_noise(5);
+    // second note without a smear: must equal a never-used bank's
+    let after = run_direct(
+        &mut b,
+        SR,
+        BLOCK,
+        &freq,
+        &gains,
+        &[(PLAYERS, 6.0), (SPREAD, 5.0)],
+    );
+    let new = run_direct(
+        &mut fresh(table(true), SR, BLOCK, 5),
+        SR,
+        BLOCK,
+        &freq,
+        &gains,
+        &[(PLAYERS, 6.0), (SPREAD, 5.0)],
+    );
+    assert_eq!(after, new);
+}
+
+#[test]
+fn output_does_not_depend_on_the_block_size() {
+    let n = 6000;
+    let (freq, gains) = direct_lanes(n, SR);
+    let at = |block: usize| {
+        run_direct(
+            &mut fresh(table(true), SR, block, 2),
+            SR,
+            block,
+            &freq,
+            &gains,
+            &SET,
+        )
+    };
+    let base = at(128);
+    for block in [1usize, 16, 37, 64, 100, microsynth::buffer::MAX_BLOCK_SIZE] {
+        assert_eq!(at(block), base, "block {block}");
+    }
+}
+
+#[test]
+fn at_48_khz_one_player_matches_the_blend_bank_and_a_section_keeps_its_power() {
+    use microsynth::node::UGen;
+    let sr = 48_000.0;
+    let n = 48_000;
+    let (freq, gains) = direct_lanes(n, sr);
+    // the blend bank, run the same way
+    let mut blend = PartialsBlend::new(Arc::new(table(true)));
+    blend.init(&ProcessContext::new(sr, BLOCK));
+    blend.reseed_noise(21);
+    let mut want = Vec::new();
+    for start in (0..n).step_by(BLOCK) {
+        let k = BLOCK.min(n - start);
+        let fill = |v: &[f32]| {
+            let mut a = AudioBuffer::new(1, k);
+            a.channel_mut(0)
+                .samples_mut()
+                .copy_from_slice(&v[start..start + k]);
+            a
+        };
+        let f = fill(&freq);
+        let g: Vec<AudioBuffer> = gains.iter().map(|g| fill(g)).collect();
+        let inputs = [Some(&f), Some(&g[0]), Some(&g[1]), Some(&g[2]), None];
+        let mut o = AudioBuffer::new(1, k);
+        blend.process(&ProcessContext::new(sr, BLOCK), &inputs, &mut o);
+        want.extend_from_slice(o.channel(0).samples());
+    }
+    let (l, r) = run_direct(
+        &mut fresh(table(true), sr, BLOCK, 21),
+        sr,
+        BLOCK,
+        &freq,
+        &gains,
+        &[(PHASE, 0.0), (CTRL, 1.0)],
+    );
+    assert_eq!(l, r);
+    let db = rms_diff_db(&want, &l);
+    assert!(db < -100.0, "48 kHz, one player vs blend: {db:.1} dB");
+    // a large section keeps one player's power at 48 kHz too (pooled over
+    // 12 seeds x 3 s, ~400 correlation times of the lowest partial)
+    let p = |x: &[f32]| x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+    let (mut solo, mut sec) = (0.0, 0.0);
+    let m = 3 * 48_000;
+    let g = vec![vec![0.0f32; m], vec![0.4; m], vec![0.6; m]];
+    let f = vec![240.0f32; m];
+    for seed in 0..12 {
+        solo += p(&run_direct(
+            &mut fresh(table(false), sr, BLOCK, seed),
+            sr,
+            BLOCK,
+            &f,
+            &g,
+            &[],
+        )
+        .0);
+        sec += p(&run_direct(
+            &mut fresh(table(false), sr, BLOCK, seed),
+            sr,
+            BLOCK,
+            &f,
+            &g,
+            &[(PLAYERS, 1e6), (SPREAD, 20.0)],
+        )
+        .0);
+    }
+    let db = 10.0 * (sec / solo).log10();
+    assert!(db.abs() < 0.5, "48 kHz section vs solo power {db:.2} dB");
 }

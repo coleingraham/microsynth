@@ -62,10 +62,32 @@
 //! control signals read from their first channel. The noise bands are shared
 //! and identical in both channels.
 //!
+//! **`spread` 0 with `players` > 1.** The default `spread` is 0 and the
+//! default `vib` is 0: players with no detune and no vibrato of their own.
+//! The model then holds each partial at one random amplitude and phase for
+//! the whole note (a sum of phasors that never move relative to one another):
+//! no movement within a note, but a different draw per note, so a scale's
+//! note levels scatter (a 6.6 dB range over 12 notes at 12 players in the
+//! tests) and two notes never match.
+//! That is what `N` identical, perfectly steady players at random phases
+//! would give, and it is kept as the default so `players` > 1 with no detune
+//! stays honest to the model. A section that moves needs a spread: the
+//! catalog's string sections use `spread` 5 (cents) with `vib` set to the
+//! instrument's own vibrato depth (19–27 cents), `onset` 0.013, `width` 0.7,
+//! at `players` 6 (small) and 10⁶ (large).
+//!
 //! **Onset.** `onset` (seconds, ≤ 50 ms) smears the attack: the gains are
 //! averaged over four taps delayed `0, onset/3, 2·onset/3, onset`, as the
 //! players' attacks would be (the def's own envelope, outside the bank, is
-//! not smeared).
+//! not smeared). The tap ring is allocated once, at `init`, for the longest
+//! onset: `(⌈0.05 · sample_rate⌉ + 2) × 4` floats per voice, 35 kB at
+//! 44.1 kHz and 77 kB at 96 kHz, whether or not `onset` is used (the rest of
+//! the bank's state is about 64 bytes per partial, 5 kB for 80 partials).
+//!
+//! **Out-of-range inputs.** A non-finite gain plays as 0 for that sample, and
+//! `freq` ≤ 0 or non-finite silences the partials for that sample (their
+//! phases hold), as it does in `partialsBlend`; the noise bands behave as
+//! `partialsBlend`'s.
 //!
 //! **Phases.** `phase` (default 1) scatters the partials' carrier phases at
 //! note start: partial `m` starts at `phase · u_m` cycles, `u_m` uniform in
@@ -321,8 +343,8 @@ impl PartialsEnsemble {
         }
         // onset smear ring
         let d = (s.onset * self.bank.sample_rate).round() as usize;
+        self.smear = d > 0;
         if d > 0 {
-            self.smear = true;
             self.ring_len = d + 1;
             if self.ring.len() < self.ring_len * MAX_BLEND_CHANNELS {
                 // sized in `init` for the longest onset; only a sample rate
@@ -419,7 +441,9 @@ impl PartialsEnsemble {
             let target = [amp * zl_re, amp * zl_im, amp * zr_re, amp * zr_im];
             let cur = &mut self.cur[m];
             let inc = &mut self.inc[m];
-            if first {
+            if first || !cur.iter().all(|v| v.is_finite()) {
+                // a fresh note, or (defensively) a state that went non-finite:
+                // restart the interpolator at the target
                 *cur = target;
                 *inc = [0.0; 4];
             } else {
@@ -459,6 +483,15 @@ impl UGen for PartialsEnsemble {
         self.started = false;
         self.until_tick = 0;
         self.seed = crate::ugens::partials::PARTIALS_NOISE_DEFAULT_SEED;
+        self.smear = false;
+        self.ring.iter_mut().for_each(|x| *x = 0.0);
+        self.ring_len = 0;
+        self.ring_pos = 0;
+        self.taps = [0; ONSET_TAPS];
+        self.cur.iter_mut().for_each(|c| *c = [0.0; 4]);
+        self.inc.iter_mut().for_each(|c| *c = [0.0; 4]);
+        self.g_state.iter_mut().for_each(|g| *g = [0.0; 8]);
+        self.stretch = 1.0;
     }
 
     fn reseed_noise(&mut self, seed: u32) {
@@ -492,6 +525,9 @@ impl UGen for PartialsEnsemble {
         }
 
         let mut f0s = [0.0f32; MAX_CTRL];
+        // per sample: 1 where `freq` is positive and finite, else 0 (the
+        // partials are silent there, as partialsBlend's are at a stopped phase)
+        let mut on = [0.0f32; MAX_CTRL];
         let mut gs = [[0.0f32; MAX_BLEND_CHANNELS]; MAX_CTRL];
         let mut noise_out = [0.0f32; MAX_CTRL];
         let mut first_tick = first_block;
@@ -510,9 +546,14 @@ impl UGen for PartialsEnsemble {
                 } else {
                     0.0
                 };
+                on[s] = if f0s[s] > 0.0 { 1.0 } else { 0.0 };
                 let mut g = [0.0f32; MAX_BLEND_CHANNELS];
                 for (k, gk) in g.iter_mut().enumerate().take(k_n) {
-                    *gk = read_input(gain_bufs[k], 0, i, if k == 0 { 1.0 } else { 0.0 });
+                    let v = read_input(gain_bufs[k], 0, i, if k == 0 { 1.0 } else { 0.0 });
+                    // a non-finite gain plays as 0 for that sample (as a
+                    // non-finite `freq` does), so it can never reach the
+                    // interpolators or the smear ring
+                    *gk = if v.is_finite() { v } else { 0.0 };
                 }
                 if self.smear {
                     let base = self.ring_pos * MAX_BLEND_CHANNELS;
@@ -541,6 +582,7 @@ impl UGen for PartialsEnsemble {
 
             // partials: one carrier per partial, complex amplitude per channel
             let stretch = self.stretch;
+            let all_on = on[..seg].iter().all(|&o| o > 0.0);
             {
                 let (left, right) = output.channel_pair_mut(0, 1);
                 let left = &mut left[i0..i0 + seg];
@@ -560,21 +602,40 @@ impl UGen for PartialsEnsemble {
                         continue;
                     }
                     let [mut a0, mut a1, mut a2, mut a3] = *cur;
-                    for s in 0..seg {
-                        *ph += mf * f0s[s] * stretch * inv_sr;
-                        *ph -= ph.floor();
-                        // step toward the tick's target before use, so the
-                        // target is reached on the period's last sample
-                        // (exact at `ctrl` 1)
-                        a0 += inc[0];
-                        a1 += inc[1];
-                        a2 += inc[2];
-                        a3 += inc[3];
-                        let (sn, cs) = sin_cos_turns_f32(*ph);
-                        // Im(z e^{iφ}) with φ = 2π·ph (the bank's partials
-                        // are sines): re·sin + im·cos
-                        left[s] += a0 * sn + a1 * cs;
-                        right[s] += a2 * sn + a3 * cs;
+                    if all_on {
+                        for s in 0..seg {
+                            *ph += mf * f0s[s] * stretch * inv_sr;
+                            *ph -= ph.floor();
+                            // step toward the tick's target before use, so the
+                            // target is reached on the period's last sample
+                            // (exact at `ctrl` 1)
+                            a0 += inc[0];
+                            a1 += inc[1];
+                            a2 += inc[2];
+                            a3 += inc[3];
+                            let (sn, cs) = sin_cos_turns_f32(*ph);
+                            // Im(z e^{iφ}) with φ = 2π·ph (the bank's partials
+                            // are sines): re·sin + im·cos
+                            left[s] += a0 * sn + a1 * cs;
+                            right[s] += a2 * sn + a3 * cs;
+                        }
+                    } else {
+                        // a segment with stopped samples (freq <= 0 or not
+                        // finite): no output there rather than a frozen
+                        // carrier's DC
+                        for s in 0..seg {
+                            *ph += mf * f0s[s] * stretch * inv_sr;
+                            *ph -= ph.floor();
+                            a0 += inc[0];
+                            a1 += inc[1];
+                            a2 += inc[2];
+                            a3 += inc[3];
+                            if on[s] > 0.0 {
+                                let (sn, cs) = sin_cos_turns_f32(*ph);
+                                left[s] += a0 * sn + a1 * cs;
+                                right[s] += a2 * sn + a3 * cs;
+                            }
+                        }
                     }
                     *cur = [a0, a1, a2, a3];
                 }
@@ -660,8 +721,12 @@ mod tests {
     }
 
     fn bank(m: usize, s: Settings, seed: u32) -> PartialsEnsemble {
+        bank_at(44100.0, m, s, seed)
+    }
+
+    fn bank_at(sr: f32, m: usize, s: Settings, seed: u32) -> PartialsEnsemble {
         let mut b = PartialsEnsemble::new(one_partial(m));
-        b.init(&ProcessContext::new(44100.0, 128));
+        b.init(&ProcessContext::new(sr, 128));
         b.reseed_noise(seed);
         // latch through the port defaults, then overwrite with `s`
         b.latch(&[]);
@@ -742,13 +807,20 @@ mod tests {
 
     #[test]
     fn correlation_time_follows_spread_and_partial_number() {
-        // |r(tau)| of the random part falls to 1/e at tau_e = 1/(pi sqrt2 sigma)
-        for &(m, spread) in &[(1usize, 8.0f32), (4, 8.0), (1, 2.0)] {
-            let mut b = bank(m, stat(1e9, spread, 0.0), 5);
+        // |r(tau)| of the random part falls to 1/e at tau_e = 1/(pi sqrt2 sigma),
+        // at two sample rates
+        for &(sr, m, spread) in &[
+            (44100.0f32, 1usize, 8.0f32),
+            (44100.0, 4, 8.0),
+            (44100.0, 1, 2.0),
+            (48000.0, 1, 8.0),
+            (48000.0, 4, 8.0),
+        ] {
+            let mut b = bank_at(sr, m, stat(1e9, spread, 0.0), 5);
             let z = z_series(&mut b, 300_000);
             let sigma = (m as f64) * 440.0 * spread as f64 * core::f64::consts::LN_2 / 1200.0;
             let tau_e = 1.0 / (core::f64::consts::PI * core::f64::consts::SQRT_2 * sigma);
-            let dt = 16.0 / 44100.0;
+            let dt = 16.0 / sr as f64;
             let r = |lag: usize| -> f64 {
                 let (mut re, mut im, mut p) = (0.0f64, 0.0f64, 0.0f64);
                 for i in 0..z.len() - lag {
