@@ -38,6 +38,7 @@ fn registered_ugens_have_expected_categories() {
         ("pluck", Physical),
         ("bowed", Physical),
         ("modalBank", Physical),
+        ("guitarString", Physical),
         // Noise.
         ("whiteNoise", Noise),
         ("pinkNoise", Noise),

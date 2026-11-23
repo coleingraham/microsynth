@@ -193,6 +193,16 @@ ugen's band-center formula (which MOT-641 also changed to match
 its span) place bands at the same center frequencies the analysis side fit
 against.
 
+One further key marks an entry that is not a partial dictionary at all:
+
+- **`residual_rate_hz`** (f32): the entry carries an impulse response for
+  `guitarString`'s table-bound form (`microsynth::ugens::guitar`), a commuted
+  body residual convolved into the pluck. Its channel-0 coefficient row is the
+  response (`k_channels` 1, no partials, `j_noise` = its length in samples),
+  sampled at this rate; the node reads the first entry carrying the key,
+  resamples it linearly to the engine rate and uses at most 0.2 s of it. The
+  format is unchanged: it is an ordinary well-formed entry.
+
 No other metadata keys are reserved today.
 
 ### Versioning
