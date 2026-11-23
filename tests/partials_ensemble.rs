@@ -1,8 +1,8 @@
-//! `partialsEnsemble` (`microsynth::ugens::partials_ensemble`) and the
-//! `phase` port of `partialsBlend`: the ensemble bank at one player matches
-//! the blend bank it extends, the exact mode converges on its own full-rate
-//! rendering, renders are reproducible from the voice seed, and the blend
-//! bank's output is unchanged unless its new port is used.
+//! `partialsEnsemble` (`microsynth::ugens::partials_ensemble`): the bank at
+//! one player matches the blend bank it extends, renders are reproducible
+//! from the voice seed and depend on it, a section keeps one player's power,
+//! the onset smear, a multichannel control input, the done rule through a
+//! def's envelope, and registration.
 
 use microsynth::coeff_table::{CoeffTable, PitchEntry};
 use microsynth::ugens::partials_blend::PartialsBlend;
@@ -101,8 +101,8 @@ fn konst(engine: &mut Engine, v: f32) -> NodeId {
     engine.graph_mut().add_node(Box::new(Const::new(v)))
 }
 
-/// The blend bank, optionally with its `phase` port tied to `phase`.
-fn render_blend(t: CoeffTable, secs: f32, seed: u32, phase: Option<f32>) -> Vec<f32> {
+/// The blend bank.
+fn render_blend(t: CoeffTable, secs: f32, seed: u32) -> Vec<f32> {
     let mut engine = Engine::new(config());
     let (freq, gains) = lanes(&mut engine, secs);
     let mut bank = PartialsBlend::new(Arc::new(t));
@@ -111,10 +111,6 @@ fn render_blend(t: CoeffTable, secs: f32, seed: u32, phase: Option<f32>) -> Vec<
     engine.graph_mut().connect(freq, b, 0);
     for (k, g) in gains.iter().enumerate() {
         engine.graph_mut().connect(*g, b, 1 + k);
-    }
-    if let Some(p) = phase {
-        let c = konst(&mut engine, p);
-        engine.graph_mut().connect(c, b, 5);
     }
     engine.graph_mut().set_sink(b);
     engine.prepare();
@@ -149,15 +145,10 @@ fn render_ens(t: CoeffTable, secs: f32, seed: u32, ports: &[(usize, f32)]) -> (V
 const PLAYERS: usize = 5;
 const SPREAD: usize = 6;
 const VIB: usize = 7;
-const ONSET: usize = 9;
-const WIDTH: usize = 10;
-const EXACT: usize = 11;
-const CTRL: usize = 12;
-const PHASE: usize = 13;
-
-fn peak(x: &[f32]) -> f32 {
-    x.iter().fold(0.0f32, |a, &b| a.max(b.abs()))
-}
+const ONSET: usize = 8;
+const WIDTH: usize = 9;
+const CTRL: usize = 10;
+const PHASE: usize = 11;
 
 fn rms_diff_db(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
@@ -170,25 +161,10 @@ fn rms_diff_db(a: &[f32], b: &[f32]) -> f64 {
 }
 
 #[test]
-fn blend_phase_port_unconnected_or_zero_is_bit_identical() {
-    let a = render_blend(table(true), 0.5, 11, None);
-    let b = render_blend(table(true), 0.5, 11, Some(0.0));
-    assert!(peak(&a) > 0.05);
-    assert_eq!(a, b);
-    // scattered: different output, reproducible, seed-dependent
-    let c = render_blend(table(true), 0.5, 11, Some(1.0));
-    let d = render_blend(table(true), 0.5, 11, Some(1.0));
-    let e = render_blend(table(true), 0.5, 12, Some(1.0));
-    assert_ne!(a, c);
-    assert_eq!(c, d);
-    assert_ne!(c, e);
-}
-
-#[test]
 fn one_player_at_full_control_rate_matches_the_blend_bank() {
     // phase 0, one player, ctrl 1: both channels are the blend bank's output
     // up to the sine polynomial and summation order
-    let a = render_blend(table(true), 0.8, 21, None);
+    let a = render_blend(table(true), 0.8, 21);
     let (l, r) = render_ens(table(true), 0.8, 21, &[(PHASE, 0.0), (CTRL, 1.0)]);
     assert_eq!(l, r);
     let db = rms_diff_db(&a, &l);
@@ -197,27 +173,6 @@ fn one_player_at_full_control_rate_matches_the_blend_bank() {
     let (l16, _) = render_ens(table(true), 0.8, 21, &[(PHASE, 0.0)]);
     let db16 = rms_diff_db(&a, &l16);
     assert!(db16 < -50.0, "ctrl 16 vs blend: {db16:.1} dB");
-}
-
-#[test]
-fn exact_players_at_control_rate_converge_on_full_rate() {
-    let set = |ctrl: f32| {
-        vec![
-            (PLAYERS, 6.0),
-            (SPREAD, 6.0),
-            (VIB, 20.0),
-            (EXACT, 1.0),
-            (WIDTH, 1.0),
-            (CTRL, ctrl),
-        ]
-    };
-    let (l1, r1) = render_ens(table(false), 1.0, 5, &set(1.0));
-    let (l16, r16) = render_ens(table(false), 1.0, 5, &set(16.0));
-    assert_ne!(l1, r1, "width 1 spreads the players");
-    for (a, b) in [(&l1, &l16), (&r1, &r16)] {
-        let db = rms_diff_db(a, b);
-        assert!(db < -40.0, "exact ctrl 16 vs ctrl 1: {db:.1} dB");
-    }
 }
 
 #[test]
@@ -274,6 +229,138 @@ fn registered_as_table_bound() {
         .table_bound_entry("partialsEnsemble")
         .expect("registered");
     assert_eq!(entry.category, UGenCategory::Oscillator);
-    let blend = reg.table_bound_entry("partialsBlend").expect("registered");
-    assert_eq!(blend.input_names.last().copied(), Some("phase"));
+    assert_eq!(
+        entry.input_names,
+        vec![
+            "freq", "gain0", "gain1", "gain2", "gain3", "players", "spread", "vib", "onset",
+            "width", "ctrl", "phase"
+        ]
+    );
+    assert!(entry.required.iter().all(|r| !r), "every port is optional");
+}
+
+#[test]
+fn the_output_is_stereo_and_a_multichannel_control_input_reads_its_first_channel() {
+    // a stereo freq whose channels are equal must give the mono-input render
+    let set = [(PLAYERS, 6.0), (SPREAD, 5.0), (WIDTH, 0.7)];
+    let mono = render_ens(table(true), 0.3, 4, &set);
+    let mut engine = Engine::new(config());
+    let (freq, gains) = lanes(&mut engine, 0.3);
+    let g = engine.graph_mut();
+    // a stereo zero (pan2 of silence), added to the mono freq: two exactly
+    // equal channels
+    let zero = g.add_node(Box::new(Const::new(0.0)));
+    let pan = g.add_node(Box::new(Pan2::new()));
+    g.connect(zero, pan, 0);
+    let f2 = g.add_node(Box::new(BinOpUGen::new(BinOpKind::Add)));
+    g.connect(freq, f2, 0);
+    g.connect(pan, f2, 1);
+    let mut bank = PartialsEnsemble::new(Arc::new(table(true)));
+    bank.reseed_noise(4);
+    let b = g.add_node(Box::new(bank));
+    g.connect(f2, b, 0);
+    for (i, gn) in gains.iter().enumerate() {
+        g.connect(*gn, b, 1 + i);
+    }
+    for &(p, v) in &set {
+        let c = g.add_node(Box::new(Const::new(v)));
+        g.connect(c, b, p);
+    }
+    g.set_sink(b);
+    engine.prepare();
+    let out = engine.render_offline(((0.3 * SR) as usize).div_ceil(BLOCK));
+    assert_eq!(out.len(), 2);
+    let n = mono.0.len().min(out[0].len());
+    for (ch, (want, got)) in [&mono.0, &mono.1].into_iter().zip(&out).enumerate() {
+        assert_eq!(
+            &want[..n],
+            &got[..n],
+            "channel {ch} differs from the mono-input render"
+        );
+    }
+}
+
+/// A def whose bank output passes through a finished envelope is freed (the
+/// bank is a source and stops silence like the other banks; the envelope's
+/// `Mul` carries the done rule).
+#[test]
+fn a_finished_envelope_after_the_bank_frees_the_voice() {
+    use microsynth::coeff_table::CoeffTableBank;
+    use microsynth::ir::{IrEdge, IrNode, IrSynthDef, IrTableBinding, SynthDefClass};
+    let mut reg = microsynth::dsl::compiler::UGenRegistry::new();
+    microsynth::register_builtins(&mut reg);
+    microsynth::register_table_bound_builtins(&mut reg);
+    let mut tables = CoeffTableBank::new();
+    let id = tables.register(table(true));
+    let ir = IrSynthDef {
+        format_version: microsynth::ir::FORMAT_VERSION,
+        name: "ens_done".into(),
+        class: SynthDefClass::Source,
+        output_channels: 2,
+        nodes: vec![
+            IrNode::Param {
+                name: "freq".into(),
+                default: 220.0,
+            },
+            IrNode::UGen {
+                kind: "partialsEnsemble".into(),
+                consts: vec![(5, 6.0), (6, 5.0), (9, 0.7)],
+            },
+            IrNode::UGen {
+                kind: "expPerc".into(),
+                consts: vec![(0, 0.001), (1, 0.02)],
+            },
+            IrNode::UGen {
+                kind: "Mul".into(),
+                consts: vec![],
+            },
+        ],
+        edges: vec![
+            IrEdge {
+                from: 0,
+                to: 1,
+                to_input: 0,
+            },
+            IrEdge {
+                from: 1,
+                to: 3,
+                to_input: 0,
+            },
+            IrEdge {
+                from: 2,
+                to: 3,
+                to_input: 1,
+            },
+        ],
+        params: vec![],
+        audio_inputs: vec![],
+        table_bindings: vec![IrTableBinding {
+            node: 1,
+            table_id: id.0,
+        }],
+        output_node: 3,
+    };
+    ir.validate(&reg).expect("valid IR");
+    let def = ir.compile_with_tables(&reg, &tables).expect("resolves");
+    let mut engine = Engine::new(config());
+    let synth = engine.instantiate_synthdef(&def);
+    engine.graph_mut().set_sink(synth.output_node());
+    engine.prepare();
+    let mut freed_at = None;
+    let mut peak = 0.0f32;
+    for blk in 0..400 {
+        if let Some(buf) = engine.render() {
+            for ch in 0..buf.num_channels() {
+                for &s in buf.channel(ch).samples() {
+                    peak = peak.max(s.abs());
+                }
+            }
+        }
+        if engine.free_done_synths() > 0 {
+            freed_at = Some(blk);
+            break;
+        }
+    }
+    assert!(peak > 0.01, "the def sounded before it ended");
+    assert!(freed_at.is_some(), "the voice was never freed");
 }

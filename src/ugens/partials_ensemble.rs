@@ -26,43 +26,41 @@
 //!
 //! This bank computes `z_m` at a control rate (every `ctrl` samples, linear
 //! between) and renders each partial as ONE sinusoid modulated by it, so the
-//! sine count is that of one voice whatever `N`. Two ways to make `z_m`:
+//! sine count is that of one voice whatever `N`. `z_m = α + β g_m(t)`, `g_m` a
+//! unit-power circular complex Gaussian process (seeded white noise through
+//! two one-pole low-passes per component), `α² + β² = 1`. The coherent part
+//! `α = N^{-1/4}` is what makes "`N` players" mean something: it gives
+//! `Var |z|² = 1 − 1/N`, the exact second moment of `N` equal players with
+//! independent phases (a Rician envelope standing in for the sum of `N`
+//! phasors). The low-pass is set so `g_m`'s correlation time equals that of
+//! `N → ∞` players whose frequencies at partial `m` are Gaussian with
+//! standard deviation `σ_m = f_m · σ_c · ln 2 / 1200`, where
+//! `σ_c² = spread² + (vib²/2)(1 − 1/N)`: the static detune plus the part of
+//! the players' vibrato that is not common to the section (`vib` is the
+//! per-player vibrato depth in cents, peak; the common part, of RMS `1/√N` of
+//! one player's, is the def's own vibrato's business). Gaussian frequencies
+//! give `|r(τ)| = exp(−2π² σ_m² τ²)`, `1/e` at `τ_e = 1/(π √2 σ_m)`; two
+//! one-poles of rate `a` give `r(τ) = (1 + aτ) e^{−aτ}`, `1/e` at
+//! `aτ = 2.1462`, so `a = 2.1462 · π √2 · σ_m`.
 //!
-//! * **statistical** (`exact` 0, the default): `z_m = α + β g_m(t)`, `g_m` a
-//!   unit-power circular complex Gaussian process (seeded white noise through
-//!   two one-pole low-passes per component), `α² + β² = 1`. The coherent part
-//!   `α = N^{-1/4}` is what makes "`N` players" mean something: it gives
-//!   `Var |z|² = 1 − 1/N`, the exact second moment of `N` equal players with
-//!   independent phases (a Rician envelope standing in for the sum of `N`
-//!   phasors). The low-pass is set so `g_m`'s correlation time equals that of
-//!   `N → ∞` players whose frequencies at partial `m` are Gaussian with
-//!   standard deviation `σ_m = f_m · σ_c · ln 2 / 1200`, where
-//!   `σ_c² = spread² + (vib²/2)(1 − 1/N)`: the static detune plus the part of
-//!   the players' vibrato that is not common to the section (`vib` is the
-//!   per-player vibrato depth in cents, peak; the common part, of RMS
-//!   `1/√N` of one player's, is the def's own vibrato's business). Gaussian
-//!   frequencies give `|r(τ)| = exp(−2π² σ_m² τ²)`, `1/e` at
-//!   `τ_e = 1/(π √2 σ_m)`; two one-poles of rate `a` give
-//!   `r(τ) = (1 + aτ) e^{−aτ}`, `1/e` at `aτ = 2.1462`, so
-//!   `a = 2.1462 · π √2 · σ_m`.
-//! * **exact players** (`exact` 1): `z_m` is the sum of `N` (≤ 32) unit
-//!   phasors, one per player, each with its own detune (Gaussian, standard
-//!   deviation `spread` cents, the section mean removed so the section stays
-//!   in tune), vibrato (`vib` cents peak at `vib_rate` Hz × (1 ± 4 %), its own
-//!   phase) and its own phase per partial. At `ctrl` 1 this is exactly `N`
-//!   detuned sines per partial; at a larger `ctrl` the players' phases are
-//!   exact at every tick and linear between (their offsets move at a few Hz
-//!   to a few hundred Hz, far below the control rate for the default `ctrl`).
-//!   It costs `N` sine-cosine pairs per partial per tick.
+//! **Known properties.** The two-pole spectrum has heavier tails than the
+//! Gaussian line a large section converges to (its RMS width is 1.5 σ_m when
+//! the correlation time is matched). The players' vibrato enters only as
+//! bandwidth, so the low partials, which carry most of the level, wander
+//! faster than in a section whose vibratos keep a fixed relationship over a
+//! second: on held four-part chords twelve "players" here move 2.8–7.0 dB
+//! against 2.7–4.9 dB for twelve detuned copies of a voice. Each partial is
+//! an independent process, whereas a real player's detune is shared by all
+//! of their partials.
 //!
-//! **Stereo.** The output has two channels. `width` 0 gives the same `z` to
-//! both (a centred section, both channels equal). In the statistical mode
-//! the right channel's random part is `cos(wπ/2) g_L + sin(wπ/2) g_R` with
-//! `g_R` an independent process, so `width` 1 gives two uncorrelated desks
-//! sharing the coherent part; in the exact mode the players are spread
-//! evenly across `[−width, width]` (equal-power pan, shuffled per note) and
-//! each channel is normalised to one player's power. The noise bands are
-//! shared and identical in both channels.
+//! **Stereo.** The output has two channels, stereo by design. `width` 0 gives
+//! the same `z` to both (a centred section, both channels equal); the right
+//! channel's random part is `cos(wπ/2) g_L + sin(wπ/2) g_R` with `g_R` an
+//! independent process, so `width` 1 gives two uncorrelated desks sharing
+//! the coherent part. Both channels come from one pass over one state (there
+//! is no per-channel copy of the state to drift apart), and the inputs are
+//! control signals read from their first channel. The noise bands are shared
+//! and identical in both channels.
 //!
 //! **Onset.** `onset` (seconds, ≤ 50 ms) smears the attack: the gains are
 //! averaged over four taps delayed `0, onset/3, 2·onset/3, onset`, as the
@@ -70,9 +68,11 @@
 //! not smeared).
 //!
 //! **Phases.** `phase` (default 1) scatters the partials' carrier phases at
-//! note start, as `partialsBlend`'s `phase` does; every random draw here
-//! (carrier phases, the Gaussian processes, the players) comes from streams
-//! seeded by the voice's seed, so a render is reproducible.
+//! note start: partial `m` starts at `phase · u_m` cycles, `u_m` uniform in
+//! `[0, 1]` (at 0 every partial starts at phase 0, as `partialsBlend`'s do).
+//! Every random draw here (the carrier phases and the Gaussian processes)
+//! comes from streams seeded by the voice's seed (the one
+//! [`UGen::reseed_noise`] hands the voice), so a render is reproducible.
 //!
 //! **Control-rate amplitudes.** Each partial's amplitude (the blended
 //! coefficient × main-lobe gain × Nyquist fade) is computed per tick too and
@@ -85,11 +85,14 @@
 //! and cosine of a phase in turns ([`sin_cos_turns_f32`], max error about
 //! 3e-7, only `+`, `*` and `floor`, so wasm and native agree).
 //!
+//! **Done rule.** A source: it never reports done, and like the other banks
+//! it stops silence (a def frees its voice through the envelope that
+//! multiplies the bank's output).
+//!
 //! Ports: `freq`, `gain0`..`gain3` (as `partialsBlend`), `players` (1),
-//! `spread` (cents, 0), `vib` (cents peak, 0), `vib_rate` (Hz, 5.5), `onset`
-//! (s, 0), `width` (0..1, 0), `exact` (0), `ctrl` (samples, 16, 1..64),
-//! `phase` (1). All but `freq` and the gains are read once, at the voice's
-//! first sample.
+//! `spread` (cents, 0), `vib` (cents peak, 0), `onset` (s, 0), `width`
+//! (0..1, 0), `ctrl` (samples, 16, 1..64), `phase` (1). All but `freq` and the
+//! gains are read once, at the voice's first sample.
 
 use crate::buffer::{AudioBuffer, read_input};
 use crate::coeff_table::CoeffTable;
@@ -98,14 +101,12 @@ use crate::context::Rate;
 use crate::dsl::compiler::{TableUGenFactory, UGenRegistry};
 use crate::node::{InputSpec, OutputSpec, UGen, UGenCategory, UGenSpec};
 use crate::ugens::partials::{DEFAULT_FREQ_HZ, UNIT_VARIANCE_BIPOLAR_SCALE, lerp, nyquist_fade};
-use crate::ugens::partials_blend::{MAX_BLEND_CHANNELS, PartialsBlend, scatter_phases};
+use crate::ugens::partials_blend::{MAX_BLEND_CHANNELS, PartialsBlend};
 use crate::ugens::rng::Rng;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-/// Most players the exact mode sums.
-pub const MAX_EXACT_PLAYERS: usize = 32;
 /// Longest control period, in samples.
 pub const MAX_CTRL: usize = 64;
 /// Longest onset smear, in seconds.
@@ -115,17 +116,19 @@ const ONSET_TAPS: usize = 4;
 
 const SALT_GAUSS_L: u32 = 0x6A55_1A01;
 const SALT_GAUSS_R: u32 = 0x6A55_1A02;
-const SALT_PLAYERS: u32 = 0x9A7E_0003;
+/// Salt that separates the phase-scatter stream from the other streams drawn
+/// from the same voice seed.
+const PHASE_SCATTER_SALT: u32 = 0x5CA7_7E12;
 
 /// `aτ` at which `(1 + aτ) e^{−aτ} = 1/e`.
 const TWO_POLE_1E: f32 = 2.146_193;
 const LN2_OVER_1200: f32 = core::f32::consts::LN_2 / 1200.0;
 
-const INPUT_NAMES: [&str; 14] = [
-    "freq", "gain0", "gain1", "gain2", "gain3", "players", "spread", "vib", "vib_rate", "onset",
-    "width", "exact", "ctrl", "phase",
+const INPUT_NAMES: [&str; 12] = [
+    "freq", "gain0", "gain1", "gain2", "gain3", "players", "spread", "vib", "onset", "width",
+    "ctrl", "phase",
 ];
-static INPUTS: [InputSpec; 14] = {
+static INPUTS: [InputSpec; 12] = {
     const fn port(name: &'static str) -> InputSpec {
         InputSpec {
             name,
@@ -146,19 +149,15 @@ static INPUTS: [InputSpec; 14] = {
         port(INPUT_NAMES[9]),
         port(INPUT_NAMES[10]),
         port(INPUT_NAMES[11]),
-        port(INPUT_NAMES[12]),
-        port(INPUT_NAMES[13]),
     ]
 };
 const P_PLAYERS: usize = 5;
 const P_SPREAD: usize = 6;
 const P_VIB: usize = 7;
-const P_VIB_RATE: usize = 8;
-const P_ONSET: usize = 9;
-const P_WIDTH: usize = 10;
-const P_EXACT: usize = 11;
-const P_CTRL: usize = 12;
-const P_PHASE: usize = 13;
+const P_ONSET: usize = 8;
+const P_WIDTH: usize = 9;
+const P_CTRL: usize = 10;
+const P_PHASE: usize = 11;
 
 /// `(sin 2πt, cos 2πt)` in single precision for a finite phase `t` in turns.
 ///
@@ -182,6 +181,17 @@ pub fn sin_cos_turns_f32(t: f32) -> (f32, f32) {
     }
 }
 
+/// Set each partial's starting phase to `scatter` times a uniform draw over
+/// one cycle, from a stream seeded by the voice's seed.
+fn scatter_phases(phase: &mut [f32], seed: u32, scatter: f32) {
+    let mut rng = Rng::new(seed ^ PHASE_SCATTER_SALT);
+    for p in phase.iter_mut() {
+        let u = 0.5 * (rng.next_bipolar() + 1.0); // [0, 1]
+        let v = scatter * u;
+        *p = v - v.floor();
+    }
+}
+
 /// Unit-variance, approximately Gaussian draw (sum of four uniforms).
 #[inline]
 fn gauss(rng: &mut Rng) -> f32 {
@@ -196,27 +206,10 @@ struct Settings {
     players: f32,
     spread: f32,
     vib: f32,
-    vib_rate: f32,
     onset: f32,
     width: f32,
-    exact: bool,
     ctrl: usize,
     phase: f32,
-}
-
-/// One exact-mode player.
-#[derive(Clone, Copy, Default)]
-struct Player {
-    /// Static detune as a frequency ratio minus one.
-    detune: f64,
-    /// Vibrato depth as `ln` frequency ratio, peak.
-    vib_depth: f64,
-    vib_rate: f64,
-    vib_phase: f64,
-    /// Accumulated phase offset per unit harmonic, turns.
-    offset: f64,
-    gain_l: f32,
-    gain_r: f32,
 }
 
 /// The ensemble bank. See the module doc.
@@ -224,23 +217,16 @@ pub struct PartialsEnsemble {
     bank: PartialsBlend,
     started: bool,
     set: Settings,
-    /// Coherent amplitude `α` and random amplitude `β` (statistical mode).
+    /// Coherent amplitude `α` and random amplitude `β`.
     alpha: f32,
     beta: f32,
     /// Right channel's mix of the left and its own process.
     w_cos: f32,
     w_sin: f32,
-    /// Statistical mode: per partial, two one-pole stages × (re, im) × (L, R).
+    /// Per partial, two one-pole stages × (re, im) × (L, R).
     g_state: Vec<[f32; 8]>,
     rng_l: Rng,
     rng_r: Rng,
-    /// Exact mode.
-    players: Vec<Player>,
-    n_exact: usize,
-    /// `k * m_max + m`: player `k`'s phase of partial `m`, turns.
-    player_phase: Vec<f32>,
-    norm_l: f32,
-    norm_r: f32,
     /// Per partial interpolators: current (re_L, im_L, re_R, im_R) and the
     /// per-sample increment toward the next tick's value.
     cur: Vec<[f32; 4]>,
@@ -268,10 +254,8 @@ impl PartialsEnsemble {
                 players: 1.0,
                 spread: 0.0,
                 vib: 0.0,
-                vib_rate: 5.5,
                 onset: 0.0,
                 width: 0.0,
-                exact: false,
                 ctrl: 16,
                 phase: 1.0,
             },
@@ -282,11 +266,6 @@ impl PartialsEnsemble {
             g_state: alloc::vec![[0.0; 8]; m],
             rng_l: Rng::new(SALT_GAUSS_L),
             rng_r: Rng::new(SALT_GAUSS_R),
-            players: alloc::vec![Player::default(); MAX_EXACT_PLAYERS],
-            n_exact: 0,
-            player_phase: alloc::vec![0.0; MAX_EXACT_PLAYERS * m],
-            norm_l: 1.0,
-            norm_r: 1.0,
             cur: alloc::vec![[0.0; 4]; m],
             inc: alloc::vec![[0.0; 4]; m],
             until_tick: 0,
@@ -315,15 +294,12 @@ impl PartialsEnsemble {
             players: rd(P_PLAYERS, 1.0).max(1.0),
             spread: rd(P_SPREAD, 0.0).max(0.0),
             vib: rd(P_VIB, 0.0).max(0.0),
-            vib_rate: rd(P_VIB_RATE, 5.5).max(0.0),
             onset: rd(P_ONSET, 0.0).clamp(0.0, MAX_ONSET_S),
             width: rd(P_WIDTH, 0.0).clamp(0.0, 1.0),
-            exact: rd(P_EXACT, 0.0) > 0.5,
             ctrl: (rd(P_CTRL, 16.0).round() as i64).clamp(1, MAX_CTRL as i64) as usize,
             phase: rd(P_PHASE, 1.0).clamp(0.0, 1.0),
         };
         self.set = s;
-        let m_n = self.bank.m_max;
         if s.phase > 0.0 {
             scatter_phases(&mut self.bank.phase, self.seed, s.phase);
         }
@@ -332,66 +308,16 @@ impl PartialsEnsemble {
         self.w_sin = ws;
         self.rng_l = Rng::new(self.seed ^ SALT_GAUSS_L);
         self.rng_r = Rng::new(self.seed ^ SALT_GAUSS_R);
-        if s.exact {
-            let n = (s.players.round() as usize).clamp(1, MAX_EXACT_PLAYERS);
-            self.n_exact = n;
-            let mut rng = Rng::new(self.seed ^ SALT_PLAYERS);
-            let mut cents = [0.0f64; MAX_EXACT_PLAYERS];
-            for c in cents.iter_mut().take(n) {
-                *c = (gauss(&mut rng) * s.spread) as f64;
-            }
-            let mean = cents[..n].iter().sum::<f64>() / n as f64;
-            // pan positions evenly over [-width, width], shuffled
-            let mut order: [usize; MAX_EXACT_PLAYERS] = core::array::from_fn(|i| i);
-            for i in (1..n).rev() {
-                let u = 0.5 * (rng.next_bipolar() + 1.0);
-                let j = ((u * (i + 1) as f32) as usize).min(i);
-                order.swap(i, j);
-            }
-            let (mut el, mut er) = (0.0f32, 0.0f32);
-            for (j, c) in cents.iter().enumerate().take(n) {
-                let pos = if n > 1 {
-                    s.width * (2.0 * order[j] as f32 / (n - 1) as f32 - 1.0)
-                } else {
-                    0.0
-                };
-                // equal power: pos -1 → left only, +1 → right only
-                let (sn, cs) = sin_cos_turns_f32(0.125 * (pos + 1.0));
-                let u_rate = rng.next_bipolar();
-                let u_ph = 0.5 * (rng.next_bipolar() + 1.0);
-                self.players[j] = Player {
-                    detune: ((c - mean) / 1200.0).exp2() - 1.0,
-                    vib_depth: (s.vib as f64) * core::f64::consts::LN_2 / 1200.0,
-                    vib_rate: (s.vib_rate as f64) * (1.0 + 0.04 * u_rate as f64),
-                    vib_phase: u_ph as f64,
-                    offset: 0.0,
-                    gain_l: cs,
-                    gain_r: sn,
-                };
-                el += cs * cs;
-                er += sn * sn;
-            }
-            self.norm_l = 1.0 / el.max(1e-12).sqrt();
-            self.norm_r = 1.0 / er.max(1e-12).sqrt();
-            for k in 0..n {
-                for m in 0..m_n {
-                    let u = 0.5 * (rng.next_bipolar() + 1.0);
-                    self.player_phase[k * m_n + m] = u;
-                }
-            }
-        } else {
-            let n = s.players;
-            let alpha = n.powf(-0.25);
-            self.alpha = alpha;
-            self.beta = (1.0 - alpha * alpha).max(0.0).sqrt();
-            // stationary start: both stages at one Gaussian draw of the
-            // component's variance (1/2), as narrow-band states nearly are
-            let h = core::f32::consts::FRAC_1_SQRT_2;
-            for st in self.g_state.iter_mut() {
-                let (lr, li) = (gauss(&mut self.rng_l) * h, gauss(&mut self.rng_l) * h);
-                let (rr, ri) = (gauss(&mut self.rng_r) * h, gauss(&mut self.rng_r) * h);
-                *st = [lr, lr, li, li, rr, rr, ri, ri];
-            }
+        let alpha = s.players.powf(-0.25);
+        self.alpha = alpha;
+        self.beta = (1.0 - alpha * alpha).max(0.0).sqrt();
+        // stationary start: both stages at one Gaussian draw of the
+        // component's variance (1/2), as narrow-band states nearly are
+        let h = core::f32::consts::FRAC_1_SQRT_2;
+        for st in self.g_state.iter_mut() {
+            let (lr, li) = (gauss(&mut self.rng_l) * h, gauss(&mut self.rng_l) * h);
+            let (rr, ri) = (gauss(&mut self.rng_r) * h, gauss(&mut self.rng_r) * h);
+            *st = [lr, lr, li, li, rr, rr, ri, ri];
         }
         // onset smear ring
         let d = (s.onset * self.bank.sample_rate).round() as usize;
@@ -431,36 +357,20 @@ impl PartialsEnsemble {
         let mainlobe_gain = lerp(e_lo.mainlobe_gain, e_hi.mainlobe_gain, t);
         self.stretch = stretch;
 
-        // statistical mode: the one-pole coefficient for partial m is q^(m+1)
-        let (mut pm, q, beta) = if !self.set.exact {
-            let n = self.set.players;
-            let vib_var = 0.5 * self.set.vib * self.set.vib * (1.0 - 1.0 / n);
-            let sigma_c = (self.set.spread * self.set.spread + vib_var).sqrt();
-            let a1 = TWO_POLE_1E
-                * core::f32::consts::PI
-                * core::f32::consts::SQRT_2
-                * f0
-                * stretch
-                * sigma_c
-                * LN2_OVER_1200;
-            let q = (-a1 * dt).exp();
-            (q, q, self.beta)
-        } else {
-            (1.0, 1.0, 0.0)
-        };
-
-        // exact mode: advance the players' offsets over this tick
-        if self.set.exact {
-            let f0d = (f0 * stretch) as f64;
-            let dtd = dt as f64;
-            for pl in self.players.iter_mut().take(self.n_exact) {
-                let v = (core::f64::consts::TAU * pl.vib_phase).sin();
-                let ratio = (1.0 + pl.detune) * (pl.vib_depth * v).exp();
-                pl.offset += f0d * (ratio - 1.0) * dtd;
-                pl.vib_phase += pl.vib_rate * dtd;
-                pl.vib_phase -= pl.vib_phase.floor();
-            }
-        }
+        // the one-pole coefficient for partial m is q^(m+1)
+        let n = self.set.players;
+        let vib_var = 0.5 * self.set.vib * self.set.vib * (1.0 - 1.0 / n);
+        let sigma_c = (self.set.spread * self.set.spread + vib_var).sqrt();
+        let a1 = TWO_POLE_1E
+            * core::f32::consts::PI
+            * core::f32::consts::SQRT_2
+            * f0
+            * stretch
+            * sigma_c
+            * LN2_OVER_1200;
+        let q = (-a1 * dt).exp();
+        let mut pm = q;
+        let beta = self.beta;
 
         for m in 0..m_n {
             let mut coeff = 0.0f32;
@@ -476,27 +386,7 @@ impl PartialsEnsemble {
             };
 
             let (zl_re, zl_im, zr_re, zr_im);
-            if self.set.exact {
-                let n = self.n_exact;
-                let harm = ((m + 1) as f32 * stretch) as f64;
-                let (mut lr, mut li, mut rr, mut ri) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-                if amp != 0.0 {
-                    for k in 0..n {
-                        let pl = &self.players[k];
-                        let x = pl.offset * harm;
-                        let ph = self.player_phase[k * m_n + m] + (x - x.floor()) as f32;
-                        let (s, c) = sin_cos_turns_f32(ph);
-                        lr += pl.gain_l * c;
-                        li += pl.gain_l * s;
-                        rr += pl.gain_r * c;
-                        ri += pl.gain_r * s;
-                    }
-                }
-                zl_re = lr * self.norm_l;
-                zl_im = li * self.norm_l;
-                zr_re = rr * self.norm_r;
-                zr_im = ri * self.norm_r;
-            } else {
+            {
                 // two one-pole stages per component, input scaled so each
                 // component's output variance is 1/2
                 let pp = pm;
@@ -791,10 +681,8 @@ mod tests {
             players,
             spread,
             vib: 0.0,
-            vib_rate: 5.5,
             onset: 0.0,
             width,
-            exact: false,
             ctrl: 16,
             phase: 1.0,
         }
