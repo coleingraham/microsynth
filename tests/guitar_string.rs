@@ -1539,3 +1539,178 @@ fn string_rule_and_override() {
     assert_eq!(note(246.941_65, -1.0), note(246.941_65, 2.0));
     assert_eq!(note(73.42, -1.0), note(73.42, 6.0));
 }
+
+// --- Second review: hard loss constraint, B region, residual rate ---------
+
+/// A random but table-reachable string set (every value within
+/// `GsStringSet::from_table`'s ranges, anchors in any order).
+fn random_set(rnd: &mut impl FnMut() -> f64, t60_max: f64) -> GsStringSet {
+    let mut set = GsStringSet::default();
+    set.scale_mm = 200.0 + 1000.0 * rnd();
+    for a in &mut set.anchor_hz {
+        *a = 50.0 * (800f64).powf(rnd());
+    }
+    for st in &mut set.strings {
+        st.open_hz = 40.0 * (2f64).powf(5.0 * rnd());
+        st.b = 2e-3 * rnd().powi(3);
+        for t in &mut st.t60 {
+            *t = 0.05 * (t60_max / 0.05).powf(rnd());
+        }
+        st.bridge_share = rnd();
+        st.hv = 4.0 * rnd();
+    }
+    set
+}
+
+fn xorshift(seed: u64) -> impl FnMut() -> f64 {
+    let mut state = seed;
+    move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// The loss constraint is hard: over random table-reachable string sets,
+/// notes and rates, no frequency (DC to Nyquist) loses less per pass than
+/// half the fundamental's loss, so nothing outlasts the note.
+#[test]
+fn no_frequency_outlasts_the_note_for_random_sets() {
+    use microsynth::ugens::GsLossForm;
+    let mut rnd = xorshift(0x9e37_79b9_7f4a_7c15);
+    let rates = [22_050.0f64, 44_100.0, 48_000.0, 96_000.0];
+    let (mut n, mut worst) = (0usize, f64::INFINITY);
+    let mut forms = [0usize; 3];
+    for trial in 0..600 {
+        let sr = rates[trial % 4];
+        let set = random_set(&mut rnd, 120.0);
+        let s = (rnd() * 6.0) as usize % 6;
+        let f = (set.strings[s].open_hz * 2f64.powf(24.0 * rnd() / 12.0)).min(sr / 8.0);
+        let d = gs_note_design(sr, &set, f, (s + 1) as f32);
+        for (p, loss) in d.loss.iter().enumerate() {
+            n += 1;
+            forms[match d.loss_form[p] {
+                GsLossForm::Shelf => 0,
+                GsLossForm::OnePole => 1,
+                GsLossForm::Constant => 2,
+            }] += 1;
+            let fp = if p == 0 { f } else { d.h_freq };
+            let l0 = -loss.mag(2.0 * PI * fp / sr).ln();
+            let mut weakest = f64::INFINITY;
+            for k in 0..=512 {
+                weakest = weakest.min(-loss.mag(PI * k as f64 / 512.0).ln());
+            }
+            let ratio = weakest / l0;
+            worst = worst.min(ratio);
+            assert!(
+                ratio >= 0.5,
+                "trial {trial} pol {p}: weakest loss {weakest:.3e} vs fundamental {l0:.3e} ({:?})",
+                d.loss_form[p]
+            );
+        }
+    }
+    println!(
+        "random sets: {n} loss filters: shelf {}, one-pole {}, constant {}; worst weakest/fundamental {worst:.3}",
+        forms[0], forms[1], forms[2]
+    );
+}
+
+/// The reviewer's failing case (a 24 kHz component that held forever at
+/// 48 kHz) now dies with the note: the node reports done; and random sets
+/// with short decays report done within a few times their longest T60.
+#[test]
+fn odd_sets_still_report_done() {
+    let mut set = GsStringSet::default();
+    set.strings[2].t60 = [0.127, 0.711, 84.7, 0.788];
+    set.anchor_hz = [2998.0, 4607.0, 1176.0];
+    let mut node = GuitarString::with_set(set);
+    let out = render_with(
+        &mut node,
+        48_000.0,
+        64,
+        3 * 48_000,
+        &[(FREQ, Sig::C(237.8)), (STRING, Sig::C(3.0))],
+        1,
+    );
+    assert!(node.is_done(), "the reviewer's case still rings");
+    assert!(out[2 * 48_000..].iter().all(|&x| x == 0.0));
+
+    let mut rnd = xorshift(42);
+    for trial in 0..12 {
+        let set = random_set(&mut rnd, 1.0);
+        let s = trial % 6;
+        let f = set.strings[s].open_hz * 2f64.powf(12.0 * rnd() / 12.0);
+        let t60_max = set.strings[s].t60.iter().fold(0.0f64, |m, t| m.max(*t));
+        let secs = 6.0 * t60_max + 1.0;
+        let mut node = GuitarString::with_set(set);
+        render_with(
+            &mut node,
+            44_100.0,
+            128,
+            (secs * 44_100.0) as usize,
+            &[(FREQ, Sig::C(f as f32)), (STRING, Sig::C((s + 1) as f32))],
+            1,
+        );
+        assert!(node.is_done(), "trial {trial}: not done after {secs:.1} s");
+    }
+}
+
+/// The reachable region of the B pre-warp, as documented: at 44.1 kHz (the
+/// render rate) the realised `B` (`b_fit`) is within 4 % of the request for
+/// open-string `b` from 1e-5 to 2e-3 on every string at frets 0, 7 and 12;
+/// at 22.05 kHz the same from 3e-5. A table's `b` is clamped to 2e-3.
+#[test]
+fn b_round_trips_over_the_documented_region() {
+    for (sr, lowest) in [(44_100.0f64, 1e-5), (22_050.0, 3e-5)] {
+        let mut worst = (0.0f64, String::new());
+        for bo in [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 2e-3] {
+            if bo < lowest {
+                continue;
+            }
+            for s in 1..=6usize {
+                for fret in [0, 7, 12] {
+                    let mut set = GsStringSet::default();
+                    set.strings[s - 1].b = bo;
+                    let f = set.strings[s - 1].open_hz * 2f64.powf(fret as f64 / 12.0);
+                    let d = gs_note_design(sr, &set, f, s as f32);
+                    let r = d.b_fit.expect("enough partials") / d.b - 1.0;
+                    if r.abs() > worst.0 {
+                        worst = (
+                            r.abs(),
+                            format!("b {bo:.0e} s{s} fret {fret}: {:+.2} %", 100.0 * r),
+                        );
+                    }
+                }
+            }
+        }
+        println!("{sr}: worst B round trip {}", worst.1);
+        assert!(worst.0 < 0.04, "{sr}: {}", worst.1);
+    }
+    let mut big = GsStringSet::default();
+    big.strings[0].b = 1e-2;
+    let read = GsStringSet::from_table(&table(vec![set_entry(&big)])).unwrap();
+    assert_eq!(read.strings[0].b, microsynth::ugens::GS_MAX_B);
+}
+
+/// A residual entry declaring a rate outside 4–384 kHz is ignored (a
+/// 3-sample residual declared at 1 Hz used to play at a peak of 15.85).
+#[test]
+fn residual_with_an_implausible_rate_is_ignored() {
+    let sr = 44100.0;
+    let n = 8000;
+    let ports = vec![(FREQ, Sig::C(220.0)), (VARY, Sig::C(0.0))];
+    let plain_out = render_with(&mut GuitarString::new(), sr, 64, n, &ports, 1);
+    for rate in [1.0f32, 3_000.0, 500_000.0] {
+        let mut node =
+            GuitarString::with_table(table(vec![residual_entry(&[1.0, 0.8, 0.6], rate)]));
+        let out = render_with(&mut node, sr, 64, n, &ports, 1);
+        assert_eq!(out, plain_out, "rate {rate} was not ignored");
+    }
+    // At the bottom of the range the residual is used (resampled, it is about
+    // 33 samples near 1: a loud but legitimate body response).
+    let mut node = GuitarString::with_table(table(vec![residual_entry(&[1.0, 0.8, 0.6], 4_000.0)]));
+    let out = render_with(&mut node, sr, 64, n, &ports, 1);
+    assert_ne!(out, plain_out, "a 4 kHz residual must be used");
+    assert!(out.iter().all(|x| x.is_finite()));
+}

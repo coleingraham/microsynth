@@ -92,7 +92,19 @@
 //!   zero-mean pluck) at least half the fundamental's. Without these, a shelf
 //!   can leave a near-Nyquist or near-DC component ringing for tens of
 //!   seconds; with them an anchor can miss by up to about 8 % where the
-//!   anchors ask for something the constraints forbid. A partial's decay rate is
+//!   anchors ask for something the constraints forbid. These constraints
+//!   are a penalty inside the solve and a hard check after it: on a
+//!   257-point grid from the fundamental to Nyquist, every frequency must
+//!   lose per pass at least the fundamental's loss (above the last target,
+//!   at least the larger of that and 90 % of the last target's), within
+//!   0.1 %, and DC at least half the fundamental's. A design that fails falls
+//!   back to the closed-form one-pole through the first and last targets,
+//!   and, if that fails too, to a constant gain (every frequency loses
+//!   exactly the fundamental's loss, which always passes).
+//!   [`GsNoteDesign::loss_form`] reports which form a note got. On the
+//!   default set and an archtop-shaped set (all strings, frets 0–19, at
+//!   22.05 to 96 kHz) the fallback never fires; it is there for odd but
+//!   reachable tables. A partial's decay rate is
 //!   `σ_n = −ln|Loss(ω_n)| / τ_n`, where `τ_n = dn/df` at `f_n` is the loop's
 //!   round-trip time there. A one-pole alone cannot follow measured decays
 //!   (on an archtop's octave bands it leaves factors of 1.6 to 5); with the
@@ -118,11 +130,22 @@
 //!   `B'` through the coefficient search jumped between its local minima).
 //!   During the pre-warp the integer delay is held at the first design's,
 //!   because a step of the integer delay moves the Thiran fraction by a
-//!   whole sample and with it (at low rates) the high partials. Measured:
-//!   `B` round-trips within 1 % on all six strings at frets 0, 5 and 12, at
-//!   44.1 and 22.05 kHz. Individual partials still ripple around the
-//!   stretched series (most at the top of the designed band; see the
-//!   tests).
+//!   whole sample and with it (at low rates) the high partials. The
+//!   first-order coefficient may also be positive: that delays the highs and
+//!   removes stretch, so a `B` below what the loss and Thiran filters
+//!   already stretch can be reached. **Reachable region** (all six strings,
+//!   frets 0, 7 and 12, open-string `b` as set): at 44.1, 48 and 96 kHz,
+//!   `b` from 1e-5 to 2e-3 round-trips within 3.5 % (most notes within
+//!   1 %); at 22.05 kHz from 3e-5 to 2e-3. Below that the loop's own
+//!   filters set a floor the design cannot always undo (a `b` of 1e-6 can
+//!   realise up to twice its value at 44.1 kHz; 1e-5 at 22.05 kHz is
+//!   irregular); above 2e-3 the cascade cannot follow (1e-2 realises 0.7 to
+//!   1.3 times), so a table's `b` is clamped to [`GS_MAX_B`].
+//!   [`GsNoteDesign::b_fit`] reports what a note realises, for a fitter to
+//!   check. A `b` of 0 asks for no correction: the loop then has the small
+//!   stretch of its loss and Thiran filters. Individual partials still
+//!   ripple around the stretched series (most at the top of the designed
+//!   band; see the tests).
 //! - **Tuning.** The integer delay `N` and the Thiran fraction are solved at
 //!   the pluck so the loop's total phase at `freq` is exactly 2π, including
 //!   every filter's phase there (one Newton step corrects the Thiran filter's
@@ -151,6 +174,18 @@
 //! change of `B` and of the per-second loss with tension is ignored). `R` is
 //! held at 3 samples or more, so a pitch that would need less (above about
 //! `fs / 8`, after the filters' delay) plays flat.
+//!
+//! **Known behaviour of a moving pitch.** The read point is re-solved for the
+//! pitch at the current sample, but the wave already in the loop was laid
+//! down at earlier pitches, so during a bend the sounding pitch runs ahead
+//! of `freq`: by up to +5.8 cents during a one-second octave bend of the low
+//! E (under 1.5 cents for an octave over 2 s on the G string), landing
+//! exactly. A note bent and then held keeps its pluck-time loss and
+//! dispersion: its high partials decay 2–11 % faster and sit up to 2 cents
+//! off the stretched series of the new pitch. A later refinement could fold
+//! the fraction back into a re-solved Thiran filter (and re-design the loss
+//! and dispersion) once `freq` has been still for about 50 ms, cross-fading
+//! the change; it is not done here.
 //!
 //! # The pluck
 //!
@@ -206,9 +241,9 @@
 //!   `gs.sS.bridge_share`, `gs.sS.split_cents`, `gs.sS.hv`. Values are
 //!   clamped to physical ranges when read ([`GsStringSet::from_table`]).
 //! - **The commuted body residual**: the first entry carrying
-//!   `residual_rate_hz`; its channel-0 coefficient row (`k_channels` 1, no
-//!   partials, `j_noise` = the length) is an impulse response sampled at that
-//!   rate (resampled linearly to the engine rate when the node is built; at
+//!   `residual_rate_hz` (4 to 384 kHz; an entry declaring another rate is
+//!   ignored); its channel-0 coefficient row (`k_channels` 1, no partials,
+//!   `j_noise` = the length) is an impulse response sampled at that rate (resampled linearly to the engine rate when the node is built; at
 //!   most [`GS_MAX_RESIDUAL_S`] seconds). The pluck waveform is convolved with
 //!   it (commuted synthesis: body ∗ string ∗ pluck = string ∗ (body ∗
 //!   pluck)), so the residual colours both `out` and `bridge`.
@@ -298,6 +333,12 @@ const MAX_FIRST: usize = 4;
 /// partials' accuracy for the high ones' (5.5 cents at partial 2 on the low
 /// E at fret 12).
 const DISP_ETA: f64 = 0.9;
+/// Largest inharmonicity a table may set (above it the dispersion design
+/// cannot reach the request; see the module doc).
+pub const GS_MAX_B: f64 = 2e-3;
+/// Accepted range of a residual entry's `residual_rate_hz`; an entry outside
+/// it is ignored.
+pub const GS_RESIDUAL_RATE_HZ: (f64, f64) = (4_000.0, 384_000.0);
 /// Number of loss anchors above the open fundamental.
 pub const GS_ANCHORS: usize = 3;
 /// Longest commuted residual, seconds.
@@ -510,7 +551,7 @@ impl GsStringSet {
                 GS_MIN_FREQ as f64,
                 20_000.0,
             );
-            put(&mut s.b, &(p.clone() + "b"), 0.0, 0.01);
+            put(&mut s.b, &(p.clone() + "b"), 0.0, GS_MAX_B);
             for (j, t) in s.t60.iter_mut().enumerate() {
                 put(t, &format!("{p}t60.{j}"), 0.01, 120.0);
             }
@@ -781,7 +822,7 @@ fn solve3(m: usize, a: &mut [[f64; 3]; 3], b: &mut [f64; 3]) -> bool {
 /// Design the loss filter for targets `(w_i, λ_i)` (per-round-trip loss in
 /// nepers), the first being the fundamental (matched exactly through `g`).
 /// See the module doc.
-fn design_loss(targets: &[(f64, f64)]) -> GsLoss {
+fn design_loss_raw(targets: &[(f64, f64)]) -> GsLoss {
     let n = targets.len();
     if n == 0 {
         return GsLoss {
@@ -837,7 +878,7 @@ fn design_loss(targets: &[(f64, f64)]) -> GsLoss {
         // mode below the fundamental, barely excited by a zero-mean pluck)
         // at least half the fundamental's; and the gain is below 1.
         let (w_last, l_last) = targets[n.min(4) - 1];
-        let mut over = (lg + GsLoss::shape(a, b, c, 0.0) + 0.5 * l0).max(0.0);
+        let mut over = (lg + GsLoss::shape(a, b, c, 0.0) + 0.55 * l0).max(0.0);
         for k in 0..=48 {
             let w = w0 + (PI - w0) * k as f64 / 48.0;
             let lim = if w >= w_last { -0.9 * l_last } else { -l0 };
@@ -924,6 +965,89 @@ fn design_loss(targets: &[(f64, f64)]) -> GsLoss {
     }
     let p = best.0;
     finish(p[0], if m == 3 { p[2] } else { 0.0 }, p[1])
+}
+
+/// Which form a note's loss filter took (see the module doc).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GsLossForm {
+    /// One-pole and shelf through up to four targets.
+    Shelf,
+    /// The closed-form one-pole through the first and last targets.
+    OnePole,
+    /// A constant gain: every frequency loses the fundamental's loss.
+    Constant,
+}
+
+/// Whether `loss` lets nothing outlast the note (the hard check): on a
+/// 257-point grid from the fundamental to Nyquist, every frequency loses
+/// per pass at least the fundamental's loss (and, above the last target, at
+/// least the larger of that and 90 % of the last target's), within 0.1 %;
+/// DC loses at least half the fundamental's.
+fn loss_admissible(loss: &GsLoss, targets: &[(f64, f64)]) -> bool {
+    let (w0, l0) = targets[0];
+    let (wl, ll) = targets[targets.len() - 1];
+    let lose = |w: f64| -loss.mag(w).ln();
+    let dc = lose(0.0);
+    if !dc.is_finite() || dc < 0.5 * l0 {
+        return false;
+    }
+    for k in 0..=256 {
+        let w = w0 + (PI - w0) * k as f64 / 256.0;
+        let req = if targets.len() >= 2 && w >= wl {
+            (0.9 * ll).max(l0)
+        } else {
+            l0
+        };
+        let got = lose(w);
+        if !got.is_finite() || got < req * (1.0 - 1e-3) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Design the loss filter (see the module doc): the constrained solve, then
+/// the hard check; on a violation the closed-form one-pole through the first
+/// and last targets, then a constant gain (which always passes: every
+/// frequency loses exactly the fundamental's loss).
+fn design_loss(targets: &[(f64, f64)]) -> (GsLoss, GsLossForm) {
+    let n = targets.len();
+    if n == 0 {
+        return (
+            GsLoss {
+                g: LOSS_MAX,
+                ..GsLoss::default()
+            },
+            GsLossForm::Constant,
+        );
+    }
+    let l0 = targets[0].1;
+    let constant = GsLoss {
+        g: (-l0).exp().min(LOSS_MAX),
+        ..GsLoss::default()
+    };
+    if n == 1 {
+        return (constant, GsLossForm::Constant);
+    }
+    let raw = design_loss_raw(targets);
+    if loss_admissible(&raw, targets) {
+        return (
+            raw,
+            if n >= 3 && (raw.b != 0.0 || raw.c != 0.0) {
+                GsLossForm::Shelf
+            } else {
+                GsLossForm::OnePole
+            },
+        );
+    }
+    if n >= 3 {
+        let pair = [targets[0], targets[n - 1]];
+        let op = design_loss_raw(&pair);
+        if loss_admissible(&op, &pair) && loss_admissible(&op, targets) {
+            return (op, GsLossForm::OnePole);
+        }
+    }
+    (constant, GsLossForm::Constant)
 }
 
 /// A dispersion all-pass cascade.
@@ -1164,22 +1288,34 @@ fn note_dispersion(sr: f64, freq: f64, b: f64, loss: &GsLoss) -> (DispDesign, f6
         return (first, b, None);
     }
     let len = (sr / GS_MIN_FREQ as f64) as usize + 8;
-    let pref = Some(fix_delay(first.lag(w1) + loss.lag(w1), w1, len, None).0);
     let mut parts = [0.0f64; PREWARP_PARTIALS];
-    if first.kind == DispKind::First {
-        // Equal first-order sections: solve for the coefficient whose fitted
-        // B is the requested one (bisection; more negative = more stretch),
-        // keeping the section count. The coefficient search of the design
-        // has local minima, so iterating B' through it can jump past the
-        // target.
+    if first.kind != DispKind::Second {
+        // Equal first-order sections (one, when the design found no
+        // dispersion worth adding): solve for the coefficient whose fitted B
+        // is the requested one, keeping the section count. More negative =
+        // more stretch; a positive coefficient delays the highs and so
+        // removes stretch, which reaches a B below the stretch the loss and
+        // Thiran filters already put in. The design's coefficient search has
+        // local minima, so iterating B' through it could jump past the
+        // target; a bisection on the coefficient cannot.
+        let mut base = first;
+        if base.kind == DispKind::None {
+            base.kind = DispKind::First;
+            base.n = 1;
+            base.a1 = 0.0;
+        }
+        let pref = Some(fix_delay(base.lag(w1) + loss.lag(w1), w1, len, None).0);
         let fit_at = |a1: f64, parts: &mut [f64; PREWARP_PARTIALS]| -> f64 {
-            let mut d = first;
+            let mut d = base;
             d.a1 = a1;
             let n = loop_partials(&d, loss, freq, b, sr, PREWARP_TOP_HZ, pref, parts);
-            fit_b(&parts[..n]).map_or(f64::NAN, |bf| (bf / b).ln())
+            fit_b(&parts[..n]).map_or(f64::NAN, |bf| (bf.max(1e-12) / b).ln())
         };
-        let (mut lo, mut hi) = (-0.95f64, 0.0f64);
+        let f0 = fit_at(0.0, &mut parts);
+        let (mut lo, mut hi) = if f0 > 0.0 { (0.0, 0.9) } else { (-0.95, 0.0) };
         let (flo, fhi) = (fit_at(lo, &mut parts), fit_at(hi, &mut parts));
+        let fits = |d: &DispDesign| d.lag(w1) / w1 <= room.max(0.0);
+        let mut d = base;
         if flo.is_finite() && fhi.is_finite() && flo > 0.0 && fhi < 0.0 {
             for _ in 0..24 {
                 let mid = 0.5 * (lo + hi);
@@ -1193,13 +1329,17 @@ fn note_dispersion(sr: f64, freq: f64, b: f64, loss: &GsLoss) -> (DispDesign, f6
                     hi = mid;
                 }
             }
-            let mut d = first;
             d.a1 = 0.5 * (lo + hi);
-            if d.lag(w1) / w1 <= room.max(0.0) {
-                return (d, b, pref);
-            }
+        } else if flo.is_finite() && fhi.is_finite() {
+            // Out of reach: the end nearer the request.
+            d.a1 = if flo.abs() < fhi.abs() { lo } else { hi };
+        } else {
+            return (first, b, None);
         }
-        return (first, b, pref);
+        if fits(&d) {
+            return (d, b, pref);
+        }
+        return (first, b, None);
     }
     let mut best = (first, b, f64::INFINITY);
     let mut bp = b;
@@ -1288,6 +1428,12 @@ pub struct GsNoteDesign {
     pub h_freq: f64,
     /// Partial frequencies V's loop plays (up to 30, below 0.45 fs).
     pub partials: Vec<f64>,
+    /// `B` fitted to those partials below `min(5 kHz, 0.45 fs)` (at least
+    /// four needed): the stretch the loop realises. Equal to `b` within 1 %
+    /// where the request is reachable (see the module doc).
+    pub b_fit: Option<f64>,
+    /// The form each polarisation's loss filter took (V, H).
+    pub loss_form: [GsLossForm; 2],
 }
 
 /// The loss targets of a note: `(w, λ)` at the fundamental and the anchors
@@ -1336,10 +1482,13 @@ pub fn gs_note_design(sr: f64, set: &GsStringSet, freq: f64, string: f32) -> GsN
     let f0 = freq / (1.0 + b).sqrt();
     let mut tg = [(0.0, 0.0); GS_ANCHORS + 2];
     let mut loss = [GsLoss::default(); 2];
+    let mut forms = [GsLossForm::Constant; 2];
     for (p, l) in loss.iter_mut().enumerate() {
         let hv = if p == 0 { 1.0 } else { st.hv };
         let n = loss_targets(set, s, k, hv, freq, f0, b, sr, &mut tg);
-        *l = design_loss(&tg[..n]);
+        let (loss, form) = design_loss(&tg[..n]);
+        *l = loss;
+        forms[p] = form;
     }
     let (disp, b_design, pref) = note_dispersion(sr, freq, b, &loss[0]);
     let mut parts = [0.0f64; PREWARP_PARTIALS];
@@ -1352,6 +1501,12 @@ pub fn gs_note_design(sr: f64, set: &GsStringSet, freq: f64, string: f32) -> GsN
         loss,
         h_freq: freq * (-st.split_cents / 1200.0).exp2(),
         partials: parts[..n].to_vec(),
+        b_fit: {
+            let top = PREWARP_TOP_HZ.min(0.45 * sr);
+            let m = parts[..n].iter().take_while(|&&f| f <= top).count();
+            fit_b(&parts[..m])
+        },
+        loss_form: forms,
     }
 }
 
@@ -1629,7 +1784,11 @@ impl GuitarString {
         Self::with_set(GsStringSet::default())
     }
 
-    /// An unbound node on string set `set`.
+    /// An unbound node on string set `set` (Rust only). The set is used as
+    /// given: unlike a set read from a table, it is not clamped by
+    /// [`GsStringSet::from_table`]'s ranges, so out-of-range values (a `b`
+    /// above [`GS_MAX_B`], say) reach the design; the node's own guards
+    /// still keep it finite and stable.
     pub fn with_set(set: GsStringSet) -> Self {
         GuitarString {
             sample_rate: 44100.0,
@@ -1678,7 +1837,7 @@ impl GuitarString {
                 .map(|(_, v)| *v);
             if let (Some(rate), Some(row)) = (rate, e.channel(0))
                 && rate.is_finite()
-                && rate > 0.0
+                && (GS_RESIDUAL_RATE_HZ.0 as f32..=GS_RESIDUAL_RATE_HZ.1 as f32).contains(&rate)
                 && !row.is_empty()
             {
                 node.residual_source = Some((rate as f64, row.to_vec()));
@@ -1768,7 +1927,7 @@ impl GuitarString {
             pol.freq = pf;
             let hv = if p == 0 { 1.0 } else { st.hv };
             let n = loss_targets(&set, s, k, hv, freq, f0i, b, sr, &mut tg);
-            pol.loss = design_loss(&tg[..n]);
+            pol.loss = design_loss(&tg[..n]).0;
             let period = sr / pf;
             let m = (beta * period).round().max(1.0) as usize;
             let m = m.min((period as usize).max(2) - 1);

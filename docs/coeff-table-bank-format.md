@@ -200,8 +200,9 @@ The format is unchanged: each is an ordinary well-formed entry.
 - **`residual_rate_hz`** (f32): the entry carries an impulse response, a
   commuted body residual convolved into the pluck. Its channel-0 coefficient
   row is the response (`k_channels` 1, no partials, `j_noise` = its length in
-  samples), sampled at this rate; the node reads the first entry carrying the
-  key, resamples it linearly to the engine rate and uses at most 0.2 s of it.
+  samples), sampled at this rate (4 to 384 kHz; an entry declaring another
+  rate is ignored); the node reads the first entry carrying the key,
+  resamples it linearly to the engine rate and uses at most 0.2 s of it.
 - **`gs.string_set`** (any value): the entry carries the instrument's string
   set in its metadata (it needs no coefficients: `k_channels` 0, `j_noise` 0).
   The node reads the first entry carrying the key. Keys, each optional (a
@@ -209,7 +210,8 @@ The format is unchanged: each is an ordinary well-formed entry.
   ranges when read): `gs.scale_mm`, `gs.hmix`, `gs.vel_corner_hz`,
   `gs.vel_corner_exp`, `gs.anchor_hz.1` .. `gs.anchor_hz.3` (the loss
   anchors, Hz, ascending); and per string `S` = 1 (high E) .. 6 (low E):
-  `gs.sS.open_hz`, `gs.sS.b` (inharmonicity of the open string),
+  `gs.sS.open_hz`, `gs.sS.b` (inharmonicity of the open string, at most
+  2e-3: above it the dispersion design cannot follow the request),
   `gs.sS.t60.0` (T60 of the open fundamental, s), `gs.sS.t60.1` ..
   `gs.sS.t60.3` (T60 at the anchors, s), `gs.sS.bridge_share`,
   `gs.sS.split_cents` (V–H detune), `gs.sS.hv` (H's bridge loss / V's).
