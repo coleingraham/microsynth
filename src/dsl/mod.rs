@@ -197,19 +197,20 @@
 //!
 //! | Name | Inputs | Description |
 //! |------|--------|-------------|
-//! | `guitarString` | `freq` (Hz), `gate`, `vel` (0–1), `string` (1–6, -1 = rule), `pos` (mm from saddle), `angle` (deg), `hard` (0–1), `width` (mm), `damp` (0–1), `exc`, `seed`, `split` (cents), `hmix`, `hv`, `rel` (s), `scale` (mm), `vary` (0–1), `tap` (0 out, 1 bridge), then `oS bS tS hS rS` for strings 1–6 | A plucked steel string: two detuned polarisations, a loss filter fitted to measured decays, stiffness from `B`, a parametric pluck |
+//! | `guitarString` | `freq` (Hz), `gate`, `vel` (0–1), `string` (1–6, -1 = rule), `pos` (mm from saddle), `angle` (deg), `hard` (0–1), `width` (mm), `damp` (0–1), `exc`, `seed`, `rel` (s), `vary` (0–1), `tap` (0 out, 1 bridge) | A plucked steel string: two detuned polarisations, a loss filter fitted to measured decays, stiffness from `B`, a parametric pluck |
 //!
 //! A rise of `gate` plucks and a fall damps (a release ramp, not a cut);
 //! the node reports done once it has rung out. Velocity changes the pluck's
-//! contact time and a dynamic lowpass, so loud notes are brighter. Each
-//! string `S` is described by measurable quantities: open pitch `oS`,
-//! inharmonicity `bS`, the open fundamental's T60 `tS` (s), the T60 of a
-//! 2 kHz partial on the open string `hS` (s), and the bridge's share of the
-//! open fundamental's decay `rS`; the defaults are standard tuning and a
-//! light steel set. The mapping to the loop filters is in
-//! `ugens::guitar`'s module doc. Negative literals in positional arguments
-//! need parentheses. A string into a low body mode (188 Hz) on a
-//! `modalBank` held at 100 Hz:
+//! contact time and a dynamic lowpass, so loud notes are brighter. The
+//! ports are per-note controls only; the instrument's constants (per string:
+//! open pitch, inharmonicity `B`, T60 at the open fundamental and at three
+//! anchor frequencies, the bridge's share of the decay, the polarisations'
+//! detune and loss ratio; per instrument: scale length, the polarisations'
+//! output mix, the velocity→brightness mapping) are a string set read from a
+//! bound coefficient table, with a built-in default (standard tuning, a
+//! light steel set) when none is bound. The mapping is in `ugens::guitar`'s
+//! module doc. Negative literals in positional arguments need parentheses.
+//! A string into a low body mode (188 Hz) on a `modalBank` held at 100 Hz:
 //!
 //! ```text
 //! synthdef gtr freq=220.0 gate=1.0 vel=0.8 =

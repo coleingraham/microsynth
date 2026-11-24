@@ -193,15 +193,27 @@ ugen's band-center formula (which MOT-641 also changed to match
 its span) place bands at the same center frequencies the analysis side fit
 against.
 
-One further key marks an entry that is not a partial dictionary at all:
+Two further keys mark entries that are not partial dictionaries at all,
+both read by `guitarString`'s table-bound form (`microsynth::ugens::guitar`).
+The format is unchanged: each is an ordinary well-formed entry.
 
-- **`residual_rate_hz`** (f32): the entry carries an impulse response for
-  `guitarString`'s table-bound form (`microsynth::ugens::guitar`), a commuted
-  body residual convolved into the pluck. Its channel-0 coefficient row is the
-  response (`k_channels` 1, no partials, `j_noise` = its length in samples),
-  sampled at this rate; the node reads the first entry carrying the key,
-  resamples it linearly to the engine rate and uses at most 0.2 s of it. The
-  format is unchanged: it is an ordinary well-formed entry.
+- **`residual_rate_hz`** (f32): the entry carries an impulse response, a
+  commuted body residual convolved into the pluck. Its channel-0 coefficient
+  row is the response (`k_channels` 1, no partials, `j_noise` = its length in
+  samples), sampled at this rate; the node reads the first entry carrying the
+  key, resamples it linearly to the engine rate and uses at most 0.2 s of it.
+- **`gs.string_set`** (any value): the entry carries the instrument's string
+  set in its metadata (it needs no coefficients: `k_channels` 0, `j_noise` 0).
+  The node reads the first entry carrying the key. Keys, each optional (a
+  missing key keeps the built-in default; values are clamped to physical
+  ranges when read): `gs.scale_mm`, `gs.hmix`, `gs.vel_corner_hz`,
+  `gs.vel_corner_exp`, `gs.anchor_hz.1` .. `gs.anchor_hz.3` (the loss
+  anchors, Hz, ascending); and per string `S` = 1 (high E) .. 6 (low E):
+  `gs.sS.open_hz`, `gs.sS.b` (inharmonicity of the open string),
+  `gs.sS.t60.0` (T60 of the open fundamental, s), `gs.sS.t60.1` ..
+  `gs.sS.t60.3` (T60 at the anchors, s), `gs.sS.bridge_share`,
+  `gs.sS.split_cents` (V–H detune), `gs.sS.hv` (H's bridge loss / V's).
+  `GsStringSet::to_metadata` writes them.
 
 No other metadata keys are reserved today.
 
