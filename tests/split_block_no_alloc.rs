@@ -105,3 +105,53 @@ fn a_split_block_allocates_no_more_than_a_whole_one() {
     let split = allocs_in_render(&mut engine);
     assert_eq!(split, whole, "split block after a spawn");
 }
+
+/// A `guitarString` voice plucks, bends and releases without allocating:
+/// the pluck (filter design, step response) on a split block, a pitch moved
+/// every few samples inside blocks, a palm mute and a release, each block
+/// allocating no more than an idle whole block.
+#[test]
+fn a_guitar_string_plucks_bends_and_releases_without_allocating() {
+    const B: u64 = 128;
+    let def = dsl::compile(
+        "synthdef gs freq=220.0 gate=0.0 damp=0.0 = guitarString freq gate 0.8 (-1.0) 140.0 20.0 0.5 10.0 damp",
+        &builtin_registry(),
+    )
+    .unwrap()
+    .remove(0);
+    let mut engine = Engine::new(EngineConfig {
+        sample_rate: 44_100.0,
+        block_size: B as usize,
+    });
+    let bus = engine
+        .graph_mut()
+        .add_node(Box::new(ugens::Bus::new(ugens::ChannelCount::Stereo)));
+    engine.graph_mut().set_sink(bus);
+    let v = engine.spawn_voice_on_bus(&def, bus).unwrap();
+    engine.prepare();
+    allocs_in_render(&mut engine); // warm
+    let idle = allocs_in_render(&mut engine);
+
+    // Pluck inside a block.
+    engine.scheduler_mut().schedule_gate(2 * B + 37, v, 1.0);
+    assert!(allocs_in_render(&mut engine) <= idle, "pluck block");
+    // A vibrato: the pitch moves at several points inside each block.
+    for blk in 3..40u64 {
+        for k in 0..4u64 {
+            let t = blk * B + k * 32 + 5;
+            let f = 220.0 * (1.0 + 0.02 * ((t as f32) * 0.002).sin());
+            engine.scheduler_mut().schedule_set_param(t, v, "freq", f);
+        }
+        if blk == 20 {
+            engine
+                .scheduler_mut()
+                .schedule_set_param(blk * B + 64, v, "damp", 0.6);
+        }
+        assert!(allocs_in_render(&mut engine) <= idle, "vibrato block {blk}");
+    }
+    // Release inside a block, then let it ring out.
+    engine.scheduler_mut().schedule_gate(40 * B + 90, v, 0.0);
+    for blk in 40..80 {
+        assert!(allocs_in_render(&mut engine) <= idle, "release block {blk}");
+    }
+}

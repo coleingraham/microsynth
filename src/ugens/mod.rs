@@ -32,6 +32,8 @@
 //!   chokes; bound to an uploaded program by id)
 //! - `wavetable`: WaveTable (wavetable oscillator)
 //! - `physical`: Pluck (Karplus-Strong), Bowed (waveguide bowed string)
+//! - `guitar`: GuitarString (a plucked steel string: two-polarisation
+//!   waveguide with a fitted loss filter, stiffness and a parametric pluck)
 //! - `modal`: ModalBank (a bank of damped two-pole resonators for modal synthesis)
 //! - `turns`: `sin_cos_turns`, sine and cosine of a phase in turns (a helper,
 //!   not a UGen)
@@ -69,6 +71,7 @@ pub mod filters;
 pub mod fm;
 pub mod formant;
 pub mod freqshift;
+pub mod guitar;
 pub mod lfo;
 pub mod math;
 pub mod modal;
@@ -102,6 +105,7 @@ pub use filters::*;
 pub use fm::*;
 pub use formant::*;
 pub use freqshift::*;
+pub use guitar::*;
 pub use lfo::*;
 pub use math::*;
 pub use modal::*;
@@ -154,6 +158,7 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
     reg.register_spec("pluck", || Box::new(Pluck::new()));
     reg.register_spec("bowed", || Box::new(Bowed::new()));
     reg.register_spec("modalBank", || Box::new(ModalBank::new()));
+    reg.register_spec("guitarString", || Box::new(GuitarString::new()));
 
     // -- Noise --
     reg.register_spec("whiteNoise", || Box::new(WhiteNoise::new()));
@@ -282,9 +287,10 @@ pub fn register_builtins(reg: &mut UGenRegistry) {
 ///
 /// Currently registers `partialsNoise` (`ugens::partials`, MOT-636),
 /// `partialsBlend` (`ugens::partials_blend`), `partialsEnsemble`
-/// (`ugens::partials_ensemble`), `tableValue` (`ugens::table_value`), and
-/// the program-bound `sampleVoice` (`ugens::sample_voice`), whose binding
-/// names a registered sample program instead of a table
+/// (`ugens::partials_ensemble`), `tableValue` (`ugens::table_value`), the
+/// table-bound form of `guitarString` (`ugens::guitar`, its commuted body
+/// residual), and the program-bound `sampleVoice` (`ugens::sample_voice`),
+/// whose binding names a registered sample program instead of a table
 /// (`docs/sample-program-format.md`).
 pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials::register(reg);
@@ -292,4 +298,5 @@ pub fn register_table_bound_builtins(reg: &mut UGenRegistry) {
     partials_ensemble::register(reg);
     table_value::register(reg);
     sample_voice::register(reg);
+    guitar::register(reg);
 }

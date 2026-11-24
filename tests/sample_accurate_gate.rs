@@ -170,6 +170,8 @@ fn recipe(kind: &str) -> String {
     match kind {
         "adsr" => "synthdef k gate=0.0 = adsr gate 0.0001 0.0001 1.0 0.0001".into(),
         "asr" => "synthdef k gate=0.0 = asr gate 0.0001 0.0001".into(),
+        // A rise plucks: the pluck waveform's first sample is the gate's.
+        "guitarString" => "synthdef k gate=0.0 = guitarString 220.0 gate".into(),
         other => panic!("registered kind `{other}` has a gate port and no recipe here"),
     }
 }

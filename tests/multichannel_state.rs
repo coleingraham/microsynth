@@ -81,6 +81,18 @@ const STEREO_BY_DESIGN: &[(&str, &str)] = &[
     ),
 ];
 
+/// Kinds that are mono **by design**: one signal computed once from input
+/// channel 0 and copied to every output channel, whatever the input's
+/// channel count. Each entry names its reason and the audio ports the audit
+/// drives with two different channels (they have no required port, so the
+/// independence test below does not reach them).
+const MONO_BY_DESIGN: &[(&str, &str, &[&str])] = &[(
+    "guitarString",
+    "one string: two polarisation loops computed once per sample from input \
+     channel 0 and copied to every output channel, per its module doc",
+    &["exc", "freq"],
+)];
+
 /// Kinds with a fixed output channel count below 2 — there is no "channel
 /// 1" to compare. Forcing a 2-channel buffer on these would just compare
 /// real output (channel 0) against an untouched leftover buffer (channel
@@ -718,5 +730,66 @@ mod partials_ensemble {
         let moved = render(293.66, 261.63);
         assert_ne!(base[0], moved[0], "control: channel 0 does");
         assert_ne!(base[1], moved[1], "control: channel 0 does");
+    }
+}
+
+// --- mono by design ---
+
+/// Render a mono-by-design kind with its listed ports driven by two
+/// different channels (`left`, `right` drivers), every other port at its
+/// default. `freq` gets a pitch (220 Hz plus the driver as a small
+/// deviation), the others the driver itself.
+fn render_mono_kind(name: &str, ports: &[&str], left: u8, right: u8) -> [Vec<f32>; 2] {
+    let mut reg = UGenRegistry::new();
+    register_builtins(&mut reg);
+    let entry = reg.entry(name).expect("mono-by-design kind is registered");
+    let mut ugen = (entry.factory)();
+    let names: Vec<&'static str> = ugen.spec().inputs.iter().map(|s| s.name).collect();
+    let ctx = ProcessContext::new(SAMPLE_RATE, BLOCK_SIZE);
+    ugen.init(&ctx);
+    let mut out = [Vec::new(), Vec::new()];
+    for block_idx in 0..INDEPENDENCE_BLOCKS / 4 {
+        let bufs: Vec<Option<AudioBuffer>> = names
+            .iter()
+            .map(|n| {
+                ports.contains(n).then(|| {
+                    let mut b = AudioBuffer::new(2, BLOCK_SIZE);
+                    for i in 0..BLOCK_SIZE {
+                        let g = block_idx * BLOCK_SIZE + i;
+                        for (ch, kind) in [(0usize, left), (1, right)] {
+                            let d = independence_driver(kind, g);
+                            b.channel_mut(ch).samples_mut()[i] =
+                                if *n == "freq" { 220.0 + 5.0 * d } else { d };
+                        }
+                    }
+                    b
+                })
+            })
+            .collect();
+        let inputs: Vec<Option<&AudioBuffer>> = bufs.iter().map(|b| b.as_ref()).collect();
+        let mut output = AudioBuffer::new(2, BLOCK_SIZE);
+        ugen.process(&ctx, &inputs, &mut output);
+        out[0].extend_from_slice(output.channel(0).samples());
+        out[1].extend_from_slice(output.channel(1).samples());
+    }
+    out
+}
+
+/// The audit of the mono-by-design kinds: the two output channels are
+/// identical, and changing input channel 1 changes nothing.
+#[test]
+fn every_mono_by_design_kind_copies_one_channel_from_input_channel_0() {
+    for &(name, reason, ports) in MONO_BY_DESIGN {
+        let a = render_mono_kind(name, ports, 0, 1);
+        let b = render_mono_kind(name, ports, 0, 2);
+        assert!(
+            a[0].iter().any(|&x| x != 0.0),
+            "{name} rendered silence; the audit proves nothing ({reason})"
+        );
+        assert_eq!(a[0], a[1], "{name}: output channels differ ({reason})");
+        assert_eq!(
+            a[0], b[0],
+            "{name}: input channel 1 reached the output ({reason})"
+        );
     }
 }
